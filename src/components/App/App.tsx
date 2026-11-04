@@ -2652,9 +2652,15 @@ export class App extends React.Component<AppProps, AppState> {
                       <Overlay className={styles.flexCenter}>
                         <Button
                           onClick={() => {
-                            this.setState({ isAutoPlayable: true });
-                            this.localSetMute(false);
-                            this.localSetVolume(1);
+                            // Real user gesture: muted autoplay was refused, so
+                            // actually start playback too (if the room is playing)
+                            this.setState({ isAutoPlayable: true }, () => {
+                              this.localSetMute(false);
+                              this.localSetVolume(1);
+                              if (!this.state.roomPaused) {
+                                this.localPlay();
+                              }
+                            });
                           }}
                           leftSection={<IconVolume />}
                           size="xl"
