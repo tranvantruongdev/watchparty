@@ -281,6 +281,10 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
   ytNeedsFirstPlaySync = false;
+  // Freshest room-position info for the first-play resync (tsMap lags a seek by
+  // up to ~2s: next CMD:ts tick + tsMap broadcast)
+  lastRoomSeek?: { time: number; at: number };
+  lastTsMapAt = 0;
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
   transcoder?: ClientTranscoder;
@@ -431,6 +435,7 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:seek", (data: number) => {
       this.localSeek(data);
+      this.lastRoomSeek = { time: data, at: Date.now() };
     });
     socket.on("REC:playbackRate", (data: number) => {
       this.setState({ roomPlaybackRate: data });
@@ -792,6 +797,7 @@ export class App extends React.Component<AppProps, AppState> {
       this.setState({ chat });
     });
     socket.on("REC:tsMap", (data: NumberDict) => {
+      this.lastTsMapAt = Date.now();
       this.setState({ tsMap: data }, () => {
         // Dynamic playback rate based on timestamps
         // Disable for sharing types where the users can have different timestamps
@@ -1014,7 +1020,7 @@ export class App extends React.Component<AppProps, AppState> {
               // YouTube's play button after autoplay was blocked): jump to the room
               // position, same as the Sync button, since the cued position is stale
               this.ytNeedsFirstPlaySync = false;
-              this.localSeek();
+              this.localSeek(this.firstPlaySyncTarget());
             }
           },
         },
@@ -1804,6 +1810,21 @@ export class App extends React.Component<AppProps, AppState> {
     return duration;
   };
 
+  // Target for the first-play resync after a media load: the leader's position,
+  // or a recent seek extrapolated forward while tsMap hasn't caught up to it
+  firstPlaySyncTarget = (): number | undefined => {
+    if (this.state.isLiveStream) {
+      return undefined; // localSeek uses the live edge for live streams
+    }
+    const seek = this.lastRoomSeek;
+    if (seek && this.lastTsMapAt < seek.at) {
+      // Don't extrapolate while paused: the position is frozen at the seek
+      const elapsed = this.state.roomPaused ? 0 : (Date.now() - seek.at) / 1000;
+      return seek.time + elapsed;
+    }
+    return undefined; // fall back to the leader from tsMap
+  };
+
   localSeek = (customTime?: number) => {
     // Jump to the leader's position, or a custom one
     let target = customTime ?? this.getLeaderTime();
@@ -2076,10 +2097,16 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   getLeaderTime = () => {
-    if (this.state.participants.length > 2) {
-      return calculateMedian(Object.values(this.state.tsMap));
+    const values = Object.values(this.state.tsMap);
+    if (values.length === 0) {
+      // Nobody has reported a position yet, so there is nothing to sync to
+      // (localSeek skips it, same as the 2-person Math.max() empty case)
+      return Number.NEGATIVE_INFINITY;
     }
-    return Math.max(...Object.values(this.state.tsMap));
+    if (this.state.participants.length > 2) {
+      return calculateMedian(values);
+    }
+    return Math.max(...values);
   };
 
   onVideoEnded = (url: string) => {
