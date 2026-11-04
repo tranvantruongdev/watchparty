@@ -276,6 +276,7 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupPubSocket: Socket | null = null;
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
+  ytNeedsFirstPlaySync = false;
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
   transcoder?: ClientTranscoder;
@@ -663,6 +664,9 @@ export class App extends React.Component<AppProps, AppState> {
             await this.Player().setSrcAndTime(src, time);
           }
           // Start this video
+          // YouTube can't use the canplay resync below (the iframe never fires media
+          // events), so resync to the room position one-shot on its first PLAYING
+          this.ytNeedsFirstPlaySync = this.usingYoutube();
           if (!data.paused) {
             this.localPlay();
           }
@@ -996,6 +1000,17 @@ export class App extends React.Component<AppProps, AppState> {
                 this.localPause();
               }
               window.setTimeout(() => (this.ytDebounce = true), 500);
+            }
+            if (
+              this.usingYoutube() &&
+              e.data === window.YT?.PlayerState?.PLAYING &&
+              this.ytNeedsFirstPlaySync
+            ) {
+              // First play after joining or a media change (e.g. the user clicking
+              // YouTube's play button after autoplay was blocked): jump to the room
+              // position, same as the Sync button, since the cued position is stale
+              this.ytNeedsFirstPlaySync = false;
+              this.localSeek();
             }
           },
         },
