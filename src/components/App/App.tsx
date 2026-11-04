@@ -52,6 +52,7 @@ import firebase from "firebase/compat/app";
 import { SubtitleModal } from "../Modal/SubtitleModal";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
+import { TheaterSeats } from "./TheaterSeats";
 import styles from "./App.module.css";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
@@ -184,6 +185,8 @@ interface AppState {
   settingsModalOpen: boolean;
   convertProgress: number | undefined;
   convertEnabled: boolean;
+  // Cinema look for the watch page (curtains, house lights, seats)
+  theaterMode: boolean;
   // Audio tracks of the file being converted on this device, and which one is playing
   audioTracks: AudioTrackInfo[] | undefined;
   audioTrackId: number | undefined;
@@ -269,6 +272,7 @@ export class App extends React.Component<AppProps, AppState> {
     settingsModalOpen: false,
     convertProgress: undefined,
     convertEnabled: window.localStorage.getItem("watchparty-convert") === "1",
+    theaterMode: window.localStorage.getItem("watchparty-theater") !== "0",
     audioTracks: undefined,
     audioTrackId: undefined,
   };
@@ -2113,9 +2117,25 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState({ settingsModalOpen });
   };
 
+  setTheaterMode = (theaterMode: boolean) => {
+    this.setState({ theaterMode });
+    window.localStorage.setItem(
+      "watchparty-theater",
+      Number(theaterMode).toString(),
+    );
+  };
+
   render() {
     const sharer = this.state.participants.find((p) => p.isScreenShare);
     const playlist = this.state.playlist;
+    // Theater look: on unless toggled off (or in fullscreen); house lights dim
+    // while something is actually playing
+    const theater = this.state.theaterMode && !this.state.fullScreen;
+    const lightsDown =
+      theater &&
+      Boolean(this.state.roomMedia) &&
+      !this.state.roomPaused &&
+      !this.state.loading;
     const controls = (
       <Controls
         key={this.state.controlsTimestamp}
@@ -2154,6 +2174,7 @@ export class App extends React.Component<AppProps, AppState> {
     );
     return (
       <React.Fragment>
+        {theater && <div className={styles.theaterBackdrop} />}
         {this.state.isMultiSelectModalOpen && (
           <MultiStreamModal
             streams={this.state.fileSelection}
@@ -2268,11 +2289,13 @@ export class App extends React.Component<AppProps, AppState> {
           </Alert>
         )}
         {!this.state.fullScreen && (
-          <TopBar
-            roomTitle={this.state.roomTitle}
-            roomDescription={this.state.roomDescription}
-            roomTitleColor={this.state.roomTitleColor}
-          />
+          <div className={lightsDown ? styles.theaterDim : undefined}>
+            <TopBar
+              roomTitle={this.state.roomTitle}
+              roomDescription={this.state.roomDescription}
+              roomTitleColor={this.state.roomTitleColor}
+            />
+          </div>
         )}
         {
           <div
@@ -2299,7 +2322,12 @@ export class App extends React.Component<AppProps, AppState> {
               >
                 {!this.state.fullScreen && (
                   <React.Fragment>
-                    <div className={styles.mobileStack}>
+                    <div
+                      className={
+                        styles.mobileStack +
+                        (lightsDown ? " " + styles.theaterDim : "")
+                      }
+                    >
                       <ComboBox
                         roomSetMedia={this.roomSetMedia}
                         playlistAdd={this.roomPlaylistAdd}
@@ -2309,7 +2337,12 @@ export class App extends React.Component<AppProps, AppState> {
                         disabled={!this.haveLock()}
                       />
                     </div>
-                    <div className={styles.mobileStack}>
+                    <div
+                      className={
+                        styles.mobileStack +
+                        (lightsDown ? " " + styles.theaterDim : "")
+                      }
+                    >
                       {this.localStreamToPublish && (
                         <Button
                           color="red"
@@ -2548,11 +2581,46 @@ export class App extends React.Component<AppProps, AppState> {
                           />
                         </Tooltip>
                       )}
+                      <Tooltip
+                        multiline
+                        w={280}
+                        refProp="rootRef"
+                        label="Cinema look: curtains, house lights and seats. Turn off for the classic layout."
+                      >
+                        <Switch
+                          label="Theater"
+                          checked={this.state.theaterMode}
+                          onChange={(e) =>
+                            this.setTheaterMode(e.currentTarget.checked)
+                          }
+                          style={{ flexShrink: 0, alignSelf: "center" }}
+                        />
+                      </Tooltip>
                     </div>
                   </React.Fragment>
                 )}
                 <div style={{ flexGrow: 1, position: "relative" }}>
-                  <div className={styles.playerContainer}>
+                  <div
+                    className={
+                      styles.playerContainer +
+                      (theater ? " " + styles.theaterPlayer : "")
+                    }
+                  >
+                    {theater && (
+                      <div
+                        className={
+                          styles.curtainClip +
+                          (lightsDown ? " " + styles.curtainClipOpen : "")
+                        }
+                      >
+                        <div
+                          className={styles.curtain + " " + styles.curtainLeft}
+                        />
+                        <div
+                          className={styles.curtain + " " + styles.curtainRight}
+                        />
+                      </div>
+                    )}
                     {!this.state.isAutoPlayable && this.state.roomMedia && (
                       <Overlay className={styles.flexCenter}>
                         <Button
@@ -2690,6 +2758,14 @@ this.state.convertProgress !== undefined && (this.state.convertProgress * 100).t
                   </div>
                 </div>
                 {this.state.roomMedia && controls}
+                {theater && (
+                  <TheaterSeats
+                    participants={this.state.participants}
+                    nameMap={this.state.nameMap}
+                    pictureMap={this.state.pictureMap}
+                    lightsDown={lightsDown}
+                  />
+                )}
                 {!isMobile() && (
                   <div className={styles.expandButton}>
                     <ActionIcon
@@ -2729,7 +2805,8 @@ this.state.convertProgress !== undefined && (this.state.convertProgress * 100).t
                   ? styles.fullHeightColumnFullscreen
                   : styles.fullHeightColumn) +
                 " " +
-                styles.rightColumn
+                styles.rightColumn +
+                (lightsDown ? " " + styles.theaterDim : "")
               }`}
             >
               <div style={{ display: "flex", width: "100%", gap: "4px" }}>
