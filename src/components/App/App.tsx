@@ -1928,7 +1928,8 @@ export class App extends React.Component<AppProps, AppState> {
           this.state.roomPaused ||
           this.isSharingScreen() ||
           !this.usingYoutube() ||
-          this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() !==
+          !this.YouTubeInterface.watchPartyYTPlayer ||
+          this.YouTubeInterface.watchPartyYTPlayer.getPlayerState() !==
             window.YT?.PlayerState?.CUED
         ) {
           return;
@@ -1939,6 +1940,8 @@ export class App extends React.Component<AppProps, AppState> {
           this.checkPlaybackStarted(false);
           return;
         }
+        // The cued position is stale by the time the user clicks Unmute
+        this.ytNeedsFirstPlaySync = true;
         this.setState({ playbackBlocked: true });
       },
       retry ? 2000 : 1500,
