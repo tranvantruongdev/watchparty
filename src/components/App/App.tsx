@@ -1256,6 +1256,7 @@ export class App extends React.Component<AppProps, AppState> {
       !this.localStreamToPublish.getTracks().length
     ) {
       this.localStreamToPublish = undefined;
+      this.showError("This file can't be played in your browser");
       return;
     }
     this.isLocalStreamAFile = true;
