@@ -16,6 +16,7 @@ import {
 import twitch from "twitch-m3u8";
 import { type QueryResult } from "pg";
 import { Docker } from "./vm/docker.ts";
+import { hasRoomKey } from "./utils/roomKey.ts";
 
 // Stateless pool instance to use for VMs if full management isn't needed
 let stateless: Docker | undefined = undefined;
@@ -111,6 +112,10 @@ export class Room {
 
     io.of(roomId).use(async (socket, next) => {
       try {
+        if (!hasRoomKey(socket.handshake.auth.roomKey)) {
+          next(new Error("roomKey"));
+          return;
+        }
         if (postgres) {
           const result = await postgres.query(
             `SELECT password, owner, "isSubRoom" FROM room where "roomId" = $1`,

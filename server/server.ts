@@ -29,6 +29,7 @@ import { resolveShard } from "./utils/resolveShard.ts";
 import { makeRoomName, makeUserName } from "./utils/moniker.ts";
 import { getStats } from "./utils/getStats.ts";
 import { assertPublicUrl, safeAxiosConfig } from "./utils/ssrf.ts";
+import { hasRoomKey } from "./utils/roomKey.ts";
 
 // Last-resort safety net: a stray rejected promise shouldn't take down every room on this shard.
 // Socket handlers are individually guarded in room.ts, this catches anything we missed.
@@ -321,6 +322,10 @@ app.get("/youtubePlaylist/:playlistId", async (req, res) => {
 });
 
 app.post("/createRoom", async (req, res) => {
+  if (!hasRoomKey(req.body?.roomKey)) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   // Pick a name nobody else is using. Collisions in memory or in the DB just retry.
   let name = "";
   for (let attempt = 0; attempt < 5 && !name; attempt++) {
@@ -415,7 +420,7 @@ app.post("/checkoutSub", async (req, res) => {
       return;
     }
   }
-  const returnUrl = req.body?.return_url
+  const returnUrl = req.body?.return_url;
   if (!returnUrl) {
     res.status(400).json({ error: "invalid return_url" });
     return;

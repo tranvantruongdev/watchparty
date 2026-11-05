@@ -74,6 +74,13 @@ This project supports creating virtual browsers (using https://github.com/m1k1o/
 - Configure Postgres by adding DATABASE_URL to your .env file and then setting up the database schema
 - This allows rooms to persist between server restarts
 
+### Private Deploy on Render (free)
+
+- Render dashboard → New → Blueprint → pick this repo; `render.yaml` creates a free Docker web service with a random `ROOM_KEY`
+- Copy `ROOM_KEY` from the service's Environment tab and share `https://<your-app>.onrender.com/?key=<ROOM_KEY>` once; each browser remembers the key, so plain room links work afterwards
+- Without the key, creating or joining a room is refused. Leave `ROOM_KEY` empty to make the server public again
+- The free plan sleeps when idle, so the first visit can take about a minute
+
 ## Tech
 
 - React

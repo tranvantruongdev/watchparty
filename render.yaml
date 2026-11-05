@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: watchparty
+    runtime: docker
+    plan: free
+    healthCheckPath: /ping
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Invite link: https://<your-app>.onrender.com/?key=<ROOM_KEY>
+      - key: ROOM_KEY
+        generateValue: true

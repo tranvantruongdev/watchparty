@@ -1,5 +1,10 @@
 import React, { useCallback, useContext } from "react";
-import { serverPath, getUserImage, softWhite } from "../../utils/utils";
+import {
+  serverPath,
+  getUserImage,
+  softWhite,
+  getRoomKey,
+} from "../../utils/utils";
 import { ActionIcon, Avatar, Button, Menu, Text } from "@mantine/core";
 import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
@@ -40,8 +45,13 @@ export async function createRoom(
       uid,
       token,
       video,
+      roomKey: getRoomKey(),
     }),
   });
+  if (response.status === 403) {
+    alert("This theater is private. Open the invite link you were given.");
+    return;
+  }
   const data = await response.json();
   const { name } = data;
   if (openNewTab) {

@@ -11,6 +11,7 @@ import {
   openFileSelector,
   getOrCreateClientId,
   getOrCreateSessionId,
+  getRoomKey,
   calculateMedian,
   getUserImage,
   isYouTube,
@@ -375,6 +376,7 @@ export class App extends React.Component<AppProps, AppState> {
       },
       auth: {
         sessionId: getOrCreateSessionId(),
+        roomKey: getRoomKey(),
       },
     });
     this.socket = socket;
@@ -400,6 +402,11 @@ export class App extends React.Component<AppProps, AppState> {
         this.setState({ overlayMsg: "Couldn't load this room." });
       } else if (err.message === "password") {
         this.setState({ isErrorAuth: true });
+      } else if (err.message === "roomKey") {
+        this.setState({
+          overlayMsg:
+            "This theater is private. Open the invite link you were given.",
+        });
       } else {
         this.setState({ overlayMsg: err?.message ?? "An error occurred" });
       }
@@ -1250,9 +1257,7 @@ export class App extends React.Component<AppProps, AppState> {
       leftVideo.src = URL.createObjectURL(file);
     }
     const fileShareSrc = leftVideo.src;
-    const fileShareTranscoder = options?.convert
-      ? this.transcoder
-      : undefined;
+    const fileShareTranscoder = options?.convert ? this.transcoder : undefined;
     leftVideo.play();
     if (leftVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
       // captureStream() of a media element starts with no tracks until the
@@ -2747,7 +2752,10 @@ export class App extends React.Component<AppProps, AppState> {
                               // Real user gesture: muted autoplay was refused, so
                               // actually start playback too (if the room is playing)
                               this.setState(
-                                { isAutoPlayable: true, playbackBlocked: false },
+                                {
+                                  isAutoPlayable: true,
+                                  playbackBlocked: false,
+                                },
                                 () => {
                                   this.localSetMute(false);
                                   this.localSetVolume(1);

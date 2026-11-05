@@ -60,6 +60,7 @@ const defaults = {
   TWITCH_PROXY_PATH: "", // Optional, URL of the server that can proxy twitch HLS stream playlists and segments
   VBROWSER_ADMIN_KEY: "", // Optional, the key to hit admin endpoints on the vbrowser
   OPENSUBTITLES_KEY: "", // Optional, key to OpenSubtitles API
+  ROOM_KEY: "", // Optional, secret needed to create or join rooms (share links as /?key=<ROOM_KEY>)
 };
 
 export default {

@@ -338,6 +338,18 @@ export function getOrCreateSessionId() {
   return sessionId;
 }
 
+// The server's ROOM_KEY, taken once from a ?key= link and kept out of the address bar after that
+export function getRoomKey() {
+  const url = new URL(window.location.href);
+  const fromUrl = url.searchParams.get("key");
+  if (fromUrl) {
+    window.localStorage.setItem("watchparty-roomkey", fromUrl);
+    url.searchParams.delete("key");
+    window.history.replaceState(null, "", url);
+  }
+  return window.localStorage.getItem("watchparty-roomkey") ?? "";
+}
+
 export function addAndSavePassword(roomId: string, password: string) {
   const newPasswords = {
     ...getSavedPasswords(),
