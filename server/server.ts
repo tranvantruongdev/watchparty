@@ -714,6 +714,11 @@ app.get("/generateName", async (req, res) => {
 const PROXY_HOST_RE =
   /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 app.get("/proxy/*splat", async (req, res) => {
+  // ponytail: a private server isn't an open relay; this also turns off the Twitch proxy, key-check it if that's needed
+  if (config.ROOM_KEY) {
+    res.status(404).end();
+    return;
+  }
   redisCount("proxyReqs");
   try {
     const parsed = new URL("http://localhost" + req.url);

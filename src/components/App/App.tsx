@@ -12,6 +12,7 @@ import {
   getOrCreateClientId,
   getOrCreateSessionId,
   getRoomKey,
+  withRoomKey,
   calculateMedian,
   getUserImage,
   isYouTube,
@@ -1063,9 +1064,9 @@ export class App extends React.Component<AppProps, AppState> {
   // Functions for managing room settings
   getInviteLink = (vanity: string) => {
     if (vanity) {
-      return `${window.location.origin}/r/${vanity}`;
+      return withRoomKey(`${window.location.origin}/r/${vanity}`);
     }
-    return `${window.location.origin}/watch${this.state.roomId}`;
+    return withRoomKey(`${window.location.origin}/watch${this.state.roomId}`);
   };
 
   handleRoomState = (data: any) => {

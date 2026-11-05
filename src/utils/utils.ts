@@ -350,6 +350,17 @@ export function getRoomKey() {
   return window.localStorage.getItem("watchparty-roomkey") ?? "";
 }
 
+// Invite links must carry the key so a new viewer's browser can store it
+export function withRoomKey(link: string) {
+  const key = getRoomKey();
+  if (!key) {
+    return link;
+  }
+  const url = new URL(link);
+  url.searchParams.set("key", key);
+  return url.toString();
+}
+
 export function addAndSavePassword(roomId: string, password: string) {
   const newPasswords = {
     ...getSavedPasswords(),

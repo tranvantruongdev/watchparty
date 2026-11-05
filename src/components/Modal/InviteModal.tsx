@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Modal, TextInput, ActionIcon } from "@mantine/core";
 import { IconCopy } from "@tabler/icons-react";
+import { withRoomKey } from "../../utils/utils";
 
 export const InviteModal = ({
   closeInviteModal,
@@ -9,8 +10,9 @@ export const InviteModal = ({
 }) => {
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
 
+  const inviteLink = withRoomKey(window.location.href);
   const handleCopyInviteLink = () => {
-    navigator.clipboard.writeText(window.location.href);
+    navigator.clipboard.writeText(inviteLink);
     setInviteLinkCopied(true);
   };
 
@@ -29,7 +31,7 @@ export const InviteModal = ({
             <IconCopy size={16} />
           </ActionIcon>
         }
-        defaultValue={window.location.href}
+        defaultValue={inviteLink}
       />
       {inviteLinkCopied && (
         <div style={{ marginTop: 15 }}>
