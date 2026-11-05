@@ -1,4 +1,3 @@
-import React from "react";
 import { Avatar } from "@mantine/core";
 import styles from "./App.module.css";
 

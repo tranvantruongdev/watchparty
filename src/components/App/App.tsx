@@ -2201,6 +2201,13 @@ export class App extends React.Component<AppProps, AppState> {
         localSetAudioTrack={this.localSetAudioTrack}
       />
     );
+    const topBar = (
+      <TopBar
+        roomTitle={this.state.roomTitle}
+        roomDescription={this.state.roomDescription}
+        roomTitleColor={this.state.roomTitleColor}
+      />
+    );
     return (
       <React.Fragment>
         {theater && <div className={styles.theaterBackdrop} />}
@@ -2317,15 +2324,12 @@ export class App extends React.Component<AppProps, AppState> {
             {this.state.warningMessage}
           </Alert>
         )}
-        {!this.state.fullScreen && (
-          <div className={lightsDown ? styles.theaterDim : undefined}>
-            <TopBar
-              roomTitle={this.state.roomTitle}
-              roomDescription={this.state.roomDescription}
-              roomTitleColor={this.state.roomTitleColor}
-            />
-          </div>
-        )}
+        {!this.state.fullScreen &&
+          (lightsDown ? (
+            <div className={styles.theaterDim}>{topBar}</div>
+          ) : (
+            topBar
+          ))}
         {
           <div
             className={styles.mobileStack}
@@ -2369,7 +2373,7 @@ export class App extends React.Component<AppProps, AppState> {
                     <div
                       className={
                         styles.mobileStack +
-                        (lightsDown ? " " + styles.theaterDim : "")
+                        (lightsDown ? " " + styles.theaterDimControls : "")
                       }
                     >
                       {this.localStreamToPublish && (
@@ -2622,6 +2626,7 @@ export class App extends React.Component<AppProps, AppState> {
                           onChange={(e) =>
                             this.setTheaterMode(e.currentTarget.checked)
                           }
+                          className={styles.theaterSwitch}
                           style={{ flexShrink: 0, alignSelf: "center" }}
                         />
                       </Tooltip>
@@ -2772,29 +2777,33 @@ export class App extends React.Component<AppProps, AppState> {
                       ></video>
                     )}
                     <div
-                        style={{
-                          color: softWhite,
-                          fontWeight: 400,
-                          fontSize: 10,
-                          lineHeight: "8px",
-                          position: "absolute",
-                          bottom: 0,
-                          right: 0,
-                          zIndex: 1,
-                        }}
-                      >
-                        {[
-Boolean(this.state.total) && Math.min(
-                          (this.state.downloaded / this.state.total) * 100,
-                          100,
-                        ).toFixed(2) +
-                          "% downloaded",
-                          Boolean(this.state.total) && formatSpeed(this.state.speed),
-                          Boolean(this.state.total) && this.state.connections +
-                          " connections",
-this.state.convertProgress !== undefined && (this.state.convertProgress * 100).toFixed(1) +
-                        "% converted",
-                        ].filter(Boolean).join(" - ")}
+                      style={{
+                        color: softWhite,
+                        fontWeight: 400,
+                        fontSize: 10,
+                        lineHeight: "8px",
+                        position: "absolute",
+                        bottom: 0,
+                        right: 0,
+                        zIndex: 3,
+                      }}
+                    >
+                      {[
+                        Boolean(this.state.total) &&
+                          Math.min(
+                            (this.state.downloaded / this.state.total) * 100,
+                            100,
+                          ).toFixed(2) + "% downloaded",
+                        Boolean(this.state.total) &&
+                          formatSpeed(this.state.speed),
+                        Boolean(this.state.total) &&
+                          this.state.connections + " connections",
+                        this.state.convertProgress !== undefined &&
+                          (this.state.convertProgress * 100).toFixed(1) +
+                            "% converted",
+                      ]
+                        .filter(Boolean)
+                        .join(" - ")}
                     </div>
                   </div>
                 </div>
@@ -2846,8 +2855,7 @@ this.state.convertProgress !== undefined && (this.state.convertProgress * 100).t
                   ? styles.fullHeightColumnFullscreen
                   : styles.fullHeightColumn) +
                 " " +
-                styles.rightColumn +
-                (lightsDown ? " " + styles.theaterDim : "")
+                styles.rightColumn
               }`}
             >
               <div style={{ display: "flex", width: "100%", gap: "4px" }}>

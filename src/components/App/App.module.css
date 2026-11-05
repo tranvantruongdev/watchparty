@@ -43,6 +43,9 @@
 
 .leftColumn {
   flex-grow: 1;
+  /* Without this the seats' min-content widens the page and pushes the chat
+     column off-screen; the seats wrap instead. */
+  min-width: 0;
 }
 
 .rightColumn {
@@ -115,8 +118,10 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 14%;
-  min-width: 70px;
+  /* A fraction of the player only, and capped, so closed curtains never swallow
+     the picture on a narrow window. */
+  width: 12%;
+  max-width: 140px;
   transition: transform 0.9s ease;
   background:
     repeating-linear-gradient(
@@ -147,20 +152,45 @@
   transform: translateX(102%);
 }
 
-.theaterDim {
-  opacity: 0.25;
-  transition: opacity 0.4s;
+/* Exemption marker for the Theater switch inside a dimmed controls row. */
+.theaterSwitch {
+  flex-shrink: 0;
 }
 
-.theaterDim:hover,
-.theaterDim:focus-within {
-  opacity: 1;
+/* House lights: the chrome recedes while something is playing. Only where a
+   pointer can hover, because on touch there is no way to bring it back. */
+@media (hover: hover) {
+  .theaterDim {
+    opacity: 0.25;
+    /* keep width so a dimmed column still animates its chat collapse */
+    transition:
+      width ease-out 0.5s,
+      opacity 0.4s;
+  }
+
+  .theaterDim:hover,
+  .theaterDim:focus-within {
+    opacity: 1;
+  }
+
+  /* Media controls dim, except the Theater switch itself: it has to stay
+     findable while playing so it can put the lights back on. */
+  .theaterDimControls > :not(.theaterSwitch) {
+    opacity: 0.25;
+    transition: opacity 0.4s;
+  }
+
+  .theaterDimControls:hover > :not(.theaterSwitch),
+  .theaterDimControls:focus-within > :not(.theaterSwitch) {
+    opacity: 1;
+  }
 }
 
 .theaterSeats {
   display: flex;
   justify-content: center;
   padding: 10px 0 2px;
+  max-width: 100%;
   transition: opacity 0.4s;
 }
 
@@ -170,8 +200,11 @@
 
 .seatRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
+  justify-content: center;
   gap: 20px;
+  max-width: 100%;
   padding: 10px 18px 8px;
   border: 1px solid #551a24;
   border-radius: 12px 12px 6px 6px;
@@ -191,7 +224,7 @@
 .seatName {
   max-width: 90px;
   overflow: hidden;
-  font-size: 10px;
+  font-size: 12px;
   color: #e2d5d5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -202,7 +235,9 @@
     transition: none;
   }
 
+  .fullHeightColumn,
   .theaterDim,
+  .theaterDimControls > :not(.theaterSwitch),
   .theaterSeats {
     transition: none;
   }
