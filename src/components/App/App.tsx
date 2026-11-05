@@ -1222,29 +1222,47 @@ export class App extends React.Component<AppProps, AppState> {
     } else {
       leftVideo.src = URL.createObjectURL(file);
     }
+    const fileShareSrc = leftVideo.src;
+    const fileShareTranscoder = options?.convert
+      ? this.transcoder
+      : undefined;
     leftVideo.play();
-    //@ts-expect-error
-    this.localStreamToPublish = leftVideo?.captureStream();
-    if (
-      this.localStreamToPublish &&
-      !this.localStreamToPublish.getTracks().length
-    ) {
+    if (leftVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
       // captureStream() of a media element starts with no tracks until the
       // first frame decodes; publishers need tracks to negotiate, so wait for
-      // that and capture again
-      await new Promise((resolve) =>
-        leftVideo.addEventListener("canplay", resolve, { once: true }),
-      );
-      //@ts-expect-error
-      this.localStreamToPublish = leftVideo?.captureStream();
-    }
-    this.isLocalStreamAFile = true;
-    if (this.localStreamToPublish) {
-      this.socket.emit("CMD:joinScreenShare", {
-        file: true,
-        mediasoup: useMediaSoup,
+      // the element to be playable before capturing. Stop waiting on an error
+      // too, so a file that can't be played doesn't hang the share.
+      await new Promise<void>((resolve) => {
+        const stopWaiting = () => {
+          leftVideo.removeEventListener("canplay", stopWaiting);
+          leftVideo.removeEventListener("error", stopWaiting);
+          resolve();
+        };
+        leftVideo.addEventListener("canplay", stopWaiting);
+        leftVideo.addEventListener("error", stopWaiting);
       });
     }
+    // Cancelled or replaced while waiting: don't publish a stale capture
+    if (
+      leftVideo.src !== fileShareSrc ||
+      (options?.convert && this.transcoder !== fileShareTranscoder)
+    ) {
+      return;
+    }
+    //@ts-expect-error
+    this.localStreamToPublish = leftVideo.captureStream();
+    if (
+      !this.localStreamToPublish ||
+      !this.localStreamToPublish.getTracks().length
+    ) {
+      this.localStreamToPublish = undefined;
+      return;
+    }
+    this.isLocalStreamAFile = true;
+    this.socket.emit("CMD:joinScreenShare", {
+      file: true,
+      mediasoup: useMediaSoup,
+    });
   };
 
   startScreenShare = async (useMediaSoup: boolean) => {
@@ -2324,12 +2342,11 @@ export class App extends React.Component<AppProps, AppState> {
             {this.state.warningMessage}
           </Alert>
         )}
-        {!this.state.fullScreen &&
-          (lightsDown ? (
-            <div className={styles.theaterDim}>{topBar}</div>
-          ) : (
-            topBar
-          ))}
+        {!this.state.fullScreen && (
+          <div className={lightsDown ? styles.theaterDim : undefined}>
+            {topBar}
+          </div>
+        )}
         {
           <div
             className={styles.mobileStack}

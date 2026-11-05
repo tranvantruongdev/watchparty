@@ -822,9 +822,12 @@ export class Room {
     // seed the new video's tsMap/videoTS
     if (!this.preventTSUpdate) {
       this.videoTS = data;
-      // The seeker is at the new position now; tsMap would otherwise hold their
-      // pre-seek entry until their next 1s CMD:ts tick
-      this.tsMap[socket.clientId] = data;
+      // Everyone is being moved to the new position now; tsMap would otherwise
+      // keep pre-seek entries until the next 1s CMD:ts tick, and a joiner's
+      // first play would snap back to them
+      Object.keys(this.tsMap).forEach((key) => {
+        this.tsMap[key] = data;
+      });
     }
     socket.broadcast.emit("REC:seek", data);
     const chatMsg = { id: socket.clientId, cmd: "seek", msg: data?.toString() };
