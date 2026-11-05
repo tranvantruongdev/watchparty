@@ -817,10 +817,15 @@ export class Room {
     if (typeof data !== "number" || !Number.isFinite(data)) {
       return;
     }
-    this.videoTS = data;
-    // The seeker is at the new position now; tsMap would otherwise hold their
-    // pre-seek entry until their next 1s CMD:ts tick
-    this.tsMap[socket.clientId] = data;
+    // While the room is switching videos, a seek still in flight belongs to the
+    // old one: treat it like a lagging CMD:ts (see setTimestamp) so it can't
+    // seed the new video's tsMap/videoTS
+    if (!this.preventTSUpdate) {
+      this.videoTS = data;
+      // The seeker is at the new position now; tsMap would otherwise hold their
+      // pre-seek entry until their next 1s CMD:ts tick
+      this.tsMap[socket.clientId] = data;
+    }
     socket.broadcast.emit("REC:seek", data);
     const chatMsg = { id: socket.clientId, cmd: "seek", msg: data?.toString() };
     this.addChatMessage(socket, chatMsg);
