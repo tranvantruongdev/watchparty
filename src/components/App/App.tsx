@@ -288,6 +288,13 @@ export class App extends React.Component<AppProps, AppState> {
   ytDebounce = true;
   ytNeedsFirstPlaySync = false;
   playbackCheckTimer: number | undefined = undefined;
+  // What leftVideo was playing before a file share attempt cleared it, so a
+  // rejected share can put it back (nothing else re-attaches it)
+  preShareVideoState?: {
+    src: string;
+    srcObject: MediaStream | null;
+    time: number;
+  };
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
   transcoder?: ClientTranscoder;
@@ -476,6 +483,25 @@ export class App extends React.Component<AppProps, AppState> {
       this.localStreamToPublish = undefined;
       this.isLocalStreamAFile = false;
       this.setupRTCConnections();
+      // Put back whatever we were watching before the attempt cleared
+      // leftVideo: the room media didn't change, so no REC:host will reload it
+      // and the RTC paths above skip already-connected viewers
+      const preShare = this.preShareVideoState;
+      this.preShareVideoState = undefined;
+      const leftVideo = this.HTMLInterface.getVideoEl();
+      if (!leftVideo || !preShare) {
+        return;
+      }
+      if (preShare.srcObject) {
+        leftVideo.srcObject = preShare.srcObject;
+        leftVideo.play();
+      } else if (preShare.src) {
+        leftVideo.src = preShare.src;
+        leftVideo.currentTime = preShare.time;
+        if (!this.state.roomPaused) {
+          leftVideo.play();
+        }
+      }
     });
     socket.on("REC:host", async (data: HostState) => {
       let currentMedia = data.video || "";
@@ -502,6 +528,23 @@ export class App extends React.Component<AppProps, AppState> {
         isVBrowser(currentMedia)
       ) {
         // Ignore, it's probably a reconnection
+        return;
+      }
+      if (
+        this.usingYoutube() &&
+        !data.paused &&
+        data.videoTS > 0 &&
+        this.state.roomMedia === currentMedia &&
+        (this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
+          window.YT?.PlayerState?.PLAYING ||
+          this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
+            window.YT?.PlayerState?.BUFFERING)
+      ) {
+        // Already playing this exact video: this is a reconnect or a duplicate
+        // askHost, not a new host (a real CMD:host resets videoTS to 0).
+        // Stopping and re-cuing would throw away playback, and the follow-up
+        // play can be swallowed while the cue reloads, leaving the viewer
+        // stuck cued behind the room
         return;
       }
       this.setState(
@@ -1079,7 +1122,11 @@ export class App extends React.Component<AppProps, AppState> {
     this.setRoomDescription(data.roomDescription);
     this.setRoomTitleColor(data.roomTitleColor);
     this.setMediaPath(data.mediaPath);
-    window.history.replaceState("", "", this.getInviteLink(data.vanity));
+    // Keep the room key out of the address bar (it lives in localStorage);
+    // only invite links deliberately carry it
+    const roomUrl = new URL(this.getInviteLink(data.vanity));
+    roomUrl.searchParams.delete("key");
+    window.history.replaceState("", "", roomUrl);
   };
 
   setOwner = (owner: string) => {
@@ -1229,9 +1276,27 @@ export class App extends React.Component<AppProps, AppState> {
       this.showError("Your browser doesn't support converting videos");
       return;
     }
+    const leftVideo = this.HTMLInterface.getVideoEl();
+    if (leftVideo) {
+      // Snapshot what we were watching (a share stream or a direct link) so a
+      // rejected share can restore it. A blob: src is an MSE attachment we
+      // can't reliably re-attach, so skip it.
+      this.preShareVideoState = leftVideo.srcObject
+        ? {
+            src: "",
+            srcObject: leftVideo.srcObject as MediaStream,
+            time: 0,
+          }
+        : leftVideo.src && leftVideo.src.startsWith("http")
+          ? {
+              src: leftVideo.src,
+              srcObject: null,
+              time: leftVideo.currentTime,
+            }
+          : undefined;
+    }
     this.stopConvert();
     this.Player().clearState();
-    const leftVideo = this.HTMLInterface.getVideoEl();
     if (options?.convert) {
       const transcoder = this.createTranscoder(file, leftVideo, 0, (err) => {
         // Conversion failed mid-share
@@ -1300,6 +1365,8 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   startScreenShare = async (useMediaSoup: boolean) => {
+    // Screen share doesn't touch leftVideo, so there's nothing to restore
+    this.preShareVideoState = undefined;
     if (navigator.mediaDevices.getDisplayMedia) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         //@ts-expect-error
@@ -1930,13 +1997,17 @@ export class App extends React.Component<AppProps, AppState> {
     window.clearTimeout(this.playbackCheckTimer);
     this.playbackCheckTimer = window.setTimeout(
       () => {
+        const state =
+          this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState();
         if (
           this.state.roomPaused ||
           this.isSharingScreen() ||
           !this.usingYoutube() ||
           !this.YouTubeInterface.watchPartyYTPlayer ||
-          this.YouTubeInterface.watchPartyYTPlayer.getPlayerState() !==
-            window.YT?.PlayerState?.CUED
+          // A swallowed play lands in CUED (5) or, when it beats the cue
+          // loading, back in UNSTARTED (-1); both mean playback never started
+          (state !== window.YT?.PlayerState?.CUED &&
+            state !== window.YT?.PlayerState?.UNSTARTED)
         ) {
           return;
         }

@@ -12,7 +12,7 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { Footer } from "./components/Footer/Footer";
 import firebase from "firebase/compat/app";
 import "firebase/auth";
-import { serverPath, softWhite } from "./utils/utils";
+import { getRoomKey, serverPath, softWhite } from "./utils/utils";
 import { Create } from "./components/Create/Create";
 import { Discord } from "./components/Discord/Discord";
 import config from "./config";
@@ -30,6 +30,11 @@ const firebaseConfig = config.VITE_FIREBASE_CONFIG;
 if (firebaseConfig) {
   firebase.initializeApp(JSON.parse(firebaseConfig));
 }
+
+// Store a ?key= room key before anything reads or drops the URL (this runs on
+// every route: the landing page /?key=X must remember the key too, and the
+// hash redirect below would otherwise lose it)
+getRoomKey();
 
 // Redirect old-style URLs
 if (window.location.hash && window.location.pathname === "/") {
