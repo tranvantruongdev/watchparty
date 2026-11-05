@@ -138,6 +138,9 @@ interface AppState {
   watchOptions: SearchResult[];
   isVBrowser: boolean;
   isAutoPlayable: boolean;
+  // The player was asked to start but stayed cued (YouTube reports nothing when
+  // it drops or refuses the request), so offer the start/unmute overlay
+  playbackBlocked: boolean;
   downloaded: number;
   total: number;
   speed: number;
@@ -218,6 +221,7 @@ export class App extends React.Component<AppProps, AppState> {
     watchOptions: [],
     isVBrowser: false,
     isAutoPlayable: true,
+    playbackBlocked: false,
     downloaded: 0,
     total: 0,
     speed: 0,
@@ -281,6 +285,7 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
   ytNeedsFirstPlaySync = false;
+  playbackCheckTimer: number | undefined = undefined;
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
   transcoder?: ClientTranscoder;
@@ -330,6 +335,7 @@ export class App extends React.Component<AppProps, AppState> {
     document.removeEventListener("fullscreenchange", this.onFullScreenChange);
     document.removeEventListener("keydown", this.onKeydown);
     window.clearInterval(this.heartbeat);
+    window.clearTimeout(this.playbackCheckTimer);
   }
 
   init = async () => {
@@ -485,6 +491,7 @@ export class App extends React.Component<AppProps, AppState> {
           roomPlaybackRate: data.playbackRate,
           loading: Boolean(data.video),
           nonPlayableMedia: false,
+          playbackBlocked: false,
           isVBrowserLarge: data.isVBrowserLarge,
           vBrowserResolution: "1280x720@30",
           vBrowserQuality: "1",
@@ -1884,7 +1891,37 @@ export class App extends React.Component<AppProps, AppState> {
             this.setState({ loading: false, nonPlayableMedia: true });
           }
         }
+        this.checkPlaybackStarted();
       },
+    );
+  };
+
+  // YouTube's playVideo() resolves even when the request is dropped or refused
+  // (e.g. it lands before the cue completes, or the browser wants a gesture):
+  // the player just stays cued. Give it one more try, then show the overlay so
+  // the viewer always has a way to start it.
+  checkPlaybackStarted = (retry = true) => {
+    window.clearTimeout(this.playbackCheckTimer);
+    this.playbackCheckTimer = window.setTimeout(
+      () => {
+        if (
+          this.state.roomPaused ||
+          this.isSharingScreen() ||
+          !this.usingYoutube() ||
+          this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() !==
+            window.YT?.PlayerState?.CUED
+        ) {
+          return;
+        }
+        if (retry) {
+          console.log("yt still cued, retrying play");
+          this.Player().playVideo();
+          this.checkPlaybackStarted(false);
+          return;
+        }
+        this.setState({ playbackBlocked: true });
+      },
+      retry ? 2000 : 1500,
     );
   };
 
@@ -2673,7 +2710,8 @@ export class App extends React.Component<AppProps, AppState> {
                         />
                       </div>
                     )}
-                    {!this.state.isAutoPlayable &&
+                    {(!this.state.isAutoPlayable ||
+                      this.state.playbackBlocked) &&
                       this.state.roomMedia &&
                       // The host of a live screen share has no room media of their
                       // own to start: leftVideo only mirrors their muted preview,
@@ -2685,13 +2723,16 @@ export class App extends React.Component<AppProps, AppState> {
                             onClick={() => {
                               // Real user gesture: muted autoplay was refused, so
                               // actually start playback too (if the room is playing)
-                              this.setState({ isAutoPlayable: true }, () => {
-                                this.localSetMute(false);
-                                this.localSetVolume(1);
-                                if (!this.state.roomPaused) {
-                                  this.localPlay();
-                                }
-                              });
+                              this.setState(
+                                { isAutoPlayable: true, playbackBlocked: false },
+                                () => {
+                                  this.localSetMute(false);
+                                  this.localSetVolume(1);
+                                  if (!this.state.roomPaused) {
+                                    this.localPlay();
+                                  }
+                                },
+                              );
                             }}
                             leftSection={<IconVolume />}
                             size="xl"
