@@ -529,6 +529,10 @@ export class App extends React.Component<AppProps, AppState> {
               // Remove the loader unless we're waiting for a vbrowser
               this.setLoadingFalse();
             }
+            // The roster event that triggers setupRTCConnections may have run
+            // before this setState committed roomMedia (it bails unless the
+            // share type is already set), so connect the RTC paths here now
+            this.setupRTCConnections();
             return;
           }
           if (this.usingYoutube() && !this.YouTubeInterface.isReady()) {
@@ -1227,6 +1231,19 @@ export class App extends React.Component<AppProps, AppState> {
     leftVideo.play();
     //@ts-expect-error
     this.localStreamToPublish = leftVideo?.captureStream();
+    if (
+      this.localStreamToPublish &&
+      !this.localStreamToPublish.getTracks().length
+    ) {
+      // captureStream() of a media element starts with no tracks until the
+      // first frame decodes; publishers need tracks to negotiate, so wait for
+      // that and capture again
+      await new Promise((resolve) =>
+        leftVideo.addEventListener("canplay", resolve, { once: true }),
+      );
+      //@ts-expect-error
+      this.localStreamToPublish = leftVideo?.captureStream();
+    }
     this.isLocalStreamAFile = true;
     if (this.localStreamToPublish) {
       this.socket.emit("CMD:joinScreenShare", {
