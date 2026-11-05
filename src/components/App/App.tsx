@@ -455,6 +455,20 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on("REC:changeController", (data: string) => {
       this.setState({ controller: data });
     });
+    socket.on("REC:shareRejected", () => {
+      // Someone else started sharing first: drop our capture without a leave
+      // (we never became the sharer), then watch theirs.
+      this.stopConvert();
+      if (this.isLocalStreamAFile) {
+        // Stopping the capture doesn't stop our file playing in leftVideo
+        this.HTMLInterface.pauseVideo();
+        this.Player().clearState();
+      }
+      this.localStreamToPublish?.getTracks().forEach((track) => track.stop());
+      this.localStreamToPublish = undefined;
+      this.isLocalStreamAFile = false;
+      this.setupRTCConnections();
+    });
     socket.on("REC:host", async (data: HostState) => {
       let currentMedia = data.video || "";
       if (this.playingScreenShare() && !isScreenShare(currentMedia)) {
@@ -1026,6 +1040,12 @@ export class App extends React.Component<AppProps, AppState> {
               // position, same as the Sync button, since the cued position is stale
               this.ytNeedsFirstPlaySync = false;
               this.localSeek();
+            }
+            if (
+              e.data === window.YT?.PlayerState?.PLAYING &&
+              this.state.playbackBlocked
+            ) {
+              this.setState({ playbackBlocked: false });
             }
           },
         },

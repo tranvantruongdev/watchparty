@@ -1032,6 +1032,7 @@ export class Room {
         "errorMessage",
         "There is already an active share in this room",
       );
+      socket.emit("REC:shareRejected");
       return;
     }
     let mediasoupSuffix = "";
