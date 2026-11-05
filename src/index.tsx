@@ -33,8 +33,12 @@ if (firebaseConfig) {
 
 // Store a ?key= room key before anything reads or drops the URL (this runs on
 // every route: the landing page /?key=X must remember the key too, and the
-// hash redirect below would otherwise lose it)
-getRoomKey();
+// hash redirect below would otherwise lose it). Not on /debug: there the
+// ?key= is the stats key, which must reach /stats in the URL and never
+// becomes the room key.
+if (window.location.pathname !== "/debug") {
+  getRoomKey();
+}
 
 // Redirect old-style URLs
 if (window.location.hash && window.location.pathname === "/") {

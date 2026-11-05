@@ -289,11 +289,14 @@ export class App extends React.Component<AppProps, AppState> {
   ytNeedsFirstPlaySync = false;
   playbackCheckTimer: number | undefined = undefined;
   // What leftVideo was playing before a file share attempt cleared it, so a
-  // rejected share can put it back (nothing else re-attaches it)
+  // rejected share can put it back (nothing else re-attaches it). roomMedia is
+  // the room media at snapshot time: the restore only applies if it's still
+  // current, otherwise the room moved on to someone else's share
   preShareVideoState?: {
     src: string;
     srcObject: MediaStream | null;
     time: number;
+    roomMedia: string;
   };
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
@@ -492,6 +495,11 @@ export class App extends React.Component<AppProps, AppState> {
       if (!leftVideo || !preShare) {
         return;
       }
+      if (this.state.roomMedia !== preShare.roomMedia) {
+        // The room's media changed while we were sharing (someone else took
+        // over): it's loading through the normal paths, don't cover it
+        return;
+      }
       if (preShare.srcObject) {
         leftVideo.srcObject = preShare.srcObject;
         leftVideo.play();
@@ -544,7 +552,27 @@ export class App extends React.Component<AppProps, AppState> {
         // askHost, not a new host (a real CMD:host resets videoTS to 0).
         // Stopping and re-cuing would throw away playback, and the follow-up
         // play can be swallowed while the cue reloads, leaving the viewer
-        // stuck cued behind the room
+        // stuck cued behind the room. The server can't replay missed events,
+        // so anything broadcast while we were disconnected (subtitle, loop,
+        // rate, seeks) is gone: resync it here without re-cueing
+        this.setState(
+          {
+            roomSubtitle: data.subtitle,
+            roomLoop: data.loop,
+            roomPlaybackRate: data.playbackRate,
+          },
+          () => {
+            if (data.subtitle) {
+              this.Player().loadSubtitles(data.subtitle);
+            }
+            if (data.playbackRate) {
+              this.Player().setPlaybackRate(data.playbackRate);
+            }
+          },
+        );
+        if (Math.abs(this.Player().getCurrentTime() - data.videoTS) > 2) {
+          this.localSeek(data.videoTS);
+        }
         return;
       }
       this.setState(
@@ -1286,12 +1314,14 @@ export class App extends React.Component<AppProps, AppState> {
             src: "",
             srcObject: leftVideo.srcObject as MediaStream,
             time: 0,
+            roomMedia: this.state.roomMedia,
           }
         : leftVideo.src && leftVideo.src.startsWith("http")
           ? {
               src: leftVideo.src,
               srcObject: null,
               time: leftVideo.currentTime,
+              roomMedia: this.state.roomMedia,
             }
           : undefined;
     }
