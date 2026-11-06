@@ -1868,7 +1868,16 @@ export class App extends React.Component<AppProps, AppState> {
           const pc = new RTCPeerConnection({ iceServers: iceServers() });
           this.publisherConns[id] = pc;
           this.localStreamToPublish?.getTracks().forEach((track) => {
-            if (this.localStreamToPublish != null) {
+            if (this.localStreamToPublish == null) {
+              return;
+            }
+            if (track.kind === "video") {
+              // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
+              pc.addTransceiver(track, {
+                streams: [this.localStreamToPublish],
+                sendEncodings: [{ maxBitrate: 8_000_000 }],
+              });
+            } else {
               pc.addTrack(track, this.localStreamToPublish);
             }
           });
