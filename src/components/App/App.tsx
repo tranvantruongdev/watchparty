@@ -2757,6 +2757,7 @@ export class App extends React.Component<AppProps, AppState> {
             getMediaDisplayName={this.getMediaDisplayName}
             setSubtitleMode={this.Player().setSubtitleMode}
             getSubtitleMode={this.Player().getSubtitleMode}
+            loadLocalSubtitle={this.HTMLInterface.loadLocalSubtitle}
           />
         )}
         {this.state.state === "starting" && (

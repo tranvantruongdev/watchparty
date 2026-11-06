@@ -3,6 +3,7 @@ import { Player } from "./Player";
 
 export class HTML implements Player {
   elId: string;
+  localTrackUrl?: string;
   constructor(elId: string) {
     this.elId = elId;
   }
@@ -122,6 +123,7 @@ export class HTML implements Player {
 
     // Clear subtitles
     this.setSubtitleMode("hidden");
+    this.dropLocalSubtitle();
     leftVideo.innerHTML = "";
   };
 
@@ -131,6 +133,7 @@ export class HTML implements Player {
       return;
     }
     // Clear subtitles and put new ones in
+    this.dropLocalSubtitle();
     leftVideo.innerHTML = "";
     if (Boolean(src)) {
       let subtitleSrc = src;
@@ -147,6 +150,44 @@ export class HTML implements Player {
         leftVideo.textTracks[0].mode = "showing";
       }
     }
+  };
+
+  dropLocalSubtitle = () => {
+    if (this.localTrackUrl) {
+      URL.revokeObjectURL(this.localTrackUrl);
+      this.localTrackUrl = undefined;
+    }
+  };
+
+  loadLocalSubtitle = async (file: File) => {
+    const leftVideo = this.getVideoEl();
+    if (!leftVideo) {
+      return;
+    }
+    const buffer = await file.arrayBuffer();
+    let text: string;
+    try {
+      // Strict UTF-8 first: Vietnamese .srt files are often windows-1258
+      text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    } catch {
+      text = new TextDecoder("windows-1258").decode(buffer);
+    }
+    // Whoever loads last wins: room subtitle and previous local track both go
+    this.dropLocalSubtitle();
+    leftVideo.innerHTML = "";
+    let url: string;
+    if (file.name.toLowerCase().endsWith(".vtt")) {
+      url = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+    } else {
+      url = await toWebVTT(new Blob([text]));
+    }
+    this.localTrackUrl = url;
+    const track = document.createElement("track");
+    track.kind = "captions";
+    track.label = file.name;
+    track.src = url;
+    leftVideo.appendChild(track);
+    leftVideo.textTracks[0].mode = "showing";
   };
 
   syncSubtitles = (sharerTime: number) => {

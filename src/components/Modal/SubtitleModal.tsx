@@ -5,6 +5,7 @@ import {
   Radio,
   Switch,
   Title,
+  Text,
   TextInput,
   ActionIcon,
   Divider,
@@ -29,11 +30,14 @@ export class SubtitleModal extends React.Component<{
   getMediaDisplayName: (input: string) => string;
   setSubtitleMode: (mode?: TextTrackMode) => void;
   getSubtitleMode: () => TextTrackMode;
+  loadLocalSubtitle: (file: File) => Promise<void>;
 }> {
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
   state = {
     loading: false,
+    uploadFailed: false,
+    localFailed: false,
     searchResults: [],
     titleQuery: this.props
       .getMediaDisplayName(this.props.roomMedia)
@@ -74,6 +78,13 @@ export class SubtitleModal extends React.Component<{
         body: subData,
         headers: { "Content-Type": "text/plain" },
       });
+      if (!resp.ok) {
+        // Deployments without subtitle storage reject uploads; the local
+        // option below still works
+        this.setState({ uploadFailed: true });
+        return;
+      }
+      this.setState({ uploadFailed: false });
       // Once URL obtained, make those the room subtitles
       const json = await resp.json();
       this.props.socket.emit(
@@ -82,6 +93,18 @@ export class SubtitleModal extends React.Component<{
       );
     });
     reader.readAsText(file);
+  };
+  loadLocalSubtitle = async () => {
+    const files = await openFileSelector(".srt,.vtt");
+    if (!files) {
+      return;
+    }
+    try {
+      await this.props.loadLocalSubtitle(files[0]);
+      this.setState({ localFailed: false });
+    } catch {
+      this.setState({ localFailed: true });
+    }
   };
   render() {
     const { closeModal } = this.props;
@@ -131,6 +154,25 @@ export class SubtitleModal extends React.Component<{
             >
               Upload (.srt / .vtt)
             </Button>
+            <Button
+              variant="default"
+              onClick={() => this.loadLocalSubtitle()}
+              leftSection={<IconUpload />}
+            >
+              Load subtitle file from this device
+            </Button>
+            {this.state.localFailed && (
+              <Text c="red" size="xs">
+                Could not read that subtitle file. Try picking it again.
+              </Text>
+            )}
+            {this.state.uploadFailed && (
+              <Text c="red" size="xs">
+                Upload to the server failed (subtitle storage unavailable). Use
+                "Load subtitle file from this device" instead — it only affects
+                your own player.
+              </Text>
+            )}
             <Divider my="lg" />
             <Title order={6}>OpenSubtitles</Title>
             <TextInput
