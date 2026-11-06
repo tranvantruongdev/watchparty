@@ -81,6 +81,12 @@ This project supports creating virtual browsers (using https://github.com/m1k1o/
 - Without the key, creating or joining a room is refused. Leave `ROOM_KEY` empty to make the server public again
 - The free plan sleeps when idle, so the first visit can take about a minute
 
+### Private Host from This PC (Windows)
+
+- Install cloudflared once: `winget install --id Cloudflare.cloudflared`
+- Double-click `start_public.bat`: it builds, starts the server with a fresh random `ROOM_KEY`, and opens a Cloudflare quick tunnel (no account)
+- Share the `https://….trycloudflare.com` address it prints plus `/?key=<ROOM_KEY>`; the address and key change every run, and the link works only while the window is open
+
 ## Tech
 
 - React
