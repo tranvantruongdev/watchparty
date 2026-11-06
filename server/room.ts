@@ -66,6 +66,9 @@ export class Room {
   private tsMap: NumberDict = {};
   private io: Server;
   private socketIdMap: StringDict = {};
+  // clientId -> sessionId secret. In-memory version of the redis session map,
+  // so clientId spoofing is also blocked when redis isn't configured
+  private sessionMap: StringDict = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
@@ -182,18 +185,25 @@ export class Room {
           next(new Error("Invalid clientId format"));
           return;
         }
-        // If Redis isn't enabled we'll just allow
+        // clientIds are visible to everyone in the room, so a session secret is mandatory,
+        // otherwise anyone could connect as (and kick) another user
+        if (
+          typeof sessionId !== "string" ||
+          sessionId.length < 16 ||
+          sessionId.length > 200
+        ) {
+          next(new Error("Missing or invalid sessionId"));
+          return;
+        }
+        // The first connection of a clientId claims its sessionId; later ones must match.
+        // Lives only as long as the room is in memory, so it never outlasts the redis claim
+        if (this.sessionMap[clientId] === undefined) {
+          this.sessionMap[clientId] = sessionId;
+        } else if (this.sessionMap[clientId] !== sessionId) {
+          next(new Error("Incorrect sessionId"));
+          return;
+        }
         if (redis) {
-          // clientIds are visible to everyone in the room, so a session secret is mandatory,
-          // otherwise anyone could connect as (and kick) another user
-          if (
-            typeof sessionId !== "string" ||
-            sessionId.length < 16 ||
-            sessionId.length > 200
-          ) {
-            next(new Error("Missing or invalid sessionId"));
-            return;
-          }
           const key = "session:" + clientId;
           const ttlSeconds = 60 * 60 * 24 * 7;
           // Atomically claim the clientId if nobody has yet (avoids a get/set race)
@@ -264,7 +274,12 @@ export class Room {
 
       // Check if this socket matches the room owner UID
       const validateOwner = async () => {
-        const result = await postgres?.query(
+        if (!postgres) {
+          // Without a database there is no owner model, so nobody gets owner powers
+          // (otherwise `!owner` below is always true and any guest could kick)
+          return false;
+        }
+        const result = await postgres.query(
           'SELECT owner FROM room where "roomId" = $1',
           [this.roomId],
         );
@@ -720,6 +735,11 @@ export class Room {
     if (typeof data !== "string" || !data || data.length > 20000) {
       return;
     }
+    // ponytail: cap the playlist so one spammy guest can't grow it (and every
+    // full-playlist re-broadcast) without bound; chat history is capped at 100
+    if (this.playlist.length >= 500) {
+      return;
+    }
     redisCount("playlistAdds");
     const youtubeVideoId = getYoutubeVideoID(data);
     const item = {
@@ -964,6 +984,11 @@ export class Room {
       return;
     }
     msg.reactions = msg.reactions || {};
+    // Cap distinct reaction values per message so one spammy guest can't bloat
+    // chat history; joining/removing an existing value is still allowed
+    if (!msg.reactions[data.value] && Object.keys(msg.reactions).length >= 20) {
+      return;
+    }
     msg.reactions[data.value] = msg.reactions[data.value] || [];
 
     if (!msg.reactions[data.value].includes(socket.clientId)) {
