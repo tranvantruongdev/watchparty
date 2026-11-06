@@ -1414,7 +1414,8 @@ export class App extends React.Component<AppProps, AppState> {
     if (navigator.mediaDevices.getDisplayMedia) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         //@ts-expect-error
-        video: { height: 720, logicalSurface: true },
+        // Full HD when the screen has it; the direct share sends up to 8 Mbps
+        video: { height: { ideal: 1080 }, logicalSurface: true },
         audio: {
           autoGainControl: false,
           channelCount: 2,
