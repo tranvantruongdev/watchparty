@@ -287,6 +287,9 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
   ytNeedsFirstPlaySync = false;
+  // The current video can't play embedded (removed, or the owner disabled
+  // embedding): YouTube shows its own message, so don't cover it with Unmute
+  ytUnplayable = false;
   playbackCheckTimer: number | undefined = undefined;
   // What leftVideo was playing before a file share attempt cleared it, so a
   // rejected share can put it back (nothing else re-attaches it). roomMedia is
@@ -775,6 +778,7 @@ export class App extends React.Component<AppProps, AppState> {
           // YouTube can't use the canplay resync below (the iframe never fires media
           // events), so resync to the room position one-shot on its first PLAYING
           this.ytNeedsFirstPlaySync = this.usingYoutube();
+          this.ytUnplayable = false;
           if (!data.paused) {
             this.localPlay();
           }
@@ -1076,6 +1080,14 @@ export class App extends React.Component<AppProps, AppState> {
             if (this.usingYoutube()) {
               console.log("requesting host data again after ytReady");
               this.socket.emit("CMD:askHost");
+            }
+          },
+          onError: (e) => {
+            // 100: removed or private, 101/150: embedding disabled
+            if ([100, 101, 150].includes(e.data)) {
+              this.ytUnplayable = true;
+              window.clearTimeout(this.playbackCheckTimer);
+              this.setState({ playbackBlocked: false, loading: false });
             }
           },
           onStateChange: (e) => {
@@ -2033,6 +2045,7 @@ export class App extends React.Component<AppProps, AppState> {
           this.state.roomPaused ||
           this.isSharingScreen() ||
           !this.usingYoutube() ||
+          this.ytUnplayable ||
           !this.YouTubeInterface.watchPartyYTPlayer ||
           // A swallowed play lands in CUED (5) or, when it beats the cue
           // loading, back in UNSTARTED (-1); both mean playback never started
