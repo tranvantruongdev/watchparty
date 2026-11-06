@@ -43,7 +43,9 @@ if (firebaseConfig) {
 // hash redirect below would otherwise lose it). Not on /debug: there the
 // ?key= is the stats key, which must reach /stats in the URL and never
 // becomes the room key.
-if (window.location.pathname !== "/debug") {
+// startsWith so /debug/ (trailing slash, which the route below also matches)
+// doesn't store the stats key either
+if (!window.location.pathname.startsWith("/debug")) {
   getRoomKey();
 }
 
@@ -139,7 +141,9 @@ class WatchParty extends React.Component {
               <Discord />
             </Route>
             <Route path="/debug">
-              <TopBar />
+              {/* hideNewRoom: creating a room from here would call getRoomKey
+                  and store the ?key= stats key as the room key */}
+              <TopBar hideNewRoom />
               <Suspense fallback={null}>
                 <Debug />
               </Suspense>
