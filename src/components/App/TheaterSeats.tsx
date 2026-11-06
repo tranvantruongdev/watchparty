@@ -52,6 +52,7 @@ export const TheaterSeats = (props: {
               {p.isVideoChat && <div className={styles.chibiHeadset} />}
             </div>
             <div className={styles.seatName}>
+              {p.buffering && <span className={styles.seatSpinner} />}
               {props.nameMap[p.id] || p.id.slice(0, 8)}
             </div>
           </div>

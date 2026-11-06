@@ -254,6 +254,25 @@
   white-space: nowrap;
 }
 
+/* Buffering badge in the seat row: small spinning violet ring */
+.seatSpinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  border: 2px solid rgba(190, 150, 255, 0.35);
+  border-top-color: #b388ff;
+  border-radius: 50%;
+  animation: seatSpin 0.8s linear infinite;
+}
+
+@keyframes seatSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 3D chibi avatar: shaded spheres and capsules, idle bob; --shirt is per person */
 .chibi {
   position: relative;

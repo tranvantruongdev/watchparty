@@ -74,6 +74,8 @@ export class Room {
   private sessionMap: StringDict = {};
   // clientId -> timestamps of the float reactions they sent in the last second
   private floatReactionTimes: { [clientId: string]: number[] } = {};
+  // clientId -> true while that viewer reports being stuck buffering
+  private bufferingMap: BooleanDict = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
@@ -380,6 +382,7 @@ export class Room {
         const isOwner = await validateOwner();
         (hasLock || isOwner) && this.lockRoom(socket, data);
       });
+      on("CMD:buffering", (data: unknown) => this.setBuffering(socket, data));
       on("CMD:askHost", () => {
         socket.emit("REC:host", this.getHostState());
       });
@@ -541,6 +544,7 @@ export class Room {
       return {
         ...p,
         isScreenShare: p.id === this.getSharerId(),
+        buffering: this.bufferingMap[p.id],
       };
     });
   };
@@ -621,6 +625,7 @@ export class Room {
     this.loop = false;
     this.playbackRate = 1;
     this.tsMap = {};
+    this.bufferingMap = {};
     this.preventTSUpdate = true;
     setTimeout(() => (this.preventTSUpdate = false), 1000);
     this.io.of(this.roomId).emit("REC:tsMap", this.tsMap);
@@ -1049,6 +1054,18 @@ export class Room {
       user: socket.clientId,
       value: raw,
     });
+  };
+
+  private setBuffering = (socket: Socket, data: unknown) => {
+    // Accept only booleans; ignore no-op updates so the roster isn't re-emitted
+    if (typeof data !== "boolean") {
+      return;
+    }
+    if (Boolean(this.bufferingMap[socket.clientId]) === data) {
+      return;
+    }
+    this.bufferingMap[socket.clientId] = data;
+    this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
 
   private joinVideo = async (socket: Socket) => {
@@ -1613,6 +1630,7 @@ export class Room {
       }
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       delete this.tsMap[clientId];
+      delete this.bufferingMap[clientId];
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
     }

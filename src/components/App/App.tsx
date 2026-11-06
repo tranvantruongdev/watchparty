@@ -312,6 +312,10 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupPubSocket: Socket | null = null;
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
+  // Buffering report state: when a stall started, and whether we already
+  // told the room it lasted long enough to show (> 1.5 s)
+  bufferingSince = 0;
+  bufferingReported = false;
   ytNeedsFirstPlaySync = false;
   // The current video can't play embedded (removed, or the owner disabled
   // embedding): YouTube shows its own message, so don't cover it with Unmute
@@ -1057,6 +1061,7 @@ export class App extends React.Component<AppProps, AppState> {
       if (this.state.roomMedia) {
         const toSend = this.getRoomTSToSet(this.Player().getCurrentTime());
         this.socket.emit("CMD:ts", toSend);
+        this.reportBuffering();
       }
     }, 1000);
   };
@@ -2152,6 +2157,37 @@ export class App extends React.Component<AppProps, AppState> {
 
   roomSetLoop = (loop: boolean) => {
     this.socket.emit("CMD:loop", loop);
+  };
+
+  // Poll the player for a stall (HTML5: trying to play below HAVE_FUTURE_DATA;
+  // YouTube: BUFFERING state 3) and tell the room once it lasts > 1.5 s, then
+  // clear it the moment it recovers. Runs from the 1 s CMD:ts tick.
+  reportBuffering = () => {
+    let raw = false;
+    if (this.usingYoutube()) {
+      raw =
+        this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
+        window.YT?.PlayerState.BUFFERING;
+    } else {
+      const el = this.Player().getVideoEl();
+      raw = Boolean(el && !el.paused && el.readyState < 3);
+    }
+    const now = Date.now();
+    if (raw) {
+      if (!this.bufferingSince) {
+        this.bufferingSince = now;
+      }
+      if (!this.bufferingReported && now - this.bufferingSince > 1500) {
+        this.bufferingReported = true;
+        this.socket.emit("CMD:buffering", true);
+      }
+    } else {
+      this.bufferingSince = 0;
+      if (this.bufferingReported) {
+        this.bufferingReported = false;
+        this.socket.emit("CMD:buffering", false);
+      }
+    }
   };
 
   roomTogglePlay = () => {
