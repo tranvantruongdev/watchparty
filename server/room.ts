@@ -76,6 +76,8 @@ export class Room {
   private floatReactionTimes: { [clientId: string]: number[] } = {};
   // clientId -> true while that viewer reports being stuck buffering
   private bufferingMap: BooleanDict = {};
+  // clientId -> timestamps of accepted buffering changes in the last second
+  private bufferingChangeTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
@@ -1064,6 +1066,17 @@ export class Room {
     if (Boolean(this.bufferingMap[socket.clientId]) === data) {
       return;
     }
+    // Every accepted change re-broadcasts the roster, so cap at 5/s per socket
+    // like floatReaction; legit clients report ~2 transitions per stall/recovery
+    const now = Date.now();
+    const times = (this.bufferingChangeTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 5) {
+      return;
+    }
+    times.push(now);
+    this.bufferingChangeTimes[socket.clientId] = times;
     this.bufferingMap[socket.clientId] = data;
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
@@ -1631,6 +1644,7 @@ export class Room {
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
+      delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
     }

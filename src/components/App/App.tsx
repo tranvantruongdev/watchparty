@@ -2258,7 +2258,14 @@ export class App extends React.Component<AppProps, AppState> {
         this.localFullScreen(true);
       } else if (e.key === "m") {
         this.localToggleMute();
-      } else if (e.key === "Enter" && this.state.fullScreen) {
+      } else if (
+        e.key === "Enter" &&
+        this.state.fullScreen &&
+        // Match the overlay's render condition: no invisible opens from
+        // theater (body) fullscreen or when the room has chat disabled
+        !this.state.isChatDisabled &&
+        document.fullscreenElement !== document.body
+      ) {
         // Type a chat message from the fullscreen overlay
         this.setState({ chatOverlayTyping: true });
       }
