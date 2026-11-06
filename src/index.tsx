@@ -20,8 +20,15 @@ import { DEFAULT_STATE, MetadataContext } from "./MetadataContext";
 import { createTheme, MantineProvider } from "@mantine/core";
 
 const theme = createTheme({
-  /** Your theme override here */
   white: softWhite,
+  // Neon night look: violet accent, pill shapes, tinted translucent buttons
+  primaryColor: "violet",
+  defaultRadius: "xl",
+  fontFamily: "'Be Vietnam Pro', system-ui, sans-serif",
+  headings: { fontFamily: "'Be Vietnam Pro', system-ui, sans-serif" },
+  components: {
+    Button: { defaultProps: { variant: "light" } },
+  },
 });
 
 const Debug = lazy(() => import("./components/Debug/Debug"));

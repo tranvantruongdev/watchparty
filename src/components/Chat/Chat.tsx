@@ -249,7 +249,8 @@ export class Chat extends React.Component<ChatProps> {
           marginTop: 0,
           marginBottom: 0,
           padding: "8px",
-          backgroundColor: "rgba(30,30,30,1)",
+          // The glass right column shows through
+          backgroundColor: "transparent",
         }}
       >
         <div

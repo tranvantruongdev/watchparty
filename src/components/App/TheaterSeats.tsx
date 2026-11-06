@@ -1,8 +1,8 @@
-import { Avatar } from "@mantine/core";
 import styles from "./App.module.css";
+import { getColorForStringHex } from "../../utils/utils";
 
-// A short row of cinema seats under the screen, one occupant per person in the
-// room. The shared velvet bench reads as a couple seat when there are two.
+// A short row of seats under the screen, one 3D chibi per person in the room,
+// shirt colored per person and a glowing headset while in voice chat.
 export const TheaterSeats = (props: {
   participants: User[];
   nameMap: StringDict;
@@ -21,12 +21,23 @@ export const TheaterSeats = (props: {
       <div className={styles.seatRow}>
         {props.participants.map((p) => (
           <div key={p.id} className={styles.seat}>
-            <Avatar
-              src={props.pictureMap[p.id] || undefined}
-              alt={props.nameMap[p.id] || "?"}
-              size={28}
-              radius="xl"
-            />
+            <div
+              className={
+                styles.chibi + (p.isVideoChat ? " " + styles.chibiVoice : "")
+              }
+              style={
+                {
+                  "--shirt": "#" + getColorForStringHex(p.id),
+                } as React.CSSProperties
+              }
+              title={props.nameMap[p.id] || "?"}
+            >
+              <div className={styles.chibiHair} />
+              <div className={styles.chibiHead} />
+              <div className={styles.chibiEyes} />
+              <div className={styles.chibiBody} />
+              <div className={styles.chibiLegs} />
+            </div>
             <div className={styles.seatName}>
               {props.nameMap[p.id] || p.id.slice(0, 8)}
             </div>

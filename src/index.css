@@ -2,9 +2,27 @@ html body {
   margin: 0;
   /* fix for scrollbar popping in and out at certain widths, but adds a permanent scrollbar */
   overflow-y: scroll;
-  background-color: #222222;
+  background-color: #0b0716;
 }
 
 ::-webkit-scrollbar-corner {
   background: rgba(0, 0, 0, 0);
+}
+
+/* Glass inputs and modals */
+.mantine-TextInput-input,
+.mantine-Autocomplete-input {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.mantine-Modal-content {
+  background: rgba(22, 14, 42, 0.92);
+  border: 1px solid rgba(190, 150, 255, 0.18);
+  backdrop-filter: blur(14px);
+}
+
+.mantine-Modal-header {
+  background: transparent;
 }
