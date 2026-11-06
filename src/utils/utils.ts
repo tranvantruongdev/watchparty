@@ -164,8 +164,17 @@ export const parseLocalCopy = (input: string) => {
   if (at < 1 || query < 0) {
     return null;
   }
+  let name: string;
+  try {
+    // decodeURIComponent throws on malformed %-sequences (e.g. %ZZ), and a
+    // scripted guest can host one — it would crash every client's render
+    // through the "changed the video to" chat line
+    name = decodeURIComponent(body.slice(0, at));
+  } catch {
+    return null;
+  }
   return {
-    name: decodeURIComponent(body.slice(0, at)),
+    name,
     id: body.slice(at + 1, query),
     size: Number(new URLSearchParams(body.slice(query + 1)).get("size")),
   };
