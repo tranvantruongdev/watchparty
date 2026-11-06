@@ -85,7 +85,7 @@ This project supports creating virtual browsers (using https://github.com/m1k1o/
 
 - Install cloudflared once: `winget install --id Cloudflare.cloudflared`
 - Double-click `start_public.bat`: it builds, starts the server with a fresh random `ROOM_KEY`, and opens a Cloudflare quick tunnel (no account)
-- Share the `https://….trycloudflare.com` address it prints plus `/?key=<ROOM_KEY>`; the address and key change every run, and the link works only while the window is open
+- Share the green `Invite link: https://<random>.trycloudflare.com/?key=<ROOM_KEY>` it prints (not the bare `trycloudflare.com`); the link changes every run and works only while the window is open
 
 ## Tech
 
