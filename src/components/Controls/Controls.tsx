@@ -16,6 +16,7 @@ import {
   IconVolume,
   IconTheater,
   IconMaximize,
+  IconPictureInPicture,
   IconPlayerSkipForwardFilled,
 } from "@tabler/icons-react";
 
@@ -41,6 +42,8 @@ interface ControlsProps {
   roomSetPlaybackRate: (rate: number) => void;
   roomSetLoop: (loop: boolean) => void;
   localFullScreen: (fs: boolean) => void;
+  /** Only set for HTML5 video (not YouTube/vbrowser) when the browser supports PiP */
+  togglePictureInPicture?: () => void;
   localToggleMute: () => void;
   localSubtitleModal: () => void;
   localSeek: () => void;
@@ -98,6 +101,7 @@ export const Controls = (props: ControlsProps) => {
     roomTogglePlay,
     roomSeek,
     localFullScreen,
+    togglePictureInPicture,
     localToggleMute,
     localSubtitleModal,
     localSeek,
@@ -394,6 +398,13 @@ export const Controls = (props: ControlsProps) => {
         className={` ${styles.action}`}
         title="Fullscreen"
       />
+      {togglePictureInPicture && (
+        <IconPictureInPicture
+          onClick={togglePictureInPicture}
+          className={` ${styles.action}`}
+          title="Picture-in-Picture"
+        />
+      )}
       {muted ? (
         <IconVolumeOff
           onClick={() => {

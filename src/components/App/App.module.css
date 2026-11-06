@@ -565,3 +565,67 @@
     animation-name: floatFade;
   }
 }
+
+/* Fullscreen chat overlay: newest messages over the player, fading out ~8s
+   after each arrives. pointer-events none so the player/controls stay clickable;
+   the input opts back in. */
+.chatOverlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: min(420px, 40%);
+  pointer-events: none;
+}
+
+.chatOverlayItem {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(24, 14, 46, 0.55);
+  border: 1px solid rgba(190, 150, 255, 0.14);
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+  color: rgba(230, 220, 255, 0.95);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  overflow-wrap: anywhere;
+  animation: chatOverlayFade 8s ease-out forwards;
+}
+
+.chatOverlayName {
+  font-weight: 700;
+  margin-right: 6px;
+  color: rgba(196, 160, 255, 0.95);
+}
+
+.chatOverlayInput {
+  pointer-events: auto;
+  width: min(420px, 40%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(190, 150, 255, 0.25);
+  background: rgba(24, 14, 46, 0.75);
+  color: rgba(230, 220, 255, 0.95);
+  font-size: 13px;
+  outline: none;
+}
+
+@keyframes chatOverlayFade {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  3% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  87% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

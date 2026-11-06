@@ -215,6 +215,9 @@ interface AppState {
   audioTracks: AudioTrackInfo[] | undefined;
   audioTrackId: number | undefined;
   floatReactions: FloatReaction[];
+  // Fullscreen chat overlay (F4): whether the mini input is open and what's in it
+  chatOverlayTyping: boolean;
+  chatOverlayMsg: string;
 }
 
 export class App extends React.Component<AppProps, AppState> {
@@ -230,6 +233,8 @@ export class App extends React.Component<AppProps, AppState> {
     rosterUpdateTS: Date.now(),
     chat: [],
     floatReactions: [],
+    chatOverlayTyping: false,
+    chatOverlayMsg: "",
     playlist: [],
     tsMap: {},
     nameMap: {},
@@ -2217,6 +2222,9 @@ export class App extends React.Component<AppProps, AppState> {
         this.localFullScreen(true);
       } else if (e.key === "m") {
         this.localToggleMute();
+      } else if (e.key === "Enter" && this.state.fullScreen) {
+        // Type a chat message from the fullscreen overlay
+        this.setState({ chatOverlayTyping: true });
       }
     }
   };
@@ -2229,9 +2237,13 @@ export class App extends React.Component<AppProps, AppState> {
         // vbrowser needs to fullscreen the control wrapper div
         // Can't really control the VBrowser on mobile anyway, so just fullscreen the video
         container = document.getElementById("leftVideoParent") as HTMLElement;
-      } else {
-        // fullscreen just the video
+      } else if (isMobile()) {
+        // e.g. iPhone only allows webkitEnterFullscreen on the video itself
         container = this.Player().getVideoEl();
+      } else {
+        // Fullscreen the player column (video + controls + floating reactions +
+        // chat overlay): a bare fullscreened <video> can't have DOM drawn above it
+        container = document.getElementById("playerColumn") as HTMLElement;
       }
     }
     if (
@@ -2259,6 +2271,19 @@ export class App extends React.Component<AppProps, AppState> {
 
   localToggleMute = () => {
     this.localSetMute(!this.Player().isMuted());
+  };
+
+  togglePictureInPicture = async () => {
+    const video = this.HTMLInterface.getVideoEl() as HTMLVideoElement;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch {
+      // The browser can refuse PiP (unsupported stream, disabled by policy)
+    }
   };
 
   roomSetMedia = (value: string) => {
@@ -2482,6 +2507,13 @@ export class App extends React.Component<AppProps, AppState> {
         audioTracks={this.state.audioTracks}
         audioTrackId={this.state.audioTrackId}
         localSetAudioTrack={this.localSetAudioTrack}
+        togglePictureInPicture={
+          this.usingNative() &&
+          !this.playingVBrowser() &&
+          document.pictureInPictureEnabled
+            ? this.togglePictureInPicture
+            : undefined
+        }
       />
     );
     const topBar = (
@@ -2627,6 +2659,7 @@ export class App extends React.Component<AppProps, AppState> {
               }
             >
               <div
+                id="playerColumn"
                 style={{
                   display: "flex",
                   flexDirection: "column",
@@ -3054,8 +3087,7 @@ export class App extends React.Component<AppProps, AppState> {
                       <video
                         style={{
                           display:
-                            (this.usingNative() && !this.state.loading) ||
-                            this.state.fullScreen
+                            this.usingNative() && !this.state.loading
                               ? "block"
                               : "none",
                           width: "100%",
@@ -3112,6 +3144,61 @@ export class App extends React.Component<AppProps, AppState> {
                         </div>
                       ))}
                     </div>
+                    {/* Fullscreen chat overlay: newest messages over the player,
+                        each fading out ~8s after it arrived (CSS animation) */}
+                    {this.state.fullScreen &&
+                      document.fullscreenElement !== document.body && (
+                        <div className={styles.chatOverlay}>
+                          {this.state.chat
+                            .filter((m) => !m.system && !m.cmd && m.msg)
+                            .slice(-5)
+                            .map((msg) => (
+                              <div
+                                key={msg.timestamp + msg.id}
+                                className={styles.chatOverlayItem}
+                              >
+                                <span className={styles.chatOverlayName}>
+                                  {this.state.nameMap[msg.id] || msg.id}
+                                </span>
+                                <span>{msg.msg}</span>
+                              </div>
+                            ))}
+                          {this.state.chatOverlayTyping && (
+                            <input
+                              autoFocus
+                              className={styles.chatOverlayInput}
+                              placeholder="Enter to send, Esc to close"
+                              value={this.state.chatOverlayMsg}
+                              onChange={(e) =>
+                                this.setState({
+                                  chatOverlayMsg: e.target.value,
+                                })
+                              }
+                              onBlur={() =>
+                                this.setState({ chatOverlayTyping: false })
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  this.setState({
+                                    chatOverlayTyping: false,
+                                    chatOverlayMsg: "",
+                                  });
+                                } else if (
+                                  e.key === "Enter" &&
+                                  this.state.chatOverlayMsg &&
+                                  this.state.chatOverlayMsg.length <= 10000
+                                ) {
+                                  this.socket.emit(
+                                    "CMD:chat",
+                                    this.state.chatOverlayMsg,
+                                  );
+                                  this.setState({ chatOverlayMsg: "" });
+                                }
+                              }}
+                            />
+                          )}
+                        </div>
+                      )}
                   </div>
                 </div>
                 {this.state.roomMedia && controls}
@@ -3123,7 +3210,7 @@ export class App extends React.Component<AppProps, AppState> {
                     lightsDown={lightsDown}
                   />
                 )}
-                {!isMobile() && (
+                {!isMobile() && !this.state.fullScreen && (
                   <div className={styles.expandButton}>
                     <ActionIcon
                       onClick={() => {
