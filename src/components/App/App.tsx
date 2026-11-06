@@ -75,6 +75,7 @@ import {
   IconFile,
   IconKeyboardFilled,
   IconList,
+  IconMicrophone,
   IconScreenShare,
   IconSettings,
   IconUser,
@@ -319,6 +320,7 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   chatRef = React.createRef<Chat>();
+  videoChatRef = React.createRef<VideoChat>();
 
   async componentDidMount() {
     document.onfullscreenchange = this.onFullScreenChange;
@@ -2257,6 +2259,26 @@ export class App extends React.Component<AppProps, AppState> {
     this.socket.emit("CMD:uid", { uid, token });
   };
 
+  // Join/leave voice chat from the chat bar; the call itself lives in VideoChat (People)
+  renderVoiceButton = () => {
+    const inVoice = this.state.participants.find(
+      (p) => p.id === getOrCreateClientId(),
+    )?.isVideoChat;
+    return (
+      <ActionIcon
+        title={inVoice ? "Leave voice chat" : "Join voice chat"}
+        color={inVoice ? "red" : "green"}
+        onClick={() =>
+          inVoice
+            ? this.videoChatRef.current?.stopWebRTC()
+            : this.videoChatRef.current?.setupWebRTC()
+        }
+      >
+        <IconMicrophone />
+      </ActionIcon>
+    );
+  };
+
   getMediaDisplayName = (input?: string) => {
     if (!input) {
       return "";
@@ -3151,6 +3173,7 @@ export class App extends React.Component<AppProps, AppState> {
                   }}
                 >
                   <VideoChat
+                    ref={this.videoChatRef}
                     socket={this.socket}
                     participants={this.state.participants}
                     nameMap={this.state.nameMap}
@@ -3173,6 +3196,7 @@ export class App extends React.Component<AppProps, AppState> {
                 owner={this.state.owner}
                 ref={this.chatRef}
                 hide={!this.state.showChatColumn}
+                voiceButton={this.renderVoiceButton()}
               />
             </div>
           </div>

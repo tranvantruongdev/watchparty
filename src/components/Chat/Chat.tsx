@@ -47,6 +47,8 @@ interface ChatProps {
   isChatDisabled?: boolean;
   owner: string | undefined;
   ref: RefObject<Chat>;
+  // Shown beside the emoji button
+  voiceButton?: React.ReactNode;
 }
 
 export class Chat extends React.Component<ChatProps> {
@@ -55,8 +57,7 @@ export class Chat extends React.Component<ChatProps> {
   public state = {
     chatMsg: "",
     replyTo: undefined as
-      | { id: string; timestamp: string; msg?: string }
-      | undefined,
+      { id: string; timestamp: string; msg?: string } | undefined,
     isNearBottom: true,
     isPickerOpen: false,
     reactionMenu: {
@@ -361,7 +362,8 @@ export class Chat extends React.Component<ChatProps> {
             }}
           >
             <div className={styles.small + " " + styles.light}>
-              Replying to {this.props.nameMap[this.state.replyTo.id] || "Unknown"}
+              Replying to{" "}
+              {this.props.nameMap[this.state.replyTo.id] || "Unknown"}
               {this.state.replyTo.msg ? (
                 <div
                   style={{
@@ -393,19 +395,23 @@ export class Chat extends React.Component<ChatProps> {
               ? "The chat was disabled by the room owner."
               : "Enter a message..."
           }
+          rightSectionWidth={this.props.voiceButton ? 64 : undefined}
           rightSection={
-            <ActionIcon
-              onClick={() => {
-                // Add a delay to prevent the click from triggering onClickOutside
-                const curr = this.state.isPickerOpen;
-                setTimeout(() => this.setState({ isPickerOpen: !curr }), 100);
-              }}
-              disabled={this.props.isChatDisabled}
-            >
-              <span role="img" aria-label="Emoji">
-                😀
-              </span>
-            </ActionIcon>
+            <div style={{ display: "flex", gap: 4 }}>
+              {this.props.voiceButton}
+              <ActionIcon
+                onClick={() => {
+                  // Add a delay to prevent the click from triggering onClickOutside
+                  const curr = this.state.isPickerOpen;
+                  setTimeout(() => this.setState({ isPickerOpen: !curr }), 100);
+                }}
+                disabled={this.props.isChatDisabled}
+              >
+                <span role="img" aria-label="Emoji">
+                  😀
+                </span>
+              </ActionIcon>
+            </div>
           }
         >
           {/* <Icon onClick={this.sendChatMsg} name="send" inverted circular link /> */}
@@ -558,7 +564,11 @@ const ChatMessage = ({
                 marginRight: 4,
               }}
             >
-              <span role="img" aria-label="Reply" style={{ margin: 0, fontSize: 16 }}>
+              <span
+                role="img"
+                aria-label="Reply"
+                style={{ margin: 0, fontSize: 16 }}
+              >
                 ↩
               </span>
             </ActionIcon>

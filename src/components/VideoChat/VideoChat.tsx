@@ -317,16 +317,6 @@ export class VideoChat extends React.Component<VideoChatProps> {
                       zIndex: 1,
                     }}
                   >
-                    {!ourStream && p.id === selfId && (
-                      <Button
-                        size="xs"
-                        color={"purple"}
-                        onClick={this.setupWebRTC}
-                        leftSection={<IconVideo />}
-                      >
-                        Join
-                      </Button>
-                    )}
                     {ourStream && p.id === selfId && (
                       <Button
                         size="xs"
