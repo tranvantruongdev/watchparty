@@ -1041,7 +1041,8 @@ export class Room {
       return;
     }
     let mediasoupSuffix = "";
-    if (data?.mediasoup) {
+    // Without a relay server, a relay request falls back to a direct share
+    if (data?.mediasoup && config.MEDIASOUP_SERVER) {
       // TODO validate the user has permissions to ask for a mediasoup
       // TODO set up the room on the remote server rather than letting the remote server create
       mediasoupSuffix =

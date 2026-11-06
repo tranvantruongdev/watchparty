@@ -2256,13 +2256,17 @@ export class App extends React.Component<AppProps, AppState> {
     if (this.usingYoutube()) {
       return input;
     }
-    if (input.startsWith("screenshare://")) {
-      const sharer = this.state.participants.find((user) => user.isScreenShare);
-      return this.state.nameMap[sharer?.id ?? ""] + "'s screen";
-    }
-    if (input.startsWith("fileshare://")) {
-      const sharer = this.state.participants.find((user) => user.isScreenShare);
-      return this.state.nameMap[sharer?.id ?? ""] + "'s file";
+    // The sharer's id is in the URL (screenshare://<id>[@relay/<uuid>]), so old
+    // chat messages still resolve after the share ends
+    if (
+      input.startsWith("screenshare://") ||
+      input.startsWith("fileshare://")
+    ) {
+      const sharerId = input.split("://")[1].split("@")[0];
+      const name = this.state.nameMap[sharerId] ?? "Someone";
+      return (
+        name + (input.startsWith("screenshare://") ? "'s screen" : "'s file")
+      );
     }
     if (input.startsWith("vbrowser://")) {
       return "Virtual Browser" + (this.state.isVBrowserLarge ? "+" : "");
