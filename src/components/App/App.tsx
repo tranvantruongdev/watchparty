@@ -111,6 +111,15 @@ window.watchparty = {
   videoPCs: {},
 };
 
+// Glass card look shared by the in-player notices
+const glassCardStyle: React.CSSProperties = {
+  background: "rgba(30, 18, 58, 0.72)",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
+  border: "1px solid rgba(190, 150, 255, 0.25)",
+  borderRadius: 16,
+};
+
 const clientId = getOrCreateClientId();
 
 interface AppProps {
@@ -2624,7 +2633,7 @@ export class App extends React.Component<AppProps, AppState> {
                         !this.playingVBrowser() && (
                           <Button
                             className={styles.shareButton}
-                            color="blue"
+                            color="violet"
                             disabled={!this.haveLock()}
                             onClick={() => {
                               this.setState({
@@ -2642,7 +2651,7 @@ export class App extends React.Component<AppProps, AppState> {
                           <Button
                             className={styles.shareButton}
                             disabled={!this.haveLock()}
-                            color="green"
+                            color="violet"
                             onClick={() => {
                               this.setState({
                                 isVBrowserModalOpen: true,
@@ -2782,7 +2791,7 @@ export class App extends React.Component<AppProps, AppState> {
                       <Menu>
                         <Menu.Target>
                           <Button
-                            color="grey"
+                            color="violet"
                             leftSection={<IconList />}
                             rightSection={
                               <Badge circle>{playlist.length}</Badge>
@@ -2950,6 +2959,7 @@ export class App extends React.Component<AppProps, AppState> {
                             <Alert
                               color="yellow"
                               title="You're not watching anything!"
+                              style={glassCardStyle}
                             >
                               Pick something to watch above.
                             </Alert>
@@ -2959,6 +2969,7 @@ export class App extends React.Component<AppProps, AppState> {
                               <Alert
                                 color="red"
                                 title="It doesn't look like this is a media file!"
+                                style={glassCardStyle}
                               >
                                 Maybe you meant to launch a VBrowser if you're
                                 trying to visit a web page?
@@ -3128,9 +3139,10 @@ export class App extends React.Component<AppProps, AppState> {
                 />
                 <InviteButton />
               </div>
-              <div style={{ display: "flex", gap: "4px" }}>
+              <div className={styles.segGroup}>
                 <Button
-                  color="grey"
+                  variant={this.state.showPeopleColumn ? "light" : "subtle"}
+                  color="violet"
                   onClick={() =>
                     this.setState({
                       showPeopleColumn: !this.state.showPeopleColumn,
@@ -3145,7 +3157,8 @@ export class App extends React.Component<AppProps, AppState> {
                   People
                 </Button>
                 <Button
-                  color="grey"
+                  variant="subtle"
+                  color="violet"
                   title="Settings"
                   fullWidth
                   onClick={() => {
@@ -3160,7 +3173,11 @@ export class App extends React.Component<AppProps, AppState> {
                 <div
                   style={{
                     position: "absolute",
-                    background: "rgba(10, 10, 10, 0.6)",
+                    background: "rgba(20, 12, 40, 0.85)",
+                    backdropFilter: "blur(12px)",
+                    WebkitBackdropFilter: "blur(12px)",
+                    borderRadius: 16,
+                    border: "1px solid rgba(190, 150, 255, 0.15)",
                     zIndex: 200,
                     left: 0,
                     top: 76,

@@ -479,7 +479,7 @@ const ChatMessage = ({
           }
         />
       ) : null}
-      <div>
+      <div className={styles.bubble}>
         <div
           style={{
             display: "flex",

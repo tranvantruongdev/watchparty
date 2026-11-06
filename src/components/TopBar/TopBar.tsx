@@ -324,7 +324,7 @@ export const TopBar = (props: {
                   style={{
                     textTransform: "uppercase",
                     fontWeight: 700,
-                    color: "#2185d0",
+                    color: "#a78bfa",
                     fontSize: "30px",
                     lineHeight: "30px",
                   }}
@@ -335,7 +335,7 @@ export const TopBar = (props: {
                   style={{
                     textTransform: "uppercase",
                     fontWeight: 700,
-                    color: "#21ba45",
+                    color: "#f472b6",
                     fontSize: "30px",
                     lineHeight: "30px",
                     marginLeft: "auto",

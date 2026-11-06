@@ -88,6 +88,17 @@
   min-width: 150px;
 }
 
+/* Segmented glass control (People / Settings) */
+.segGroup {
+  /* one row; no padding so the People overlay (top: 76px) still lines up */
+  display: flex;
+  gap: 2px;
+  border-radius: 999px;
+  background: rgba(24, 14, 46, 0.55);
+  border: 1px solid rgba(190, 150, 255, 0.14);
+  backdrop-filter: blur(10px);
+}
+
 /* Theater mode (watch page cinema look) */
 
 .theaterBackdrop {
@@ -288,8 +299,72 @@
   width: 40px;
   height: 22px;
   border-radius: 20px 20px 10px 10px;
-  background: radial-gradient(circle at 35% 30%, #4b3a5e, #1d1426 70%);
   z-index: 3;
+}
+
+/* Hair variations, picked per user by a hash of the id */
+.chibiHair0 {
+  background: radial-gradient(circle at 35% 30%, #4b3a5e, #1d1426 70%);
+}
+
+.chibiHair1 {
+  /* side-swept fringe over the forehead */
+  border-radius: 20px 8px 10px 14px;
+  background: radial-gradient(circle at 35% 30%, #6b4a33, #2c1a10 70%);
+}
+
+.chibiHair1::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 6px;
+  width: 16px;
+  height: 6px;
+  border-radius: 0 0 10px 10px;
+  background: #3a2317;
+}
+
+.chibiHair2 {
+  /* long hair down the sides of the face */
+  height: 34px;
+  border-radius: 20px 20px 14px 14px;
+  background: radial-gradient(circle at 35% 25%, #b163c9, #4a1d5c 75%);
+}
+
+.chibiHair3 {
+  /* dark blue crop with a topknot bun */
+  background: radial-gradient(circle at 35% 30%, #3d4a6b, #131a2c 70%);
+}
+
+.chibiHair3::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 13px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #3d4a6b, #131a2c 70%);
+}
+
+/* ears poking out on both sides of the head */
+.chibiHead::before,
+.chibiHead::after {
+  content: "";
+  position: absolute;
+  top: 13px;
+  width: 7px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #f5c6a5, #c98a64);
+}
+
+.chibiHead::before {
+  left: -3px;
+}
+
+.chibiHead::after {
+  right: -3px;
 }
 
 .chibiEyes {
@@ -331,9 +406,70 @@
   box-shadow: 11px 0 0 #2f2746;
 }
 
-/* In voice chat: a glowing headset band */
-.chibiVoice .chibiHair {
-  box-shadow: 0 -2px 0 2px #a855f7;
+.chibiCheeks {
+  position: absolute;
+  top: 23px;
+  left: 8px;
+  width: 6px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 128, 150, 0.55);
+  box-shadow: 22px 0 0 rgba(255, 128, 150, 0.55);
+  z-index: 3;
+}
+
+.chibiArm {
+  position: absolute;
+  top: 33px;
+  left: 5px;
+  width: 6px;
+  height: 13px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--shirt) 60%, black),
+    color-mix(in srgb, var(--shirt) 80%, black)
+  );
+  box-shadow: 28px 0 0 color-mix(in srgb, var(--shirt) 70%, black);
+  z-index: 0;
+}
+
+/* In voice chat: the chibi glows and wears a lit headset band with ear cups */
+.chibiVoice {
+  filter: drop-shadow(0 0 5px rgba(168, 85, 247, 0.55));
+}
+
+.chibiHeadset {
+  position: absolute;
+  top: 6px;
+  left: 2px;
+  width: 40px;
+  height: 24px;
+  border: 3px solid #c084fc;
+  border-bottom: none;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 0 10px rgba(192, 132, 252, 0.7);
+  z-index: 4;
+}
+
+.chibiHeadset::before,
+.chibiHeadset::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  width: 7px;
+  height: 11px;
+  border-radius: 3px;
+  background: linear-gradient(#e9d5ff, #a855f7);
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.9);
+}
+
+.chibiHeadset::before {
+  left: -1px;
+}
+
+.chibiHeadset::after {
+  right: -1px;
 }
 
 @keyframes chibiBob {

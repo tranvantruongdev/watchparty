@@ -26,3 +26,9 @@ html body {
 .mantine-Modal-header {
   background: transparent;
 }
+
+.mantine-Menu-dropdown {
+  background: rgba(22, 14, 42, 0.92);
+  border: 1px solid rgba(190, 150, 255, 0.18);
+  backdrop-filter: blur(14px);
+}

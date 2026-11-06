@@ -49,6 +49,14 @@
   overflow: auto;
 }
 
+/* Soft glass bubble around each message body (name + time + text) */
+.bubble {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(190, 150, 255, 0.12);
+  border-radius: 4px 16px 16px 16px;
+  padding: 6px 10px;
+}
+
 .hoverEffect:hover {
   filter: brightness(0.8);
 }
