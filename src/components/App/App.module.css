@@ -505,3 +505,63 @@
     display: none;
   }
 }
+
+/* Floating emoji reactions over the video */
+.floatReactionLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.floatReaction {
+  position: absolute;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: floatUp 2.5s ease-out forwards;
+}
+
+.floatReactionEmoji {
+  font-size: 34px;
+  /* text-shadow, not filter: a filter paints a dark box behind color emoji */
+  text-shadow: 0 0 10px rgba(168, 85, 247, 0.7);
+}
+
+.floatReactionName {
+  font-size: 11px;
+  color: rgba(230, 220, 255, 0.9);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes floatUp {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.7);
+  }
+  10% {
+    opacity: 1;
+    transform: translateY(-24px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-60vh) scale(1);
+  }
+}
+
+@keyframes floatFade {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floatReaction {
+    animation-name: floatFade;
+  }
+}

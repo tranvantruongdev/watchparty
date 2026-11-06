@@ -49,6 +49,8 @@ interface ChatProps {
   ref: RefObject<Chat>;
   // Shown beside the emoji button
   voiceButton?: React.ReactNode;
+  // Handles "/30" style seek commands from the chat input
+  onSeekCommand?: (delta: number) => void;
 }
 
 export class Chat extends React.Component<ChatProps> {
@@ -132,6 +134,14 @@ export class Chat extends React.Component<ChatProps> {
       return;
     }
     if (this.chatTooLong()) {
+      return;
+    }
+    // "/30" seeks forward 30s, "/-10" back 10s (SyncTube-style); the command
+    // itself is not sent as chat. Anything else starting with "/" is chat.
+    const seekMatch = /^\/(-?\d+)$/.exec(this.state.chatMsg);
+    if (seekMatch && this.props.onSeekCommand) {
+      this.setState({ chatMsg: "", replyTo: undefined });
+      this.props.onSeekCommand(Number(seekMatch[1]));
       return;
     }
     if (this.state.replyTo?.id && this.state.replyTo.timestamp) {
@@ -235,6 +245,12 @@ export class Chat extends React.Component<ChatProps> {
 
   addEmoji = (emoji: any) => {
     this.setState({ chatMsg: this.state.chatMsg + emoji.native });
+  };
+
+  // Floating reaction over the video: the server relays it to everyone,
+  // including us, so rendering happens in the REC:floatReaction handler
+  sendFloatReaction = (value: string) => {
+    this.props.socket.emit("CMD:floatReaction", value);
   };
 
   render() {
@@ -381,6 +397,21 @@ export class Chat extends React.Component<ChatProps> {
             <Button size="xs" variant="subtle" onClick={this.clearReplyTo}>
               Cancel
             </Button>
+          </div>
+        )}
+        {!this.props.isChatDisabled && (
+          <div className={styles.floatReactions}>
+            {["😂", "❤️", "😮", "😢", "👏", "🔥"].map((emoji) => (
+              <ActionIcon
+                key={emoji}
+                onClick={() => this.sendFloatReaction(emoji)}
+                aria-label={`React ${emoji}`}
+              >
+                <span role="img" aria-hidden>
+                  {emoji}
+                </span>
+              </ActionIcon>
+            ))}
           </div>
         )}
         <TextInput

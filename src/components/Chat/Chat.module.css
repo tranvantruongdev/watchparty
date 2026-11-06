@@ -78,6 +78,18 @@
   font-size: 12px;
 }
 
+/* Quick floating-reaction buttons above the chat input */
+.floatReactions {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(190, 150, 255, 0.12);
+  border-radius: 16px;
+}
+
 .system {
   font-size: 10px;
   text-transform: uppercase;

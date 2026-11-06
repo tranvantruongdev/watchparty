@@ -122,6 +122,15 @@ const glassCardStyle: React.CSSProperties = {
 
 const clientId = getOrCreateClientId();
 
+// One emoji floating up over the video (REC:floatReaction)
+interface FloatReaction {
+  user: string;
+  value: string;
+  id: string;
+  // Horizontal start position, percent of the player width
+  left: number;
+}
+
 interface AppProps {
   vanity?: string;
   urlRoomId?: string;
@@ -205,6 +214,7 @@ interface AppState {
   // Audio tracks of the file being converted on this device, and which one is playing
   audioTracks: AudioTrackInfo[] | undefined;
   audioTrackId: number | undefined;
+  floatReactions: FloatReaction[];
 }
 
 export class App extends React.Component<AppProps, AppState> {
@@ -219,6 +229,7 @@ export class App extends React.Component<AppProps, AppState> {
     participants: [],
     rosterUpdateTS: Date.now(),
     chat: [],
+    floatReactions: [],
     playlist: [],
     tsMap: {},
     nameMap: {},
@@ -909,6 +920,23 @@ export class App extends React.Component<AppProps, AppState> {
         (id) => id !== data.user,
       );
       this.setState({ chat });
+    });
+    socket.on("REC:floatReaction", (data: FloatReaction) => {
+      const float: FloatReaction = {
+        ...data,
+        id: Date.now() + ":" + Math.random().toString(36).slice(2),
+        left: 5 + Math.random() * 90,
+      };
+      // Cap the layer so a chatty room can't stack up hundreds of nodes
+      // Functional updates: a burst arrives within one batch, so this.state is stale
+      this.setState((s) => ({
+        floatReactions: [...s.floatReactions, float].slice(-30),
+      }));
+      setTimeout(() => {
+        this.setState((s) => ({
+          floatReactions: s.floatReactions.filter((f) => f.id !== float.id),
+        }));
+      }, 2500);
     });
     socket.on("REC:tsMap", (data: NumberDict) => {
       this.setState({ tsMap: data }, () => {
@@ -2146,6 +2174,17 @@ export class App extends React.Component<AppProps, AppState> {
     this.socket.emit("CMD:seek", toSend);
   };
 
+  // Chat slash command (/30 forward, /-10 back): same path as the player's
+  // seek control so everyone syncs and the "jumped to" chat line appears.
+  // Screen/file share streams aren't seekable, and seeking follows the same
+  // lock rule as the controls.
+  roomSeekCommand = (delta: number) => {
+    if (!this.hasDuration() || !this.haveLock()) {
+      return;
+    }
+    this.roomSeek(this.Player().getCurrentTime() + delta);
+  };
+
   getRoomTSToSet = (time: number) => {
     let target = time;
     // In live case, can't just send video time because clients may have different durations
@@ -3057,6 +3096,22 @@ export class App extends React.Component<AppProps, AppState> {
                         .filter(Boolean)
                         .join(" - ")}
                     </div>
+                    <div className={styles.floatReactionLayer}>
+                      {this.state.floatReactions.map((float) => (
+                        <div
+                          key={float.id}
+                          className={styles.floatReaction}
+                          style={{ left: `${float.left}%` }}
+                        >
+                          <span className={styles.floatReactionEmoji}>
+                            {float.value}
+                          </span>
+                          <span className={styles.floatReactionName}>
+                            {this.state.nameMap[float.user] || float.user}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 {this.state.roomMedia && controls}
@@ -3215,6 +3270,7 @@ export class App extends React.Component<AppProps, AppState> {
                 ref={this.chatRef}
                 hide={!this.state.showChatColumn}
                 voiceButton={this.renderVoiceButton()}
+                onSeekCommand={this.roomSeekCommand}
               />
             </div>
           </div>

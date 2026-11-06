@@ -34,6 +34,9 @@ if (!config.VM_MANAGER_CONFIG) {
 // Max number of vBrowsers a single user can have assigned at once
 const MAX_VBROWSERS_PER_USER = 2;
 
+// The only emojis accepted for CMD:floatReaction, anything else is dropped
+const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -69,6 +72,8 @@ export class Room {
   // clientId -> sessionId secret. In-memory version of the redis session map,
   // so clientId spoofing is also blocked when redis isn't configured
   private sessionMap: StringDict = {};
+  // clientId -> timestamps of the float reactions they sent in the last second
+  private floatReactionTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
@@ -348,6 +353,9 @@ export class Room {
       on("CMD:removeReaction", (data: unknown) => {
         this.removeReaction(socket, data);
       });
+      on("CMD:floatReaction", (data: unknown) =>
+        this.floatReaction(socket, data),
+      );
       on("CMD:joinVideo", () => this.joinVideo(socket));
       on("CMD:leaveVideo", () => this.leaveVideo(socket));
       on("CMD:joinScreenShare", (data) => {
@@ -1021,6 +1029,28 @@ export class Room {
     this.io.of(this.roomId).emit("REC:removeReaction", reaction);
   };
 
+  // Floating emoji over the video: relayed to everyone (sender included) with
+  // the sender's id, but never stored in chat history
+  private floatReaction = (socket: Socket, raw: unknown) => {
+    if (typeof raw !== "string" || !FLOAT_REACTIONS.includes(raw)) {
+      return;
+    }
+    // Max 5 per second per socket so one guest can't flood the room
+    const now = Date.now();
+    const times = (this.floatReactionTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 5) {
+      return;
+    }
+    times.push(now);
+    this.floatReactionTimes[socket.clientId] = times;
+    this.io.of(this.roomId).emit("REC:floatReaction", {
+      user: socket.clientId,
+      value: raw,
+    });
+  };
+
   private joinVideo = async (socket: Socket) => {
     const match = this.roster.find((user) => user.id === socket.clientId);
     if (match) {
@@ -1584,6 +1614,7 @@ export class Room {
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       delete this.tsMap[clientId];
       delete this.socketIdMap[clientId];
+      delete this.floatReactionTimes[clientId];
     }
     // Keep namemap/picturemap so old chat messages still render correctly after disconnect
     // When serializing we only write values with messages in chat
