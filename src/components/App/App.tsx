@@ -21,6 +21,8 @@ import {
   isHls,
   isScreenShare,
   isFileShare,
+  isLocalCopy,
+  parseLocalCopy,
   isDirectVideoUrl,
   pickSingleLargeFile,
   isVBrowser,
@@ -73,6 +75,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconFile,
+  IconFiles,
   IconKeyboardFilled,
   IconList,
   IconMicrophone,
@@ -184,6 +187,7 @@ interface AppState {
   isVBrowserModalOpen: boolean;
   isScreenShareModalOpen: boolean;
   isFileShareModalOpen: boolean;
+  localCopyNeeded: boolean;
   isSubtitleModalOpen: boolean;
   isMultiSelectModalOpen: boolean;
   roomLock: string;
@@ -268,6 +272,7 @@ export class App extends React.Component<AppProps, AppState> {
     isVBrowserModalOpen: false,
     isScreenShareModalOpen: false,
     isFileShareModalOpen: false,
+    localCopyNeeded: false,
     isSubtitleModalOpen: false,
     isMultiSelectModalOpen: false,
     roomLock: "",
@@ -333,6 +338,9 @@ export class App extends React.Component<AppProps, AppState> {
   };
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
+  // "Local copy" mode: the file this client plays from its own disk
+  localCopyFile?: File;
+  localCopyObjectUrl?: string;
   transcoder?: ClientTranscoder;
   publisherConns: PCDict = {};
   consumerConn?: RTCPeerConnection;
@@ -556,12 +564,23 @@ export class App extends React.Component<AppProps, AppState> {
       if (this.playingVBrowser() && !isVBrowser(currentMedia)) {
         this.stopVBrowser();
       }
+      if (this.localCopyFile && !isLocalCopy(currentMedia)) {
+        this.dropLocalCopy();
+      }
       if (this.playingScreenShare() && isScreenShare(currentMedia)) {
         // Ignore, it's probably a reconnection
         return;
       }
       if (this.playingFileShare() && isFileShare(currentMedia)) {
         // Ignore, it's probably a reconnection
+        return;
+      }
+      if (
+        this.playingLocalCopy() &&
+        currentMedia === this.state.roomMedia &&
+        this.localCopyFile
+      ) {
+        // Already playing our own copy of this file: reconnect, not a new host
         return;
       }
       if (
@@ -619,6 +638,7 @@ export class App extends React.Component<AppProps, AppState> {
           loading: Boolean(data.video),
           nonPlayableMedia: false,
           playbackBlocked: false,
+          localCopyNeeded: false,
           isVBrowserLarge: data.isVBrowserLarge,
           vBrowserResolution: "1280x720@30",
           vBrowserQuality: "1",
@@ -662,6 +682,11 @@ export class App extends React.Component<AppProps, AppState> {
             // before this setState committed roomMedia (it bails unless the
             // share type is already set), so connect the RTC paths here now
             this.setupRTCConnections();
+            return;
+          }
+          if (isLocalCopy(currentMedia)) {
+            // Local copy mode: nothing streams, each client plays its own file
+            this.handleLocalCopyMedia(data);
             return;
           }
           if (this.usingYoutube() && !this.YouTubeInterface.isReady()) {
@@ -1481,6 +1506,121 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // "Local copy" mode: the host shares only the file's name and size; every
+  // client plays its own copy from disk in the normal HTML5 player, so the
+  // existing play/pause/seek/ts sync applies unchanged. Nothing is streamed,
+  // so there's no WebRTC quality loss.
+  startLocalCopyShare = async () => {
+    const files = await openFileSelector("video/*,audio/*");
+    if (!files) {
+      return;
+    }
+    const file = files[0];
+    // Switching to a different file releases the old copy; re-picking the same
+    // one keeps it playing
+    if (
+      this.localCopyFile?.name !== file.name ||
+      this.localCopyFile?.size !== file.size
+    ) {
+      this.dropLocalCopy();
+    }
+    this.localCopyFile = file;
+    this.roomSetMedia(
+      `localcopy://${encodeURIComponent(file.name)}@${getOrCreateClientId()}?size=${file.size}`,
+    );
+  };
+
+  // Stop playing our local copy and release it (the room moved to other media)
+  dropLocalCopy = () => {
+    const url = this.localCopyObjectUrl;
+    this.localCopyObjectUrl = undefined;
+    this.localCopyFile = undefined;
+    const leftVideo = this.HTMLInterface.getVideoEl();
+    if (url && leftVideo && leftVideo.src === url) {
+      leftVideo.pause();
+      leftVideo.src = "";
+    }
+  };
+
+  handleLocalCopyMedia = (data: HostState) => {
+    this.setLoadingFalse();
+    const copy = parseLocalCopy(data.video ?? "");
+    if (
+      !this.localCopyFile ||
+      !copy ||
+      this.localCopyFile.name !== copy.name ||
+      this.localCopyFile.size !== copy.size
+    ) {
+      // No matching copy open yet: ask this viewer to open theirs
+      this.dropLocalCopy();
+      this.setState({ localCopyNeeded: true });
+      return;
+    }
+    if (!this.localCopyObjectUrl) {
+      this.localCopyObjectUrl = URL.createObjectURL(this.localCopyFile);
+    }
+    const leftVideo = this.HTMLInterface.getVideoEl();
+    if (!leftVideo || leftVideo.src === this.localCopyObjectUrl) {
+      return;
+    }
+    leftVideo.src = this.localCopyObjectUrl;
+    if (data.videoTS) {
+      leftVideo.currentTime = data.videoTS;
+    }
+    if (!data.paused) {
+      this.localPlay();
+    }
+    leftVideo.addEventListener(
+      "canplay",
+      () => {
+        this.setLoadingFalse();
+        // Resync to the room position; opening the file may have taken a while
+        this.localSeek();
+      },
+      { once: true },
+    );
+  };
+
+  // Viewer picks their own copy from the overlay prompt
+  openLocalCopy = async () => {
+    const copy = parseLocalCopy(this.state.roomMedia);
+    if (!copy) {
+      return;
+    }
+    const files = await openFileSelector("video/*,audio/*");
+    if (!files) {
+      return;
+    }
+    const file = files[0];
+    const sizeLabel = (n: number) =>
+      n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${Math.round(n / 1e6)} MB`;
+    if (
+      file.size !== copy.size &&
+      !window.confirm(
+        `"${file.name}" is ${sizeLabel(file.size)} but the room's copy of "${copy.name}" is ${sizeLabel(copy.size)}. Use it anyway?`,
+      )
+    ) {
+      return;
+    }
+    this.dropLocalCopy();
+    this.localCopyFile = file;
+    this.localCopyObjectUrl = URL.createObjectURL(file);
+    this.setState({ localCopyNeeded: false }, () => {
+      const leftVideo = this.HTMLInterface.getVideoEl();
+      if (!leftVideo) {
+        return;
+      }
+      leftVideo.src = this.localCopyObjectUrl!;
+      this.localSeek();
+      if (!this.state.roomPaused) {
+        this.localPlay();
+      }
+      leftVideo.addEventListener("canplay", () => this.localSeek(), {
+        once: true,
+      });
+    });
+  };
+
   // Share the video to mediasoup
   publishMediasoup = async (mediasoupURL: string) => {
     const localStream = this.localStreamToPublish;
@@ -2000,7 +2140,11 @@ export class App extends React.Component<AppProps, AppState> {
 
   hasDuration = () => {
     // Youtube, link, or magnet, etc. Has a defined runtime (not WebRTC)
-    return isHttp(this.state.roomMedia) || isMagnet(this.state.roomMedia);
+    return (
+      isHttp(this.state.roomMedia) ||
+      isMagnet(this.state.roomMedia) ||
+      isLocalCopy(this.state.roomMedia)
+    );
   };
 
   playingScreenShare = () => {
@@ -2009,6 +2153,10 @@ export class App extends React.Component<AppProps, AppState> {
 
   playingFileShare = () => {
     return isFileShare(this.state.roomMedia);
+  };
+
+  playingLocalCopy = () => {
+    return isLocalCopy(this.state.roomMedia);
   };
 
   playingVBrowser = () => {
@@ -2415,6 +2563,11 @@ export class App extends React.Component<AppProps, AppState> {
       return (
         name + (input.startsWith("screenshare://") ? "'s screen" : "'s file")
       );
+    }
+    if (input.startsWith("localcopy://")) {
+      const copy = parseLocalCopy(input);
+      const sharer = (copy && this.state.nameMap[copy.id]) || "Someone";
+      return `${sharer}'s local copy of ${copy?.name ?? "a file"}`;
     }
     if (input.startsWith("vbrowser://")) {
       return "Virtual Browser" + (this.state.isVBrowserLarge ? "+" : "");
@@ -2883,6 +3036,19 @@ export class App extends React.Component<AppProps, AppState> {
                             File
                           </Button>
                         )}
+                      {!this.localStreamToPublish &&
+                        !sharer &&
+                        !this.playingVBrowser() && (
+                          <Button
+                            className={styles.shareButton}
+                            color="violet"
+                            disabled={!this.haveLock()}
+                            onClick={this.startLocalCopyShare}
+                            leftSection={<IconFiles />}
+                          >
+                            Local copy
+                          </Button>
+                        )}
                       {false && (
                         <SearchComponent
                           setMedia={this.roomSetMedia}
@@ -3045,6 +3211,31 @@ export class App extends React.Component<AppProps, AppState> {
                           >
                             Unmute
                           </Button>
+                        </Overlay>
+                      )}
+                    {this.state.localCopyNeeded &&
+                      isLocalCopy(this.state.roomMedia) && (
+                        <Overlay className={styles.flexCenter}>
+                          <Alert
+                            color="violet"
+                            title="Local copy"
+                            style={glassCardStyle}
+                          >
+                            <div>
+                              Open your own copy of{" "}
+                              {parseLocalCopy(this.state.roomMedia)?.name}.
+                              Everyone plays their own file — only play, pause,
+                              and seek are synced.
+                            </div>
+                            <Button
+                              mt="sm"
+                              color="violet"
+                              onClick={this.openLocalCopy}
+                              leftSection={<IconFiles />}
+                            >
+                              Open your copy
+                            </Button>
+                          </Alert>
                         </Overlay>
                       )}
                     {(this.state.loading ||

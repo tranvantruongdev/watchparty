@@ -689,6 +689,17 @@ export class Room {
       );
       return;
     }
+    // localcopy:// is synthesized by our own client and carries only the file
+    // name, sharer id, and size (the contents never leave each viewer's
+    // device), so accept only that exact shape
+    if (
+      data?.startsWith("localcopy://") &&
+      !/^localcopy:\/\/[^@?\s]{1,1500}@[^\s?@]{1,100}\?size=\d{1,15}$/.test(
+        data,
+      )
+    ) {
+      return;
+    }
     redisCount("urlStarts");
     if (config.STREAM_PATH && data?.startsWith(config.STREAM_PATH)) {
       redisCount("streamStarts");

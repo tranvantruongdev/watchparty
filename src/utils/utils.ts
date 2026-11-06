@@ -147,6 +147,30 @@ export const isFileShare = (input: string) => {
   return input.startsWith("fileshare://");
 };
 
+export const isLocalCopy = (input: string) => {
+  return input.startsWith("localcopy://");
+};
+
+// Parses localcopy://<encoded name>@<sharer id>?size=<bytes> — the pseudo URL
+// for "local copy" mode. Only the name, sharer, and size travel; the contents
+// never leave each viewer's device
+export const parseLocalCopy = (input: string) => {
+  if (!isLocalCopy(input)) {
+    return null;
+  }
+  const body = input.slice("localcopy://".length);
+  const at = body.indexOf("@");
+  const query = at >= 0 ? body.indexOf("?", at) : -1;
+  if (at < 1 || query < 0) {
+    return null;
+  }
+  return {
+    name: decodeURIComponent(body.slice(0, at)),
+    id: body.slice(at + 1, query),
+    size: Number(new URLSearchParams(body.slice(query + 1)).get("size")),
+  };
+};
+
 export const isVBrowser = (input: string) => {
   return input.startsWith("vbrowser://");
 };
