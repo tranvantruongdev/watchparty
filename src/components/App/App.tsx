@@ -330,6 +330,7 @@ export class App extends React.Component<AppProps, AppState> {
   // embedding): YouTube shows its own message, so don't cover it with Unmute
   ytUnplayable = false;
   playbackCheckTimer: number | undefined = undefined;
+  ytPostSeekTimer: number | undefined = undefined;
   // What leftVideo was playing before a file share attempt cleared it, so a
   // rejected share can put it back (nothing else re-attaches it). roomMedia is
   // the room media at snapshot time: the restore only applies if it's still
@@ -394,6 +395,7 @@ export class App extends React.Component<AppProps, AppState> {
     document.removeEventListener("keydown", this.onKeydown);
     window.clearInterval(this.heartbeat);
     window.clearTimeout(this.playbackCheckTimer);
+    window.clearTimeout(this.ytPostSeekTimer);
   }
 
   init = async () => {
@@ -1207,6 +1209,8 @@ export class App extends React.Component<AppProps, AppState> {
             }
             if (
               this.ytDebounce &&
+              // Solo: pausing or playing our own player isn't a room action
+              !this.state.exploring &&
               ((e.data === window.YT?.PlayerState?.PLAYING &&
                 this.state.roomPaused) ||
                 (e.data === window.YT?.PlayerState?.PAUSED &&
@@ -2232,7 +2236,41 @@ export class App extends React.Component<AppProps, AppState> {
     if (target >= 0 && target < Infinity) {
       console.log("syncing self to leader or custom:", target);
       this.Player().seekVideo(target);
+      this.ensureYtPlaysAfterSeek();
     }
+  };
+
+  // seekTo() keeps whatever state the YouTube player is in: a seek that lands
+  // while it is CUED (autoplay was swallowed) only re-cues, and the iframe API
+  // can leave a seek paused or stuck in BUFFERING. The room keeps playing, so
+  // no REC:play will arrive, and checkPlaybackStarted is only armed after
+  // localPlay — nothing would ever re-issue playVideo() and this viewer would
+  // sit frozen while everyone else advances. Check shortly after any seek
+  // (the state needs a moment to settle) and nudge it back into playing.
+  ensureYtPlaysAfterSeek = () => {
+    if (!this.usingYoutube() || this.state.roomPaused || this.state.exploring) {
+      return;
+    }
+    window.clearTimeout(this.ytPostSeekTimer);
+    this.ytPostSeekTimer = window.setTimeout(() => {
+      if (this.state.roomPaused || this.state.exploring) {
+        return;
+      }
+      const state = this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState();
+      // PLAYING is fine; ENDED must not be restarted; no player yet, nothing
+      // to nudge. BUFFERING gets the call too — playVideo() is a no-op while
+      // legitimately buffering, and the kick for a seek wedged in it.
+      if (
+        state === undefined ||
+        state === window.YT?.PlayerState?.PLAYING ||
+        state === window.YT?.PlayerState?.ENDED
+      ) {
+        return;
+      }
+      console.log("yt not playing after seek, nudging play:", state);
+      this.Player().playVideo();
+      this.checkPlaybackStarted();
+    }, 1200);
   };
 
   localPlay = async () => {
@@ -2434,6 +2472,7 @@ export class App extends React.Component<AppProps, AppState> {
     if (this.state.exploring) {
       return;
     }
+    this.ensureYtPlaysAfterSeek();
     const toSend = this.getRoomTSToSet(target);
     this.socket.emit("CMD:seek", toSend);
   };
@@ -2780,7 +2819,12 @@ export class App extends React.Component<AppProps, AppState> {
       <Controls
         key={this.state.controlsTimestamp}
         video={this.state.roomMedia}
-        paused={this.state.roomPaused}
+        paused={
+          // Solo: the button shows our own player, not the room
+          this.state.exploring
+            ? this.Player().shouldPlay()
+            : this.state.roomPaused
+        }
         roomPlaybackRate={this.state.roomPlaybackRate}
         isLiveStream={this.state.isLiveStream}
         muted={this.Player().isMuted()}

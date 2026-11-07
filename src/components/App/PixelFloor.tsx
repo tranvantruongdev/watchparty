@@ -71,6 +71,7 @@ export class PixelFloor extends React.Component<{
     window.removeEventListener("blur", this.clearKeys);
     this.props.socket?.off("REC:move", this.onRemoteMove);
     this.props.socket?.off("connect", this.resend);
+    this.props.socket?.off("REC:together", this.onTogether);
     cancelAnimationFrame(this.raf);
   }
 
@@ -79,13 +80,21 @@ export class PixelFloor extends React.Component<{
     if (prev.socket !== this.props.socket) {
       prev.socket?.off("REC:move", this.onRemoteMove);
       prev.socket?.off("connect", this.resend);
+      prev.socket?.off("REC:together", this.onTogether);
       this.props.socket?.on("REC:move", this.onRemoteMove);
+      this.props.socket?.on("REC:together", this.onTogether);
       // The server forgets positions on disconnect: re-announce on reconnect
       this.props.socket?.on("connect", this.resend);
       this.send(true);
     }
     this.syncRoster();
   }
+
+  // Seconds this room has played with 2+ people in it (server counts)
+  together = 0;
+  onTogether = (seconds: number) => {
+    this.together = seconds;
+  };
 
   // The roster carries everyone's last position, so late joiners see where
   // people already are
@@ -288,6 +297,17 @@ export class PixelFloor extends React.Component<{
     if (this.props.lightsDown) {
       ctx.fillStyle = "rgba(5, 3, 12, 0.35)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    if (this.together >= 60) {
+      const m = Math.floor(this.together / 60);
+      ctx.font = `bold ${Math.max(10, u * 2.5)}px monospace`;
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#c9a24a";
+      ctx.fillText(
+        `♥ together ${m >= 60 ? Math.floor(m / 60) + "h " : ""}${m % 60}m`,
+        u,
+        u * 3,
+      );
     }
   };
 

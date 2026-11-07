@@ -53,6 +53,9 @@ export class Room {
   public subtitle = "";
   public playbackRate = 1;
   public paused = false;
+  // Watched-together time shown on the pixel floor; in memory only, so it
+  // resets when the server restarts (rooms aren't saved without a database)
+  private togetherSeconds = 0;
   public loop = false;
   private chat: ChatMessage[] = [];
   private nameMap: StringDict = {};
@@ -123,6 +126,11 @@ export class Room {
       if (this.video) {
         this.lastTsMap = Date.now();
         io.of(roomId).emit("REC:tsMap", this.tsMap);
+        // Seconds of playback with at least two people in the room
+        if (!this.paused && this.roster.length >= 2) {
+          this.togetherSeconds += 1;
+        }
+        io.of(roomId).emit("REC:together", this.togetherSeconds);
       }
     }, 1000);
 
