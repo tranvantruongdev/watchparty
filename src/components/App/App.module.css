@@ -787,3 +787,26 @@
   font-size: 13px;
   color: rgba(230, 220, 255, 0.9);
 }
+
+/* Sleep timer's "still watching?" card is clickable (answer button),
+   unlike the BRB card which sits over a paused screen */
+.sleepCardInteractive {
+  pointer-events: auto;
+}
+
+/* One minute to answer before the room pauses for the night */
+.sleepBar {
+  margin-top: 12px;
+  height: 8px;
+  background: #e0a63c;
+  animation: sleepBarRun 60s linear forwards;
+}
+
+@keyframes sleepBarRun {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}

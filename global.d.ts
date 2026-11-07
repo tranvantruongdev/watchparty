@@ -97,6 +97,15 @@ interface RoomIntermission {
   until: number | null;
 }
 
+interface RoomSleepTimer {
+  // clientId of whoever set the timer
+  by: string;
+  // epoch ms of the deadline (the room then asks "still watching?")
+  at: number;
+  // true while the room waits for someone to answer the check
+  asking: boolean;
+}
+
 interface PersistentRoom {
   roomId: string;
   password: string;

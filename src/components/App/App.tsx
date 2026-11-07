@@ -147,6 +147,7 @@ interface AppState {
   roomPaused: boolean;
   roomLoop: boolean;
   roomIntermission: RoomIntermission | null;
+  roomSleepTimer: RoomSleepTimer | null;
   participants: User[];
   rosterUpdateTS: Number;
   chat: ChatMessage[];
@@ -239,6 +240,7 @@ export class App extends React.Component<AppProps, AppState> {
     roomSubtitle: "",
     roomLoop: false,
     roomIntermission: null,
+    roomSleepTimer: null,
     participants: [],
     rosterUpdateTS: Date.now(),
     chat: [],
@@ -537,6 +539,9 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:intermission", (data: RoomIntermission | null) => {
       this.setState({ roomIntermission: data });
+    });
+    socket.on("REC:sleep", (data: RoomSleepTimer | null) => {
+      this.setState({ roomSleepTimer: data });
     });
     socket.on("REC:changeController", (data: string) => {
       this.setState({ controller: data });
@@ -3408,6 +3413,35 @@ export class App extends React.Component<AppProps, AppState> {
                                 })}`
                               : "Back whenever"}
                           </div>
+                        </div>
+                      </div>
+                    )}
+                    {this.state.roomSleepTimer?.asking && (
+                      <div className={styles.intermissionOverlay}>
+                        <div
+                          className={
+                            styles.intermissionCard +
+                            " " +
+                            styles.sleepCardInteractive
+                          }
+                        >
+                          <div className={styles.intermissionTitle}>
+                            😴 Still watching?
+                          </div>
+                          <div className={styles.intermissionLine}>
+                            {(this.state.nameMap[
+                              this.state.roomSleepTimer.by
+                            ] ?? "Someone") +
+                              " set a sleep timer that just ran out"}
+                          </div>
+                          <div className={styles.sleepBar} />
+                          <Button
+                            color="violet"
+                            style={{ marginTop: 12 }}
+                            onClick={() => this.socket.emit("CMD:sleep", 0)}
+                          >
+                            Yes — keep watching
+                          </Button>
                         </div>
                       </div>
                     )}

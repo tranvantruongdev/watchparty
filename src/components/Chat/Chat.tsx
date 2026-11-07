@@ -196,6 +196,23 @@ export class Chat extends React.Component<ChatProps> {
       this.props.onSeekCommand?.({ kind: "flashback" });
       return;
     }
+    // "/sleep 45" arms the room sleep timer (paused for the night when
+    // nobody answers the still-watching check), "/sleep off" cancels it or
+    // answers the check. The server validates the range and lock-gates
+    // scheduling; bad usage shows the local hint instead of becoming chat.
+    // The trailing space keeps "/sleepless" and friends as normal chat
+    if (/^\/sleep(?:\s.*)?$/.test(this.state.chatMsg)) {
+      const arg = this.state.chatMsg.slice(6).trim();
+      const minutes =
+        arg === "off" ? 0 : /^\d{1,3}$/.test(arg) ? Number(arg) : -1;
+      this.setState({ chatMsg: "", replyTo: undefined });
+      if (minutes >= 0 && minutes <= 240) {
+        this.props.socket.emit("CMD:sleep", minutes);
+      } else {
+        this.props.onSeekCommand?.({ kind: "help" });
+      }
+      return;
+    }
     const seekCmd = parseSeekCommand(this.state.chatMsg);
     if (seekCmd && this.props.onSeekCommand) {
       this.setState({ chatMsg: "", replyTo: undefined });
@@ -279,6 +296,12 @@ export class Chat extends React.Component<ChatProps> {
       return `is stuck buffering — paused for you at ${formatTimestamp(msg)}`;
     } else if (cmd === "intermission") {
       return `called an intermission${msg && msg !== "0" ? ` (${msg} min)` : ""}`;
+    } else if (cmd === "sleep") {
+      return msg === "0"
+        ? "cancelled the sleep timer"
+        : `set a sleep timer (${msg} min)`;
+    } else if (cmd === "sleepFire") {
+      return `had a sleep timer go off — paused for the night at ${formatTimestamp(msg)}`;
     } else if (cmd === "playbackRate") {
       return `set the playback rate to ${msg === "0" ? "auto" : `${msg}x`}`;
     } else if (cmd === "lock") {
@@ -303,7 +326,7 @@ export class Chat extends React.Component<ChatProps> {
       );
     } else if (cmd === "help") {
       // Local-only /help: the message never reaches the server
-      return "Seek: /30, /-10, /12:30, /1:02:03, /1h9m54, /-1h9m54, /fb · Emotes: keys 1-6 on the floor";
+      return "Seek: /30, /-10, /12:30, /1:02:03, /1h9m54, /-1h9m54, /fb · Emotes: keys 1-6 on the floor · Sleep: /sleep 45 | off";
     }
     return cmd;
   };

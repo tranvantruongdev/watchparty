@@ -96,6 +96,12 @@ export class Room {
   public intermission: { by: string; until: number | null } | null = null;
   // clientId -> timestamps of accepted intermission changes in the last second
   private intermissionTimes: { [clientId: string]: number[] } = {};
+  // Sleep timer: pauses the room for the night if nobody answers the
+  // "still watching?" check within a minute of the deadline. In-memory
+  // only, like intermission
+  public sleepTimer: { by: string; at: number; asking: boolean } | null = null;
+  // clientId -> timestamps of accepted sleep-timer changes in the last second
+  private sleepTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
@@ -129,6 +135,45 @@ export class Room {
 
     this.tsInterval = setInterval(async () => {
       // console.log(roomId, this.video, this.roster, this.tsMap, this.nameMap);
+      // Sleep timer: at the deadline, ask "still watching?" for one minute;
+      // no answer means everyone dozed off, so pause for the night
+      if (
+        this.sleepTimer &&
+        !this.sleepTimer.asking &&
+        Date.now() >= this.sleepTimer.at
+      ) {
+        if (this.paused) {
+          // Already stopped: nothing to pause, the one-shot timer just ends
+          this.sleepTimer = null;
+          this.io.of(this.roomId).emit("REC:sleep", null);
+        } else {
+          this.sleepTimer.asking = true;
+          this.io.of(this.roomId).emit("REC:sleep", this.sleepTimer);
+        }
+      }
+      if (
+        this.sleepTimer &&
+        this.sleepTimer.asking &&
+        Date.now() >= this.sleepTimer.at + 60000
+      ) {
+        const by = this.sleepTimer.by;
+        this.sleepTimer = null;
+        this.io.of(this.roomId).emit("REC:sleep", null);
+        this.paused = true;
+        // The room pause means nobody is falling behind; drop any pending one
+        this.clearBufferPause();
+        this.io.of(this.roomId).emit("REC:pause");
+        // REC:pause unstalls every player, so stale stuck claims must not
+        // re-pause the room after someone wakes up and presses play (same
+        // consumption as the buffer auto-pause below)
+        this.bufferingMap = {};
+        this.io.of(this.roomId).emit("roster", this.getRosterForApp());
+        this.addChatMessage(null, {
+          id: by,
+          cmd: "sleepFire",
+          msg: Math.round(this.videoTS).toString(),
+        });
+      }
       // Clean up the data of users who aren't in the room anymore
       const memberIds = this.roster.map((p) => p.id);
       Object.keys(this.tsMap).forEach((key) => {
@@ -293,6 +338,7 @@ export class Room {
       socket.emit("REC:tsMap", this.tsMap);
       socket.emit("REC:lock", this.lock);
       socket.emit("REC:intermission", this.intermission);
+      socket.emit("REC:sleep", this.sleepTimer);
       socket.emit("chatinit", this.chat);
       socket.emit("playlist", this.playlist);
       this.getRoomState(socket);
@@ -392,6 +438,12 @@ export class Room {
       on(
         "CMD:intermission",
         (data: unknown) => validateLock() && this.setIntermission(socket, data),
+      );
+      // Scheduling the sleep timer pauses the room later, so that needs the
+      // lock like CMD:pause; answering the check / cancelling it (0) is open
+      // to everyone because it only prevents a pause
+      on("CMD:sleep", (data: unknown) =>
+        this.setSleepTimer(socket, data, validateLock()),
       );
       on("CMD:joinVideo", () => this.joinVideo(socket));
       on("CMD:leaveVideo", () => this.leaveVideo(socket));
@@ -1208,6 +1260,51 @@ export class Room {
     });
   };
 
+  // Sleep timer: at the deadline the tick asks "still watching?" for one
+  // minute, and nobody answering pauses the room for the night. minutes
+  // 1..240 schedules (lock-gated, see the registration), 0 cancels or
+  // answers the check. Capped at 2/s per socket like intermission. The
+  // deadline survives media changes and resumes on purpose — only an
+  // explicit cancel or a new timer ends it, so falling asleep mid-episode
+  // still stops the room
+  private setSleepTimer = (socket: Socket, raw: unknown, hasLock: boolean) => {
+    if (
+      typeof raw !== "number" ||
+      !Number.isInteger(raw) ||
+      raw < 0 ||
+      raw > 240
+    ) {
+      return;
+    }
+    if (raw > 0 && !hasLock) {
+      return;
+    }
+    // Cancelling when nothing is scheduled: nothing to announce
+    if (raw === 0 && !this.sleepTimer) {
+      return;
+    }
+    const now = Date.now();
+    const times = (this.sleepTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 2) {
+      return;
+    }
+    times.push(now);
+    this.sleepTimes[socket.clientId] = times;
+    this.sleepTimer =
+      raw === 0
+        ? null
+        : { by: socket.clientId, at: now + raw * 60000, asking: false };
+    // Like intermission, relayed to everyone including the sender
+    this.io.of(this.roomId).emit("REC:sleep", this.sleepTimer);
+    this.addChatMessage(socket, {
+      id: socket.clientId,
+      cmd: "sleep",
+      msg: raw.toString(),
+    });
+  };
+
   private setBuffering = (socket: Socket, data: unknown) => {
     // Accept only booleans; ignore no-op updates so the roster isn't re-emitted
     if (typeof data !== "boolean") {
@@ -1844,6 +1941,7 @@ export class Room {
       delete this.floatReactionTimes[clientId];
       delete this.emoteTimes[clientId];
       delete this.intermissionTimes[clientId];
+      delete this.sleepTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];
     }
