@@ -47,7 +47,7 @@ import { VBrowserModal } from "../Modal/VBrowserModal";
 import { SettingsModal } from "../Settings/SettingsModal";
 import { ErrorModal } from "../Modal/ErrorModal";
 import { PasswordModal } from "../Modal/PasswordModal";
-import { ScreenShareModal } from "../Modal/ScreenShareModal";
+import { ScreenShareModal, getShareMbps } from "../Modal/ScreenShareModal";
 import { FileShareModal } from "../Modal/FileShareModal";
 import {
   ClientTranscoder,
@@ -2094,9 +2094,9 @@ export class App extends React.Component<AppProps, AppState> {
       if (sharer?.id === selfId && this.mediasoupPubSocket == null) {
         await this.publishMediasoup(mediasoupURL);
       }
-      // If we're not sharing a file, also start watching
+      // Viewers watch; the sharer doesn't play its own share back
       // avoid duplicate watching if the socket already exists
-      if (!this.isLocalStreamAFile && this.mediasoupSubSocket == null) {
+      if (!this.localStreamToPublish && this.mediasoupSubSocket == null) {
         await this.subscribeMediasoup(mediasoupURL);
       }
       return;
@@ -2116,8 +2116,9 @@ export class App extends React.Component<AppProps, AppState> {
 
       this.state.participants.forEach((user) => {
         const id = user.id;
-        if (id === selfId && this.isLocalStreamAFile) {
-          // Don't set up a connection to ourselves if sharing file
+        if (id === selfId) {
+          // No connection to ourselves: playing our own share back costs a
+          // second encode and upload bandwidth for nothing
           return;
         }
         if (!this.publisherConns[id]) {
@@ -2132,9 +2133,9 @@ export class App extends React.Component<AppProps, AppState> {
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
               const tr = pc.addTransceiver(track, {
                 streams: [this.localStreamToPublish],
-                // 8 Mbps was reached on busy movie scenes; the browser still
-                // sends less when the link can't carry it
-                sendEncodings: [{ maxBitrate: 16_000_000 }],
+                // Quality picked in the share dialog (4/8/16 Mbps); the browser
+                // still sends less when the link can't carry it
+                sendEncodings: [{ maxBitrate: getShareMbps() * 1_000_000 }],
               });
               // Prefer VP9: on a moving picture VP8 hits the cap and drops
               // 1080p to 480x270, VP9 keeps 1080p30 at the same bitrate
@@ -2165,10 +2166,8 @@ export class App extends React.Component<AppProps, AppState> {
         }
       });
     }
-    // We're a watcher, establish connection to sharer
-    // If screensharing, sharer also does this
-    // If filesharing, sharer does not do this since we use leftVideo
-    if (sharer && !this.consumerConn && !this.isLocalStreamAFile) {
+    // We're a watcher, establish connection to sharer (not the sharer itself)
+    if (sharer && !this.consumerConn && !this.localStreamToPublish) {
       const pc = new RTCPeerConnection({ iceServers: iceServers() });
       this.consumerConn = pc;
       window.clearInterval(this.shareStatsTimer);
@@ -3515,6 +3514,11 @@ export class App extends React.Component<AppProps, AppState> {
                         <div
                           className={styles.curtain + " " + styles.curtainRight}
                         />
+                      </div>
+                    )}
+                    {this.isSharingScreen() && (
+                      <div className={styles.shareStats}>
+                        You're sharing your screen ({getShareMbps()} Mbps max)
                       </div>
                     )}
                     {this.state.shareStats && (

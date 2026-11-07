@@ -1,7 +1,18 @@
-import React, { useContext } from "react";
-import { Modal, Button, Table } from "@mantine/core";
+import React, { useContext, useState } from "react";
+import { Modal, Button, Table, SegmentedControl } from "@mantine/core";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { MetadataContext } from "../../MetadataContext";
+
+// Max bitrate of a direct share, per viewer. 16 can fill a home upload link
+// and lag the sharer's own network, so the sharer picks it
+const SHARE_MBPS = ["4", "8", "16"];
+export const getShareMbps = () => {
+  let v: string | null = null;
+  try {
+    v = window.localStorage.getItem("watchparty-share-mbps");
+  } catch {}
+  return Number(v && SHARE_MBPS.includes(v) ? v : "8");
+};
 
 export const ScreenShareModal = ({
   closeModal,
@@ -12,6 +23,7 @@ export const ScreenShareModal = ({
 }) => {
   const { isSubscriber } = useContext(MetadataContext);
   const subscribeButton = <SubscribeButton />;
+  const [mbps, setMbps] = useState(String(getShareMbps()));
   return (
     <Modal
       opened={true}
@@ -28,6 +40,23 @@ export const ScreenShareModal = ({
           tab, not an application.
         </li>
       </ul>
+      <div>
+        Quality (max upload per viewer):{" "}
+        <SegmentedControl
+          value={mbps}
+          onChange={(v) => {
+            setMbps(v);
+            try {
+              window.localStorage.setItem("watchparty-share-mbps", v);
+            } catch {}
+          }}
+          data={[
+            { value: "4", label: "Low 4 Mbps" },
+            { value: "8", label: "Medium 8 Mbps" },
+            { value: "16", label: "High 16 Mbps" },
+          ]}
+        />
+      </div>
       <Table striped>
         <Table.Thead>
           <Table.Tr>
