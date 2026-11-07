@@ -7,8 +7,7 @@ import {
   PasswordInput,
   Divider,
 } from "@mantine/core";
-import firebase from "firebase/compat/app";
-import "firebase/compat/auth";
+import { getFirebase } from "../../firebaseLazy";
 import {
   IconBrandFacebookFilled,
   IconBrandGoogleFilled,
@@ -28,6 +27,7 @@ export class LoginModal extends React.Component<{
 
   emailSignIn = async (email: string, password: string) => {
     try {
+      const firebase = await getFirebase();
       await firebase.auth().signInWithEmailAndPassword(email, password);
 
       this.props.closeModal();
@@ -45,11 +45,13 @@ export class LoginModal extends React.Component<{
   // };
 
   facebookSignIn = async () => {
+    const firebase = await getFirebase();
     const provider = new firebase.auth.FacebookAuthProvider();
     await firebase.auth().signInWithPopup(provider);
   };
 
   googleSignIn = async () => {
+    const firebase = await getFirebase();
     const provider = new firebase.auth.GoogleAuthProvider();
     await firebase.auth().signInWithPopup(provider);
   };
@@ -163,6 +165,7 @@ export class CreateModal extends React.Component<{
 
   createAccount = async (email: string, password: string) => {
     try {
+      const firebase = await getFirebase();
       await firebase.auth().createUserWithEmailAndPassword(email, password);
     } catch (e: any) {
       // handle exceptions
@@ -218,6 +221,7 @@ export class ResetModal extends React.Component<{
 
   resetPassword = async () => {
     try {
+      const firebase = await getFirebase();
       await firebase.auth().sendPasswordResetEmail(this.state.email);
       this.props.closeModal();
     } catch (e: any) {

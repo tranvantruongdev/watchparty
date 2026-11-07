@@ -58,13 +58,14 @@ import {
   isClientTranscodeSupported,
   type AudioTrackInfo,
 } from "../../utils/clientTranscode";
-import firebase from "firebase/compat/app";
+import type firebase from "firebase/compat/app";
 import { SubtitleModal } from "../Modal/SubtitleModal";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
 import { PixelFloor } from "./PixelFloor";
 import styles from "./App.module.css";
 import config from "../../config";
+import { getFirebase } from "../../firebaseLazy";
 import { MetadataContext } from "../../MetadataContext";
 import ChatVideoCard from "../ChatVideoCard/ChatVideoCard";
 import {
@@ -401,6 +402,12 @@ export class App extends React.Component<AppProps, AppState> {
 
   chatRef = React.createRef<Chat>();
   videoChatRef = React.createRef<VideoChat>();
+  // Per-second position reports, kept out of state: storing them in state
+  // re-rendered the whole tree twice a second while a video plays. Sync logic
+  // reads this field; state.tsMap is only refreshed for the ts badges while
+  // the people column is open, and Controls polls the player itself (pollLive)
+  // because its position display is computed at render time.
+  tsMapData: NumberDict = {};
 
   async componentDidMount() {
     document.onfullscreenchange = this.onFullScreenChange;
@@ -420,10 +427,14 @@ export class App extends React.Component<AppProps, AppState> {
     this.loadYouTube();
     this.init();
     if (config.VITE_FIREBASE_CONFIG) {
-      firebase.auth().onAuthStateChanged(async (user: firebase.User | null) => {
-        if (user) {
-          this.loadSignInData(user);
-        }
+      // The auth SDK loads lazily (firebaseLazy): a signed-out viewer,
+      // and this page's first paint, never wait for it
+      getFirebase().then((fb) => {
+        fb.auth().onAuthStateChanged(async (user: firebase.User | null) => {
+          if (user) {
+            this.loadSignInData(user);
+          }
+        });
       });
     }
   }
@@ -1061,7 +1072,8 @@ export class App extends React.Component<AppProps, AppState> {
       }, 2500);
     });
     socket.on("REC:tsMap", (data: NumberDict) => {
-      this.setState({ tsMap: data }, () => {
+      this.tsMapData = data;
+      const onTick = () => {
         // Dynamic playback rate based on timestamps
         // Disable for sharing types where the users can have different timestamps
         // e.g. screenshare, fileshare, .m3u8 HLS streams
@@ -1091,11 +1103,19 @@ export class App extends React.Component<AppProps, AppState> {
           const sharer = this.state.participants.find((p) => p.isScreenShare);
           if (sharer && sharer.id !== clientId) {
             // Sync only if someone is sharing and it's not us
-            const sharerTime = this.state.tsMap[sharer.id];
+            const sharerTime = this.tsMapData[sharer.id];
             this.Player().syncSubtitles(sharerTime);
           }
         }
-      });
+      };
+      // Only the ts badges in the people column display these, and they only
+      // change every second while it is visible — don't re-render the whole
+      // tree for them otherwise
+      if (this.state.showPeopleColumn) {
+        this.setState({ tsMap: data }, onTick);
+      } else {
+        onTick();
+      }
     });
     socket.on("REC:nameMap", (data: StringDict) => {
       this.setState({ nameMap: data });
@@ -2557,7 +2577,7 @@ export class App extends React.Component<AppProps, AppState> {
     }
     this.setState({ exploring: false }, () => {
       // Our own last report in tsMap is from before going solo: leave it out
-      const others = Object.entries(this.state.tsMap)
+      const others = Object.entries(this.tsMapData)
         .filter(([id]) => id !== clientId)
         .map(([, ts]) => ts);
       if (others.length) {
@@ -2979,7 +2999,7 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   getLeaderTime = () => {
-    const values = Object.values(this.state.tsMap);
+    const values = Object.values(this.tsMapData);
     if (values.length === 0) {
       // Nobody has reported a position yet, so there is nothing to sync to
       // (localSeek skips it, same as the 2-person Math.max() empty case)
@@ -3101,6 +3121,11 @@ export class App extends React.Component<AppProps, AppState> {
         volume={this.Player().getVolume()}
         subtitled={this.Player().isSubtitled()}
         currentTime={this.Player().getCurrentTime()}
+        pollLive={() => ({
+          time: this.Player().getCurrentTime(),
+          leader: this.hasDuration() ? this.getLeaderTime() : undefined,
+          timeRanges: this.Player().getTimeRanges(),
+        })}
         duration={this.getDuration()}
         disabled={!this.haveLock() && !this.state.exploring}
         exploring={this.state.exploring}
@@ -4087,6 +4112,9 @@ export class App extends React.Component<AppProps, AppState> {
                   onClick={() =>
                     this.setState({
                       showPeopleColumn: !this.state.showPeopleColumn,
+                      // While the column was closed the per-second badge
+                      // updates were skipped: catch up from the field
+                      tsMap: this.tsMapData,
                     })
                   }
                   fullWidth

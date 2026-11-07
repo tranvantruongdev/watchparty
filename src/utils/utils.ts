@@ -1,7 +1,7 @@
 //@ts-expect-error
 import canAutoplay from "can-autoplay";
 import { MD5 } from "./md5";
-import firebase from "firebase/compat/app";
+import type firebase from "firebase/compat/app";
 import config from "../config";
 import { cyrb53 } from "./hash";
 import React from "react";

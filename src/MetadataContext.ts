@@ -1,4 +1,4 @@
-import firebase from "firebase/compat/app";
+import type firebase from "firebase/compat/app";
 import React from "react";
 
 export const DEFAULT_STATE = {

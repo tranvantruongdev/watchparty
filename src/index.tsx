@@ -10,12 +10,12 @@ import { Home } from "./components/Home/Home";
 import { Privacy, Terms, FAQ } from "./components/Pages/Pages";
 import { TopBar } from "./components/TopBar/TopBar";
 import { Footer } from "./components/Footer/Footer";
-import firebase from "firebase/compat/app";
-import "firebase/auth";
+import type firebase from "firebase/compat/app";
 import { getRoomKey, serverPath, softWhite } from "./utils/utils";
 import { Create } from "./components/Create/Create";
 import { Discord } from "./components/Discord/Discord";
 import config from "./config";
+import { getFirebase } from "./firebaseLazy";
 import { DEFAULT_STATE, MetadataContext } from "./MetadataContext";
 import { createTheme, MantineProvider } from "@mantine/core";
 
@@ -34,9 +34,8 @@ const theme = createTheme({
 const Debug = lazy(() => import("./components/Debug/Debug"));
 
 const firebaseConfig = config.VITE_FIREBASE_CONFIG;
-if (firebaseConfig) {
-  firebase.initializeApp(JSON.parse(firebaseConfig));
-}
+// initializeApp happens inside getFirebase (firebaseLazy), which is also what
+// keeps the auth SDK out of the eager bundle until first auth use
 
 // Store a ?key= room key before anything reads or drops the URL (this runs on
 // every route: the landing page /?key=X must remember the key too, and the
@@ -59,7 +58,8 @@ class WatchParty extends React.Component {
   public state = DEFAULT_STATE;
   async componentDidMount() {
     if (firebaseConfig) {
-      firebase.auth().onAuthStateChanged(async (user: firebase.User | null) => {
+      const app = await getFirebase();
+      app.auth().onAuthStateChanged(async (user: firebase.User | null) => {
         if (user) {
           // console.log(user);
           this.setState({ user });

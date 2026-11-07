@@ -1,7 +1,6 @@
 import React from "react";
 import { Modal, Button, Avatar, HoverCard, Text } from "@mantine/core";
-import firebase from "firebase/compat/app";
-import "firebase/compat/auth";
+import { getFirebase } from "../../firebaseLazy";
 import { serverPath } from "../../utils/utils";
 import { ManageSubButton } from "../SubscribeButton/SubscribeButton";
 import config from "../../config";
@@ -45,14 +44,19 @@ export class ProfileModal extends React.Component<{
   }
 
   onSignOut = () => {
-    firebase.auth().signOut();
-    window.localStorage.removeItem("watchparty-loginname");
-    window.location.reload();
+    // Sign out before reloading: the auth SDK loads lazily, so a reload in
+    // the same tick would beat the dynamic import and keep the session
+    getFirebase().then((fb) => {
+      fb.auth().signOut();
+      window.localStorage.removeItem("watchparty-loginname");
+      window.location.reload();
+    });
   };
 
   resetPassword = async () => {
     try {
       if (this.context.user?.email) {
+        const firebase = await getFirebase();
         await firebase.auth().sendPasswordResetEmail(this.context.user.email);
         this.setState({ resetDisabled: true });
       }

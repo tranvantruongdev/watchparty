@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Menu, Progress, Slider } from "@mantine/core";
 import { formatTimestamp, softWhite } from "../../utils/utils";
 import styles from "./Controls.module.css";
@@ -54,6 +54,15 @@ interface ControlsProps {
   localSetSubtitleMode: (mode: TextTrackMode, lang?: string) => void;
   roomPlaylistPlay: (index: number) => void;
   playlist: PlaylistVideo[];
+  /** Live reads from the player. The parent no longer re-renders every second
+   *  (per-second position reports left its state), so while media is loaded
+   *  Controls ticks itself and polls these; the plain currentTime/leaderTime/
+   *  timeRanges props are the fallback (and used before the first tick) */
+  pollLive?: () => {
+    time: number;
+    leader?: number;
+    timeRanges: { start: number; end: number }[];
+  };
   /** Audio tracks of the file being converted on this device (only set when there's a choice to make) */
   audioTracks?: AudioTrackInfo[];
   audioTrackId?: number;
@@ -66,10 +75,22 @@ export const Controls = (props: ControlsProps) => {
     hoverPos: 0,
   });
   const [showTimestamp, setShowTimestamp] = useState(false);
+  // One tick per second while media is loaded: refreshes the position display,
+  // progress bar, Sync badge and buffered bar from pollLive without
+  // re-rendering the parent tree
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!props.video) {
+      return;
+    }
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [props.video]);
+  const live = props.pollLive?.();
   const getEnd = () => props.duration;
   const getStart = () => 0;
   const getLength = () => getEnd() - getStart();
-  const getCurrent = () => props.currentTime;
+  const getCurrent = () => live?.time ?? props.currentTime;
   const getPercent = () => (getCurrent() - getStart()) / getLength();
   // The wall clock time that media time 0 corresponds to, for live streams where the duration is the live edge.
   // Only computed once the duration is known: an infinite one (e.g. a DASH stream before it has a seekable range)
@@ -108,7 +129,6 @@ export const Controls = (props: ControlsProps) => {
     localToggleMute,
     localSubtitleModal,
     localSeek,
-    currentTime,
     leaderTime,
     isPauseDisabled,
     disabled,
@@ -125,12 +145,13 @@ export const Controls = (props: ControlsProps) => {
   } = props;
   // console.log(leaderTime, currentTime);
   const behindThreshold = 10;
+  const leader = live?.leader ?? leaderTime;
   const behindTime =
-    !isLiveStream && leaderTime && leaderTime < Infinity
-      ? leaderTime - currentTime
+    !isLiveStream && leader && leader < Infinity
+      ? leader - getCurrent()
       : getEnd() - getCurrent();
   const isBehind = behindTime > behindThreshold;
-  const buffers = timeRanges.map(({ start, end }) => {
+  const buffers = (live?.timeRanges ?? timeRanges).map(({ start, end }) => {
     const buffStartPct = (start / getLength()) * 100;
     const buffLengthPct = ((end - start) / getLength()) * 100;
     return (

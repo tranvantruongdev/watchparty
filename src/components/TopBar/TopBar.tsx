@@ -6,8 +6,7 @@ import {
   getRoomKey,
 } from "../../utils/utils";
 import { ActionIcon, Avatar, Button, Menu, Text } from "@mantine/core";
-import firebase from "firebase/compat/app";
-import "firebase/compat/auth";
+import type firebase from "firebase/compat/app";
 import { LoginModal } from "../Modal/LoginModal";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { ProfileModal } from "../Modal/ProfileModal";
