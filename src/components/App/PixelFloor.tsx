@@ -416,15 +416,22 @@ export class PixelFloor extends React.Component<{
       const tagX = (lean > 0 ? x + 6 : lean < 0 ? x + 1 : x + 3.5) * u;
       const tagW = ctx.measureText(name).width;
       const em = Math.max(10, u * 2.5);
+      // Keep the plate on the canvas: at the walls (the popcorn bucket spot
+      // sits at x=6) a long centered name would clip off the edge
+      const tagOff = lean > 0 ? tagW : lean < 0 ? 0 : tagW / 2;
+      const tagL = Math.max(
+        0,
+        Math.min(W * u - tagW - u * 0.8, tagX - tagOff - u * 0.4),
+      );
       ctx.fillStyle = "#241536";
       ctx.fillRect(
-        tagX - (lean > 0 ? tagW : lean < 0 ? 0 : tagW / 2) - u * 0.4,
+        tagL,
         (top - 1) * u - em, // alphabetic baseline: plate from ~1em above it
         tagW + u * 0.8,
         em * 1.25, // down to ~0.25em below it
       );
       ctx.fillStyle = id === clientId ? "#ffe08a" : "#e9e0ff";
-      ctx.fillText(name, tagX, (top - 1) * u);
+      ctx.fillText(name, tagL + tagOff + u * 0.4, (top - 1) * u);
     };
     // Back to front: lower on screen is closer to the viewer, and a seat row
     // hides the legs of whoever sits in it
