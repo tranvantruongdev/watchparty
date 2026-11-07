@@ -17,12 +17,14 @@ interface User {
   pos?: Position;
 }
 
-// A pixel character on the theater floor: x/y are 0..1 of the floor area
+// A pixel character on the theater floor: x/y are 0..1 of the floor area,
+// ch is the chosen preset id (server-validated allow-list)
 interface Position {
   x: number;
   y: number;
   dir: "l" | "r" | "u" | "d";
   sit: boolean;
+  ch?: string;
 }
 
 interface Reaction {

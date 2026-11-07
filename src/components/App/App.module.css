@@ -313,6 +313,46 @@
   }
 }
 
+/* Character picker under the pixel floor: one row button + a grid of preview
+   canvases drawn with the same painter as the floor (see PixelFloor.paintChar) */
+.charRow {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.charRow button {
+  min-height: 30px;
+  padding: 2px 12px;
+  font-size: 13px;
+  color: #e9e0ff;
+  background: rgba(24, 14, 46, 0.55);
+  border: 1px solid rgba(190, 150, 255, 0.2);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.charGrid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.charGrid button {
+  padding: 3px;
+  line-height: 0; /* the canvas fills the button */
+  background: rgba(24, 14, 46, 0.55);
+  border: 1px solid rgba(190, 150, 255, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.charGrid button.charPicked {
+  border-color: #ffe08a;
+}
+
 .seatRow {
   display: flex;
   flex-wrap: wrap;

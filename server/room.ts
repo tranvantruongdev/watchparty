@@ -41,6 +41,21 @@ const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 // anything else is dropped
 const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
 
+// The only character presets accepted on CMD:move (the ch field, drawn on the
+// theater floor); must mirror PixelFloor.tsx's CHARS ids
+const CHARS = [
+  "mai",
+  "trung",
+  "hoa",
+  "lan",
+  "nam",
+  "bi",
+  "tho",
+  "meo",
+  "cao",
+  "ma",
+];
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -1186,8 +1201,9 @@ export class Room {
   };
 
   // Pixel character walking on the theater floor: x/y are 0..1 of the floor,
-  // dir is the facing. Stored so late joiners get it via the roster, relayed
-  // to everyone else, capped at 20/s per socket (clients send ~10/s)
+  // dir is the facing, ch is the chosen character preset. Stored so late
+  // joiners get it via the roster, relayed to everyone else, capped at 20/s
+  // per socket (clients send ~10/s)
   private move = (socket: Socket, raw: unknown) => {
     const data = raw as Position;
     if (
@@ -1196,7 +1212,9 @@ export class Room {
       typeof data.y !== "number" ||
       !(data.x >= 0 && data.x <= 1 && data.y >= 0 && data.y <= 1) ||
       !["l", "r", "u", "d"].includes(data.dir as string) ||
-      typeof data.sit !== "boolean"
+      typeof data.sit !== "boolean" ||
+      typeof data.ch !== "string" ||
+      !CHARS.includes(data.ch)
     ) {
       return;
     }
@@ -1209,7 +1227,13 @@ export class Room {
     }
     times.push(now);
     this.moveTimes[socket.clientId] = times;
-    const pos = { x: data.x, y: data.y, dir: data.dir, sit: data.sit };
+    const pos = {
+      x: data.x,
+      y: data.y,
+      dir: data.dir,
+      sit: data.sit,
+      ch: data.ch,
+    };
     this.positionMap[socket.clientId] = pos;
     socket.broadcast.emit("REC:move", { id: socket.clientId, ...pos });
   };

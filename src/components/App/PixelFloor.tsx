@@ -1,6 +1,6 @@
 import React from "react";
 import type { Socket } from "socket.io-client";
-import { getColorForStringHex, getOrCreateClientId } from "../../utils/utils";
+import { getOrCreateClientId } from "../../utils/utils";
 import styles from "./App.module.css";
 
 const clientId = getOrCreateClientId();
@@ -18,8 +18,324 @@ const SEAT_XS = [
   ...Array.from({ length: 5 }, (_, i) => 8 + i * 7),
   ...Array.from({ length: 5 }, (_, i) => 54 + i * 7),
 ];
-const HAIR = ["#2b1a12", "#5a3720", "#c9a24a", "#1d1d2b"];
-const SKIN = "#f2c7a5";
+// Character presets: six anime-chibi people (big head, big eyes, hair styles)
+// plus four original creatures (round bunny, cat loaf, fox sprite, ghost
+// blob). Everything is drawn in code — no image files. The ids must mirror
+// the CHARS allow-list in server/room.ts
+type CharPreset = {
+  id: string;
+  name: string;
+  // people
+  skin?: string;
+  hair?: string;
+  hairShade?: string;
+  style?: "bob" | "twin" | "long" | "spiky" | "ponytail" | "ahoge";
+  shirt?: string;
+  shirtShade?: string;
+  // creatures
+  creature?: "tho" | "meo" | "cao" | "ma";
+  fur?: string;
+  furShade?: string;
+  belly?: string;
+};
+
+const CHARS: CharPreset[] = [
+  {
+    id: "mai",
+    name: "Mai — đuôi sam tím",
+    skin: "#ffd9c0",
+    hair: "#3a2a4a",
+    hairShade: "#241a33",
+    style: "twin",
+    shirt: "#ff7fa1",
+    shirtShade: "#d95d80",
+  },
+  {
+    id: "trung",
+    name: "Trung — tóc dựng",
+    skin: "#f2c7a5",
+    hair: "#5a3720",
+    hairShade: "#3d2514",
+    style: "spiky",
+    shirt: "#3fbfae",
+    shirtShade: "#2a9688",
+  },
+  {
+    id: "hoa",
+    name: "Hoa — tóc dài hồng",
+    skin: "#ffe3cd",
+    hair: "#e07a9a",
+    hairShade: "#b95d7c",
+    style: "long",
+    shirt: "#7c6cff",
+    shirtShade: "#5a4cd0",
+  },
+  {
+    id: "lan",
+    name: "Lan — tóc bob vàng",
+    skin: "#f2c7a5",
+    hair: "#c9a24a",
+    hairShade: "#a37e2e",
+    style: "bob",
+    shirt: "#2e4a8f",
+    shirtShade: "#203564",
+  },
+  {
+    id: "nam",
+    name: "Nam — đuôi ngựa",
+    skin: "#e8b48c",
+    hair: "#2f5d3a",
+    hairShade: "#1f4028",
+    style: "ponytail",
+    shirt: "#c9a24a",
+    shirtShade: "#9c7c2f",
+  },
+  {
+    id: "bi",
+    name: "Bi — bob bạc",
+    skin: "#ffd9c0",
+    hair: "#c8ccd8",
+    hairShade: "#9aa0b2",
+    style: "ahoge",
+    shirt: "#5a4cd0",
+    shirtShade: "#4338a8",
+  },
+  {
+    id: "tho",
+    name: "Thỏ bánh bao",
+    creature: "tho",
+    fur: "#f4f0ff",
+    furShade: "#cfc6ec",
+    belly: "#ff9ec4",
+  },
+  {
+    id: "meo",
+    name: "Mèo kem",
+    creature: "meo",
+    fur: "#f2d8a8",
+    furShade: "#d4b078",
+    belly: "#fff3e0",
+  },
+  {
+    id: "cao",
+    name: "Cáo lửa nhỏ",
+    creature: "cao",
+    fur: "#e8875a",
+    furShade: "#c2603a",
+    belly: "#fff3e0",
+  },
+  {
+    id: "ma",
+    name: "Ma mụp",
+    creature: "ma",
+    fur: "#cfc0f0",
+    furShade: "#a894d4",
+    belly: "#241a33",
+  },
+];
+
+const OUT = "#1b1428"; // silhouette rim
+const BLUSH = "#f2a0a8";
+const LEGS = "#2a2a3a";
+
+// Paint one character through a px(x, y, w, h, color) helper, inside the
+// 7x11 box whose top-left is (fx, fy) (feet on its bottom row). Chibi rules
+// taken from the research table: dark rim around the silhouette, head ~2/3 of
+// the height, two tones per material, big 2x2 eyes with a white highlight, a
+// blink every ~3.4s, an idle head-bob (people) or hop (creatures). Fills stay
+// inside columns fx+1..fx+5 so the rim and the 7-wide seat footprint hold
+const paintChar = (
+  px: (x: number, y: number, w: number, h: number, c: string) => void,
+  c: CharPreset,
+  o: {
+    fx: number;
+    fy: number;
+    dir: Position["dir"];
+    sit: boolean;
+    walking: boolean;
+    step: number;
+    lean: number;
+    headset: boolean;
+    now: number;
+  },
+) => {
+  const blink = o.now % 3400 < 140;
+  // One 2x2 eye, white highlight top-left (light from the top-left); a blink
+  // squashes it to a 1px closed lid
+  const eye = (ex: number, ey: number) => {
+    px(ex, ey, 2, blink ? 1 : 2, OUT);
+    if (!blink) px(ex, ey, 1, 1, "#fff");
+  };
+  if (!c.creature) {
+    const skin = c.skin || "#f2c7a5";
+    const hair = c.hair || "#2b1a12";
+    const hairShade = c.hairShade || "#1d1409";
+    const shirt = c.shirt || "#5a4cd0";
+    const shirtShade = c.shirtShade || "#4338a8";
+    const back = o.dir === "u";
+    const lift = o.walking ? o.step : 0;
+    // Body first so a dipped (idle-bob) head overlaps the collar, not air
+    px(o.fx + 1, o.fy + 9, 2, 2 - lift, LEGS);
+    px(o.fx + 4, o.fy + 9, 2, 1 + lift, LEGS);
+    px(o.fx + 1, o.fy + 6, 5, 3, shirt);
+    px(o.fx + 1, o.fy + 8, 5, 1, shirtShade);
+    // Long hair drapes over the shirt shoulders
+    if (c.style === "long" && !back) {
+      px(o.fx + 1, o.fy + 6, 1, 3, hair);
+      px(o.fx + 5, o.fy + 6, 1, 3, hair);
+    }
+    px(o.fx, o.fy + 7, 1, 2, skin); // hands
+    px(o.fx + 6, o.fy + 7, 1, 2, skin);
+    // Head (leans 1px toward a snuggle neighbour; the body stays put)
+    const hx = o.fx + o.lean;
+    const bob = !o.walking && !o.sit && Math.floor(o.now / 700) % 2 ? 1 : 0;
+    const hy = o.fy + bob;
+    px(hx, hy - 1, 7, 1, OUT); // rim over the hair
+    px(hx, hy, 1, 6, OUT); // rim beside the face
+    px(hx + 6, hy, 1, 6, OUT);
+    px(hx + 1, hy, 5, 6, skin);
+    px(hx + 1, hy, 5, 2, hair); // fringe
+    if (back) {
+      px(hx + 1, hy + 2, 5, 4, hair);
+      px(hx + 1, hy + 5, 5, 1, hairShade);
+    }
+    if (c.style === "bob") {
+      px(hx + 1, hy, 1, 3, hair);
+      px(hx + 5, hy, 1, 3, hair);
+    } else if (c.style === "twin") {
+      px(hx - 1, hy + 2, 1, 4, hair); // tails past the rim
+      px(hx + 7, hy + 2, 1, 4, hair);
+      px(hx - 1, hy + 2, 1, 1, shirt); // scrunchies
+      px(hx + 7, hy + 2, 1, 1, shirt);
+    } else if (c.style === "long") {
+      px(hx + 1, hy + 1, 1, 5, hair);
+      px(hx + 5, hy + 1, 1, 5, hair);
+    } else if (c.style === "spiky") {
+      px(hx + 1, hy - 1, 1, 1, hair); // spikes on the rim row
+      px(hx + 3, hy - 1, 1, 1, hair);
+      px(hx + 5, hy - 1, 1, 1, hair);
+      px(hx + 2, hy, 1, 1, hairShade);
+      px(hx + 4, hy, 1, 1, hairShade);
+    } else if (c.style === "ponytail") {
+      px(hx + 6, hy + 1, 1, 6, hair);
+      px(hx + 7, hy + 3, 1, 3, hair);
+      px(hx + 6, hy + 1, 1, 1, shirt); // tie
+    } else if (c.style === "ahoge") {
+      px(hx + 3, hy - 1, 1, 1, hair);
+    }
+    // Face: big eyes, tiny mouth, blush; a profile keeps one eye
+    if (!back) {
+      if (o.dir === "d") {
+        eye(hx + 1, hy + 2);
+        eye(hx + 4, hy + 2);
+        px(hx + 3, hy + 4, 1, 1, "#b3544a");
+        px(hx + 1, hy + 4, 1, 1, BLUSH);
+        px(hx + 5, hy + 4, 1, 1, BLUSH);
+      } else {
+        px(o.dir === "r" ? hx + 1 : hx + 5, hy + 2, 1, 3, hair); // skull side
+        eye(o.dir === "r" ? hx + 3 : hx + 1, hy + 2);
+        px(o.dir === "r" ? hx + 4 : hx + 2, hy + 4, 1, 1, "#b3544a");
+        px(o.dir === "r" ? hx + 2 : hx + 4, hy + 4, 1, 1, BLUSH);
+      }
+    }
+    if (o.headset) {
+      px(hx, hy - 1, 7, 1, "#7cf5c8");
+      px(hx, hy, 1, 3, "#7cf5c8");
+      px(hx + 6, hy, 1, 3, "#7cf5c8");
+    }
+  } else {
+    // Creatures: same 7x11 box, one round body with ears on top. They hop
+    // while walking, keep a rim, and glance 1px toward their facing
+    const fur = c.fur || "#f4f0ff";
+    const furShade = c.furShade || "#cfc6ec";
+    const belly = c.belly || "#fff";
+    const fy = o.fy - (o.walking && o.step ? 1 : 0); // hop frame
+    const fx = o.fx;
+    const back = o.dir === "u";
+    const shift = o.dir === "l" ? -1 : o.dir === "r" ? 1 : 0;
+    if (c.creature === "tho") {
+      // Bunny: tall ears with pink insides, round loaf, paw feet
+      px(fx + 2, fy, 1, 3, fur);
+      px(fx + 4, fy, 1, 3, fur);
+      px(fx + 2, fy + 1, 1, 1, belly);
+      px(fx + 4, fy + 1, 1, 1, belly);
+      px(fx, fy + 2, 7, 9, OUT);
+      px(fx + 1, fy + 2, 5, 8, fur);
+      px(fx + 2, fy + 7, 3, 2, "#fff"); // belly patch
+      px(fx + 1, fy + 10, 2, 1, furShade); // paws
+      px(fx + 4, fy + 10, 2, 1, furShade);
+      if (!back) {
+        eye(fx + 1 + shift, fy + 4);
+        eye(fx + 4 + shift, fy + 4);
+        px(fx + 3, fy + 6, 1, 1, OUT);
+        px(fx + 1, fy + 6, 1, 1, BLUSH);
+        px(fx + 5, fy + 6, 1, 1, BLUSH);
+      }
+    } else if (c.creature === "meo") {
+      // Cat loaf: triangle ears over the rim, forehead stripes, wiggling tail
+      px(fx, fy + 2, 7, 9, OUT);
+      px(fx + 1, fy + 3, 5, 8, fur);
+      px(fx + 1, fy + 10, 5, 1, furShade);
+      px(fx + 1, fy + 1, 2, 2, fur);
+      px(fx + 4, fy + 1, 2, 2, fur);
+      px(fx + 2, fy + 3, 1, 1, furShade);
+      px(fx + 4, fy + 3, 1, 1, furShade);
+      const wag = Math.floor(o.now / 400) % 2;
+      px(fx + 7, fy + 6 + wag, 1, 3, fur);
+      px(fx + 7, fy + 6 + wag, 1, 1, furShade);
+      if (!back) {
+        eye(fx + 1 + shift, fy + 5);
+        eye(fx + 4 + shift, fy + 5);
+        px(fx + 3, fy + 7, 1, 1, OUT);
+        px(fx + 1, fy + 7, 1, 1, BLUSH);
+        px(fx + 5, fy + 7, 1, 1, BLUSH);
+      }
+    } else if (c.creature === "cao") {
+      // Fox sprite: tall ears with shaded tips, muzzle, bushy light-tipped tail
+      px(fx + 1, fy, 2, 3, fur);
+      px(fx + 4, fy, 2, 3, fur);
+      px(fx + 1, fy, 2, 1, furShade);
+      px(fx + 4, fy, 2, 1, furShade);
+      px(fx, fy + 2, 7, 9, OUT);
+      px(fx + 1, fy + 2, 5, 8, fur);
+      px(fx + 2, fy + 5, 3, 2, belly); // muzzle
+      px(fx + 2, fy + 7, 3, 3, belly);
+      px(fx + 1, fy + 10, 2, 1, furShade);
+      px(fx + 4, fy + 10, 2, 1, furShade);
+      px(fx + 7, fy + 7, 1, 3, fur);
+      px(fx + 7, fy + 7, 1, 1, belly); // tail tip
+      if (!back) {
+        eye(fx + 1 + shift, fy + 3);
+        eye(fx + 4 + shift, fy + 3);
+        px(fx + 3, fy + 5, 1, 1, OUT); // nose on the muzzle
+        px(fx + 1, fy + 6, 1, 1, BLUSH);
+        px(fx + 5, fy + 6, 1, 1, BLUSH);
+      }
+    } else {
+      // Ghost blob: dome body with an animated wavy hem
+      px(fx, fy, 7, 11, OUT);
+      px(fx + 2, fy, 3, 1, fur);
+      px(fx + 1, fy + 1, 5, 8, fur);
+      for (let i = 0; i < 5; i++) {
+        const h = ((i + Math.floor(o.now / 500)) % 2) + 1;
+        px(fx + 1 + i, fy + 10 - h, 1, h, fur);
+      }
+      if (!back) {
+        eye(fx + 1 + shift, fy + 3);
+        eye(fx + 4 + shift, fy + 3);
+        px(fx + 3, fy + 5, 1, 1, OUT);
+        px(fx + 1, fy + 5, 1, 1, BLUSH);
+        px(fx + 5, fy + 5, 1, 1, BLUSH);
+      }
+    }
+    if (o.headset) {
+      const top = c.creature === "meo" ? fy + 1 : fy;
+      px(fx, top - 1, 7, 1, "#7cf5c8");
+      px(fx, top, 1, 2, "#7cf5c8");
+      px(fx + 6, top, 1, 2, "#7cf5c8");
+    }
+  }
+};
 
 // Emote bubbles over the characters, keys 1-6 (server relays CMD:emote with
 // these and only these)
@@ -76,6 +392,15 @@ export class PixelFloor extends React.Component<{
   scoops = POPCORN;
   // The current walkTo is a walk to the popcorn bucket: grab on arrival
   grabWalk = false;
+  // My character preset, remembered on this device (per person, like the
+  // name); people who never picked get a stable preset from their clientId
+  char = (() => {
+    const saved = window.localStorage.getItem("watchparty-char");
+    return saved && CHARS.some((c) => c.id === saved)
+      ? saved
+      : CHARS[hash(clientId) % CHARS.length].id;
+  })();
+  state = { picker: false };
   // Spawn anywhere along the bottom edge: a narrow corner band would stack
   // two people joining at the same time on top of each other (7-unit-wide
   // characters), garbling their name tags
@@ -240,6 +565,48 @@ export class PixelFloor extends React.Component<{
       y: this.me.y / H,
       dir: this.me.dir,
       sit: this.me.sit,
+      ch: this.char,
+    });
+  };
+
+  // The preset a character is drawn with: remote ones carry theirs on the
+  // move payload (server-validated), mine is this.char; anything unknown
+  // (e.g. an id this older tab doesn't know) falls back to a stable pick
+  charOf = (id: string, p: Position): CharPreset =>
+    CHARS.find((c) => c.id === (p.ch || (id === clientId ? this.char : ""))) ??
+    CHARS[hash(id) % CHARS.length];
+
+  // Picking saves to this device and announces it right away
+  pick = (id: string) => {
+    this.char = id;
+    window.localStorage.setItem("watchparty-char", id);
+    this.me.ch = id; // shown[clientId] is me: redraw with the new preset now
+    this.send(true);
+    this.setState({ picker: false });
+  };
+
+  // Picker previews use the same painter as the floor: static front pose on
+  // a 9x12 canvas (1 unit spare around the 7-wide box for tails/ears)
+  paintPreview = (el: HTMLCanvasElement | null, c: CharPreset) => {
+    if (!el) return;
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    const u = 4;
+    const px = (x: number, y: number, w: number, h: number, col: string) => {
+      ctx.fillStyle = col;
+      ctx.fillRect(Math.round(x) * u, Math.round(y) * u, w * u, h * u);
+    };
+    ctx.clearRect(0, 0, el.width, el.height);
+    paintChar(px, c, {
+      fx: 1,
+      fy: 1,
+      dir: "d",
+      sit: false,
+      walking: false,
+      step: 0,
+      lean: 0,
+      headset: false,
+      now: 200, // awake, not mid-blink, no idle bob
     });
   };
 
@@ -372,7 +739,6 @@ export class PixelFloor extends React.Component<{
     const step = Math.floor(now / 150) % 2;
     const drawChar = ([id, p]: [string, Position]) => {
       const user = users.get(id);
-      const hair = HAIR[hash(id) % 4];
       const x = Math.round(p.x) - 3;
       const top = Math.round(p.y) - 11;
       // Head leans 1px toward a seated neighbour
@@ -383,27 +749,17 @@ export class PixelFloor extends React.Component<{
           break;
         }
       }
-      const hx = x + 1 + lean;
-      px(hx, top, 5, 2, hair);
-      px(hx, top + 2, 5, 3, SKIN);
-      if (p.dir === "u") {
-        px(hx, top + 2, 5, 2, hair); // back of the head
-      } else if (p.dir === "d") {
-        px(hx + 1, top + 3, 1, 1, "#1b1b1b");
-        px(hx + 3, top + 3, 1, 1, "#1b1b1b");
-      } else {
-        px(p.dir === "l" ? hx : hx + 4, top + 3, 1, 1, "#1b1b1b");
-      }
-      px(x, top + 5, 7, 4, "#" + getColorForStringHex(id)); // shirt
-      px(x, top + 6, 1, 2, SKIN); // hands
-      px(x + 6, top + 6, 1, 2, SKIN);
-      const lift = this.walking.has(id) ? step : 0;
-      px(x + 1, top + 9, 2, 2 - lift, "#2a2a3a"); // legs
-      px(x + 4, top + 9, 2, 1 + lift, "#2a2a3a");
-      if (user?.isVideoChat) {
-        px(x, top + 1, 1, 3, "#7cf5c8"); // headset
-        px(x + 6, top + 1, 1, 3, "#7cf5c8");
-      }
+      paintChar(px, this.charOf(id, p), {
+        fx: x,
+        fy: top,
+        dir: p.dir,
+        sit: p.sit,
+        walking: this.walking.has(id),
+        step,
+        lean,
+        headset: !!user?.isVideoChat,
+        now,
+      });
       // Name tag in real pixels so it stays readable, on a dark plate so two
       // characters sharing a spot keep readable tags (back-to-front draw
       // order puts the closer tag — plate and all — on top)
@@ -426,12 +782,12 @@ export class PixelFloor extends React.Component<{
       ctx.fillStyle = "#241536";
       ctx.fillRect(
         tagL,
-        (top - 1) * u - em, // alphabetic baseline: plate from ~1em above it
+        (top - 2) * u - em, // alphabetic baseline: plate from ~1em above it
         tagW + u * 0.8,
         em * 1.25, // down to ~0.25em below it
       );
       ctx.fillStyle = id === clientId ? "#ffe08a" : "#e9e0ff";
-      ctx.fillText(name, tagL + tagOff + u * 0.4, (top - 1) * u);
+      ctx.fillText(name, tagL + tagOff + u * 0.4, (top - 2) * u);
     };
     // Back to front: lower on screen is closer to the viewer, and a seat row
     // hides the legs of whoever sits in it
@@ -492,7 +848,7 @@ export class PixelFloor extends React.Component<{
       for (let b = a + 1; b < seated.length; b++) {
         if (!isSnuggle(seated[a], seated[b])) continue;
         const hx = Math.round((seated[a].x + seated[b].x) / 2) - 2;
-        // Above the name tags (baseline at y - 12), clamped to the canvas
+        // Above the name tags (baseline at y - 13), clamped to the canvas
         const hy = Math.max(
           0,
           Math.min(Math.round(seated[a].y), Math.round(seated[b].y)) - 19,
@@ -525,7 +881,7 @@ export class PixelFloor extends React.Component<{
         <canvas
           ref={this.canvasRef}
           onClick={this.onClick}
-          title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm, bấm xô bắp rang bơ để lấy bắp"
+          title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm, bấm xô bắp rang bơ để lấy bắp, nút dưới sàn để đổi nhân vật"
           style={{
             width: "100%",
             // Short enough to leave the screen room on a laptop
@@ -545,6 +901,36 @@ export class PixelFloor extends React.Component<{
             </button>
           ))}
         </div>
+        {/* Character picker: previews are drawn with the same painter as the
+            floor; the choice is saved on this device and sent to the room */}
+        <div className={styles.charRow}>
+          <button
+            type="button"
+            onClick={() => this.setState({ picker: !this.state.picker })}
+          >
+            ✦ {this.charOf(clientId, this.me).name}
+          </button>
+        </div>
+        {this.state.picker && (
+          <div className={styles.charGrid}>
+            {CHARS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                title={c.name}
+                className={this.char === c.id ? styles.charPicked : ""}
+                onClick={() => this.pick(c.id)}
+              >
+                <canvas
+                  width={36}
+                  height={48}
+                  ref={(el) => this.paintPreview(el, c)}
+                  style={{ imageRendering: "pixelated" }}
+                />
+              </button>
+            ))}
+          </div>
+        )}
       </React.Fragment>
     );
   }
