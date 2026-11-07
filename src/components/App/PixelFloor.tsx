@@ -90,6 +90,16 @@ export class PixelFloor extends React.Component<{
   // The roster carries everyone's last position, so late joiners see where
   // people already are
   syncRoster = () => {
+    // Drop people who left; nothing else ever deletes from targets/shown, so
+    // without this they ease in the rAF loop forever
+    const here = new Set(this.props.participants.map((p) => p.id));
+    for (const id of Object.keys(this.targets)) {
+      if (!here.has(id)) {
+        delete this.targets[id];
+        delete this.shown[id];
+        this.walking.delete(id);
+      }
+    }
     for (const p of this.props.participants) {
       if (p.id !== clientId && p.pos && !this.targets[p.id]) {
         this.targets[p.id] = { ...p.pos, x: p.pos.x * W, y: p.pos.y * H };

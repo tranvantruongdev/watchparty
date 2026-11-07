@@ -649,6 +649,8 @@ export class App extends React.Component<AppProps, AppState> {
         }
         return;
       }
+      // /fb must not jump into the new media at the old media's time
+      this.lastSeekFrom = undefined;
       this.setState(
         {
           roomMedia: currentMedia,
