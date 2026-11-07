@@ -389,6 +389,7 @@ export class App extends React.Component<AppProps, AppState> {
   shareStatsTimer?: number;
   shareStatsLast?: { bytes: number; ts: number };
   progressUpdater?: number;
+  tsInterval?: number;
   heartbeat: number | undefined = undefined;
   YouTubeInterface: YouTube = new YouTube(null);
   HTMLInterface: HTML = new HTML("leftVideo");
@@ -440,9 +441,12 @@ export class App extends React.Component<AppProps, AppState> {
   }
 
   componentWillUnmount() {
-    document.removeEventListener("fullscreenchange", this.onFullScreenChange);
-    document.removeEventListener("keydown", this.onKeydown);
+    // Handlers installed via the on<event> properties must be removed the same
+    // way; removeEventListener would not match them
+    document.onfullscreenchange = null;
+    document.onkeydown = null;
     window.clearInterval(this.heartbeat);
+    window.clearInterval(this.tsInterval);
     window.clearTimeout(this.playbackCheckTimer);
     window.clearTimeout(this.ytPostSeekTimer);
   }
@@ -1191,7 +1195,7 @@ export class App extends React.Component<AppProps, AppState> {
       },
     );
     socket.on("REC:getRoomState", this.handleRoomState);
-    window.setInterval(() => {
+    this.tsInterval = window.setInterval(() => {
       // Not while watching alone: our time would drag the leader time around
       if (this.state.roomMedia && !this.state.exploring) {
         const toSend = this.getRoomTSToSet(this.Player().getCurrentTime());
