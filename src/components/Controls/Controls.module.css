@@ -15,9 +15,29 @@
   gap: 6px;
 }
 
-@media only screen and (max-width: 600px) {
+/* 900 not 600: a landscape phone (~844px) kept the unwrapped rows and the
+   browser zoomed the page out; the control row also overflowed the player column */
+@media only screen and (max-width: 900px) {
   .controls {
     flex-wrap: wrap;
+  }
+
+  /* Wrapped rows squeeze the seek bar to its 50px min-width between two
+     timestamps: give it a row of its own */
+  .controls :global(.mantine-Progress-root) {
+    flex-basis: 100%;
+  }
+}
+
+/* Coarse pointers can't hit an 8px seek bar or a 22px button; with a mouse the
+   compact sizes stay */
+@media (pointer: coarse) {
+  .controls button {
+    min-height: 32px;
+  }
+
+  .controls :global(.mantine-Progress-root) {
+    height: 32px;
   }
 }
 

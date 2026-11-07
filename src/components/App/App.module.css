@@ -29,7 +29,10 @@
 .mobileStack {
   display: flex;
   gap: 4px;
-  @media only screen and (max-width: 600px) {
+  /* 900 not 600: a landscape phone is ~844px wide, and the unwrapped share
+     button row alone is ~1140px of min-content — the browser then zoomed the
+     whole page out. Stacked layout for everything narrower than a tablet. */
+  @media only screen and (max-width: 900px) {
     flex-direction: column;
     /* No width: the element's margin already insets it; an explicit width here
        double-counted the margin and pushed the page 8px off-screen. */
@@ -76,7 +79,7 @@
     width ease-out 0.5s,
     opacity 0.4s;
   &.leftColumn {
-    @media only screen and (max-width: 600px) {
+    @media only screen and (max-width: 900px) {
       /* video height doesn't matter on mobile since things are stacked */
       height: initial;
     }
@@ -650,10 +653,19 @@
   }
 }
 
-@media only screen and (max-width: 600px) {
+@media only screen and (max-width: 900px) {
   .curtainClip,
   .theaterSeats {
     display: none;
+  }
+}
+
+/* Touch has no pixel-perfect cursor: Mantine's default 28px ActionIcons (mic,
+   deafen) are below the 32px tap-target floor */
+@media (pointer: coarse) {
+  button:global(.mantine-ActionIcon-root) {
+    min-width: 34px;
+    min-height: 34px;
   }
 }
 
