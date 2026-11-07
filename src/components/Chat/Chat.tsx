@@ -515,7 +515,7 @@ export class Chat extends React.Component<ChatProps> {
               ? "The chat was disabled by the room owner."
               : "Enter a message..."
           }
-          rightSectionWidth={this.props.voiceButton ? 64 : undefined}
+          rightSectionWidth={this.props.voiceButton ? 92 : undefined}
           rightSection={
             <div style={{ display: "flex", gap: 4 }}>
               {this.props.voiceButton}

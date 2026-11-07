@@ -80,6 +80,8 @@ import {
   IconFiles,
   IconKeyboardFilled,
   IconList,
+  IconHeadphones,
+  IconHeadphonesOff,
   IconMicrophone,
   IconCoffee,
   IconScreenShare,
@@ -152,6 +154,7 @@ interface AppState {
   roomSleepTimer: RoomSleepTimer | null;
   // What the incoming screen share really gets: path, size, fps, bitrate
   shareStats: string;
+  voiceDeaf: boolean;
   participants: User[];
   rosterUpdateTS: Number;
   chat: ChatMessage[];
@@ -248,6 +251,7 @@ export class App extends React.Component<AppProps, AppState> {
     roomIntermission: null,
     roomSleepTimer: null,
     shareStats: "",
+    voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
     rosterUpdateTS: Date.now(),
     chat: [],
@@ -2755,23 +2759,40 @@ export class App extends React.Component<AppProps, AppState> {
     this.socket.emit("CMD:uid", { uid, token });
   };
 
-  // Join/leave voice chat from the chat bar; the call itself lives in VideoChat (People)
+  // Mic on/off + headphones from the chat bar; the call itself lives in
+  // VideoChat (People). Whoever opens their mic is heard by the others at once
+  // (they join listen-only); headphones off stops hearing them
   renderVoiceButton = () => {
     const inVoice = this.state.participants.find(
       (p) => p.id === getOrCreateClientId(),
     )?.isVideoChat;
+    const talking =
+      inVoice && !!window.watchparty.ourStream?.getAudioTracks().length;
+    const deaf = this.state.voiceDeaf;
     return (
-      <ActionIcon
-        title={inVoice ? "Leave voice chat" : "Join voice chat"}
-        color={inVoice ? "red" : "green"}
-        onClick={() =>
-          inVoice
-            ? this.videoChatRef.current?.stopWebRTC()
-            : this.videoChatRef.current?.setupWebRTC()
-        }
-      >
-        <IconMicrophone />
-      </ActionIcon>
+      <>
+        <ActionIcon
+          title={talking ? "Turn off mic" : "Turn on mic"}
+          color={talking ? "red" : "green"}
+          onClick={() =>
+            talking
+              ? this.videoChatRef.current?.micOff()
+              : this.videoChatRef.current?.setupWebRTC()
+          }
+        >
+          <IconMicrophone />
+        </ActionIcon>
+        <ActionIcon
+          title={deaf ? "Hear the others" : "Don't hear the others"}
+          color={deaf ? "red" : "gray"}
+          onClick={() => {
+            window.localStorage.setItem("watchparty-deaf", deaf ? "0" : "1");
+            this.setState({ voiceDeaf: !deaf });
+          }}
+        >
+          {deaf ? <IconHeadphonesOff /> : <IconHeadphones />}
+        </ActionIcon>
+      </>
     );
   };
 
@@ -3950,6 +3971,7 @@ export class App extends React.Component<AppProps, AppState> {
                     rosterUpdateTS={this.state.rosterUpdateTS}
                     owner={this.state.owner}
                     getLeaderTime={this.getLeaderTime}
+                    deaf={this.state.voiceDeaf}
                   />
                 </div>
               )}

@@ -30,6 +30,8 @@ interface VideoChatProps {
   hide?: boolean;
   owner: string | undefined;
   getLeaderTime: () => number;
+  // Headphones off: don't hear the others (and don't auto-join to listen)
+  deaf: boolean;
 }
 
 export class VideoChat extends React.Component<VideoChatProps> {
@@ -47,10 +49,31 @@ export class VideoChat extends React.Component<VideoChatProps> {
   }
 
   componentDidUpdate(prevProps: VideoChatProps) {
-    if (this.props.rosterUpdateTS !== prevProps.rosterUpdateTS) {
+    if (
+      this.props.rosterUpdateTS !== prevProps.rosterUpdateTS ||
+      this.props.deaf !== prevProps.deaf
+    ) {
+      this.autoListen();
       this.updateWebRTC();
     }
   }
+
+  // Someone else opened their mic: join listen-only (no mic, no permission
+  // prompt) so we hear them right away; leave again when nobody else is in voice
+  // ponytail: with 3+ people, two listeners keep each other "in voice" until one leaves
+  autoListen = () => {
+    const selfId = getOrCreateClientId();
+    const ourStream = window.watchparty.ourStream;
+    const listening = ourStream && !ourStream.getTracks().length;
+    const others = this.props.participants.filter(
+      (p) => p.isVideoChat && p.id !== selfId,
+    );
+    if (!ourStream && !this.props.deaf && others.some((p) => !p.isMuted)) {
+      this.setupWebRTC(true);
+    } else if (listening && (this.props.deaf || !others.length)) {
+      this.stopWebRTC();
+    }
+  };
 
   emitUserMute = () => {
     this.socket.emit("CMD:userMute", { isMuted: !this.getAudioWebRTC() });
@@ -87,7 +110,72 @@ export class VideoChat extends React.Component<VideoChatProps> {
     }
   };
 
-  setupWebRTC = async () => {
+  setupWebRTC = async (listenOnly = false) => {
+    if (listenOnly) {
+      window.watchparty.ourStream = new MediaStream();
+      this.socket.emit("CMD:joinVideo");
+      this.emitUserMute();
+      return;
+    }
+    const stream = await this.getOwnStream();
+    const ourStream = window.watchparty.ourStream;
+    if (!ourStream) {
+      window.watchparty.ourStream = stream;
+      // alert server we've joined video chat
+      this.socket.emit("CMD:joinVideo");
+      this.emitUserMute();
+      return;
+    }
+    // Listening already: send our mic on the same connections (renegotiated)
+    // instead of leaving and rejoining, which the peer can't tell apart
+    stream.getTracks().forEach((track) => {
+      ourStream.addTrack(track);
+      Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
+        if (id === getOrCreateClientId()) return;
+        const tr = pc
+          .getTransceivers()
+          .find((t) => t.receiver.track.kind === track.kind && !t.sender.track);
+        if (tr) {
+          tr.direction = "sendrecv";
+          tr.sender.replaceTrack(track);
+        } else {
+          pc.addTrack(track, ourStream);
+        }
+      });
+    });
+    this.emitUserMute();
+    this.forceUpdate();
+  };
+
+  // Mic off: keep listening while someone else is in voice, else leave
+  micOff = () => {
+    const ourStream = window.watchparty.ourStream;
+    const selfId = getOrCreateClientId();
+    const others = this.props.participants.some(
+      (p) => p.isVideoChat && p.id !== selfId,
+    );
+    if (!ourStream || !others || this.props.deaf) {
+      this.stopWebRTC();
+      return;
+    }
+    Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
+      if (id === selfId) return;
+      pc.getTransceivers().forEach((t) => {
+        if (t.sender.track) {
+          t.sender.replaceTrack(null);
+          t.direction = "recvonly";
+        }
+      });
+    });
+    ourStream.getTracks().forEach((track) => {
+      track.stop();
+      ourStream.removeTrack(track);
+    });
+    this.emitUserMute();
+    this.forceUpdate();
+  };
+
+  getOwnStream = async () => {
     // Set up our own video
     // Create default stream
     let black = ({ width = 640, height = 480 } = {}) => {
@@ -118,10 +206,7 @@ export class VideoChat extends React.Component<VideoChatProps> {
         console.warn(e);
       }
     }
-    window.watchparty.ourStream = stream;
-    // alert server we've joined video chat
-    this.socket.emit("CMD:joinVideo");
-    this.emitUserMute();
+    return stream;
   };
 
   stopWebRTC = () => {
@@ -212,6 +297,12 @@ export class VideoChat extends React.Component<VideoChatProps> {
             pc.addTrack(track, ourStream);
           }
         });
+        // Listen-only: nothing to send, but ask for their audio/video so the
+        // offer isn't empty when we are the offerer
+        if (!ourStream.getTracks().length) {
+          pc.addTransceiver("audio", { direction: "recvonly" });
+          pc.addTransceiver("video", { direction: "recvonly" });
+        }
         pc.onicecandidate = (event) => {
           // We generated an ICE candidate, send it to peer
           if (event.candidate) {
@@ -231,16 +322,16 @@ export class VideoChat extends React.Component<VideoChatProps> {
             this.updateWebRTC();
           }
         };
-        // For each pair, have the lexicographically smaller ID be the offerer
+        // For each pair, have the lexicographically smaller ID be the offerer.
+        // Once connected either side may renegotiate (mic on/off in place)
         const isOfferer = selfId < id;
-        if (isOfferer) {
-          pc.onnegotiationneeded = async () => {
-            // Start connection for peer's video
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            this.sendSignal(id, { sdp: pc.localDescription });
-          };
-        }
+        pc.onnegotiationneeded = async () => {
+          if (!isOfferer && !pc.currentRemoteDescription) return;
+          // Start connection for peer's video
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          this.sendSignal(id, { sdp: pc.localDescription });
+        };
       }
     });
   };
@@ -414,7 +505,7 @@ export class VideoChat extends React.Component<VideoChatProps> {
                         transform: `scaleX(${p.id === selfId ? "-1" : "1"})`,
                       }}
                       autoPlay
-                      muted={p.id === selfId}
+                      muted={p.id === selfId || this.props.deaf}
                       data-id={p.id}
                     />
                   ) : (
