@@ -86,6 +86,8 @@ export class Room {
   // clientId -> timestamps of accepted moves in the last second
   private moveTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
+  // Fires when a stalled viewer needs the room paused so nobody watches ahead
+  private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
   private preventTSUpdate = false;
@@ -528,6 +530,7 @@ export class Room {
     if (this.tsInterval) {
       clearInterval(this.tsInterval);
     }
+    this.clearBufferPause();
     // Unregister the namespace so it doesn't linger (or get duplicated on reload)
     this.io._nsps.delete(this.roomId);
   };
@@ -642,6 +645,7 @@ export class Room {
     this.playbackRate = 1;
     this.tsMap = {};
     this.bufferingMap = {};
+    this.clearBufferPause();
     this.preventTSUpdate = true;
     setTimeout(() => (this.preventTSUpdate = false), 1000);
     this.io.of(this.roomId).emit("REC:tsMap", this.tsMap);
@@ -862,6 +866,8 @@ export class Room {
       msg: this.tsMap[socket.clientId]?.toString(),
     };
     this.paused = false;
+    // Resuming with a viewer still stuck buffers them behind again — keep watching
+    this.armBufferPause();
     this.addChatMessage(socket, chatMsg);
   };
 
@@ -873,6 +879,8 @@ export class Room {
       msg: this.tsMap[socket.clientId]?.toString(),
     };
     this.paused = true;
+    // A manual pause means nobody is falling behind; drop any pending one
+    this.clearBufferPause();
     this.addChatMessage(socket, chatMsg);
   };
 
@@ -1132,7 +1140,44 @@ export class Room {
     times.push(now);
     this.bufferingChangeTimes[socket.clientId] = times;
     this.bufferingMap[socket.clientId] = data;
+    // Jellyfin SyncPlay behavior: if a viewer stays stuck too long while the
+    // room plays, pause everyone so nobody watches ahead of the stuck viewer.
+    // CMD:buffering is already capped and validated above, so no new event.
+    // Re-arm on false too: with two stuck viewers, one recovering must not
+    // cancel the timer for the other.
+    this.armBufferPause();
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
+  };
+
+  // The stall window: the client reports only after 1.5s of true buffering, so
+  // this adds ~2.5s grace before pausing (~4s of stall total) to ride out blips
+  private armBufferPause = () => {
+    this.clearBufferPause();
+    if (this.paused || !Object.values(this.bufferingMap).some(Boolean)) {
+      return;
+    }
+    this.bufferPauseTimer = setTimeout(() => {
+      const stuck = Object.keys(this.bufferingMap).find(
+        (id) => this.bufferingMap[id],
+      );
+      if (this.paused || !stuck) {
+        return;
+      }
+      this.paused = true;
+      this.io.of(this.roomId).emit("REC:pause");
+      this.addChatMessage(null, {
+        id: stuck,
+        cmd: "bufferPause",
+        msg: Math.round(this.videoTS).toString(),
+      });
+    }, 2500);
+  };
+
+  private clearBufferPause = () => {
+    if (this.bufferPauseTimer) {
+      clearTimeout(this.bufferPauseTimer);
+      this.bufferPauseTimer = undefined;
+    }
   };
 
   private joinVideo = async (socket: Socket) => {

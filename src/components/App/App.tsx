@@ -2432,6 +2432,13 @@ export class App extends React.Component<AppProps, AppState> {
   // Watch alone / Rejoin. Rejoin jumps to the room's time and play state.
   toggleExplore = () => {
     if (!this.state.exploring) {
+      // The ts tick (and its buffering reports) stops while solo: don't leave
+      // a "stuck" report behind that would keep auto-pausing the room
+      if (this.bufferingReported) {
+        this.bufferingReported = false;
+        this.bufferingSince = 0;
+        this.socket.emit("CMD:buffering", false);
+      }
       this.setState({ exploring: true });
       return;
     }
