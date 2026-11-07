@@ -160,6 +160,8 @@ interface AppState {
   roomSleepTimer: RoomSleepTimer | null;
   // What the incoming screen share really gets: path, size, fps, bitrate
   shareStats: string;
+  // What the sharer's own encoder is doing: size, fps, and why quality is limited
+  shareSendStats: string;
   voiceDeaf: boolean;
   participants: User[];
   rosterUpdateTS: Number;
@@ -263,6 +265,7 @@ export class App extends React.Component<AppProps, AppState> {
     roomIntermission: null,
     roomSleepTimer: null,
     shareStats: "",
+    shareSendStats: "",
     voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
     rosterUpdateTS: Date.now(),
@@ -1604,19 +1607,29 @@ export class App extends React.Component<AppProps, AppState> {
     // Screen share doesn't touch leftVideo, so there's nothing to restore
     this.preShareVideoState = undefined;
     if (navigator.mediaDevices.getDisplayMedia) {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        //@ts-expect-error
-        // Full HD when the screen has it; the direct share sends up to 16 Mbps
-        video: { height: { ideal: 1080 }, logicalSurface: true },
-        audio: {
-          autoGainControl: false,
-          channelCount: 2,
-          echoCancellation: false,
-          noiseSuppression: false,
-          sampleRate: 48000,
-          sampleSize: 16,
-        },
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          //@ts-expect-error
+          // Full HD when the screen has it; the direct share sends up to 16 Mbps
+          video: { height: { ideal: 1080 }, logicalSurface: true },
+          audio: {
+            autoGainControl: false,
+            channelCount: 2,
+            echoCancellation: false,
+            noiseSuppression: false,
+            sampleRate: 48000,
+            sampleSize: 16,
+          },
+        });
+      } catch (err) {
+        // Closing the picker (NotAllowedError) is a normal cancel; a real
+        // failure must not die as an unhandled rejection nobody sees
+        if ((err as DOMException)?.name !== "NotAllowedError") {
+          this.showError("Could not start screen share");
+        }
+        return;
+      }
       this.localStreamToPublish = stream;
       this.isLocalStreamAFile = false;
       this.socket.emit("CMD:joinScreenShare", {
@@ -1856,7 +1869,13 @@ export class App extends React.Component<AppProps, AppState> {
 
       const videoTrack = localStream?.getVideoTracks()[0];
       if (videoTrack) {
-        const trackParams = { track: videoTrack };
+        // The direct path caps the sender at the picked Mbps (sendEncodings in
+        // setupRTCConnections); give the relay producer the same cap. The
+        // mediasoup router clamps it to what the router supports
+        const trackParams = {
+          track: videoTrack,
+          encodings: [{ maxBitrate: getShareMbps() * 1_000_000 }],
+        };
         await producerTransport.produce(trackParams);
       }
       const audioTrack = localStream?.getAudioTracks()[0];
@@ -2113,7 +2132,7 @@ export class App extends React.Component<AppProps, AppState> {
     }
     window.clearInterval(this.shareStatsTimer);
     this.shareStatsLast = undefined;
-    this.setState({ shareStats: "" });
+    this.setState({ shareStats: "", shareSendStats: "" });
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2221,6 +2240,13 @@ export class App extends React.Component<AppProps, AppState> {
           };
         }
       });
+      // The sharer shows what their own encoder does (pollSendStats) instead
+      // of the viewer's arrival stats
+      window.clearInterval(this.shareStatsTimer);
+      this.shareStatsTimer = window.setInterval(
+        () => this.pollSendStats(),
+        2000,
+      );
     }
     // We're a watcher, establish connection to sharer (not the sharer itself)
     if (sharer && !this.consumerConn && !this.localStreamToPublish) {
@@ -2276,6 +2302,31 @@ export class App extends React.Component<AppProps, AppState> {
     const codec = stats.get(video.codecId)?.mimeType?.split("/")[1] ?? "";
     this.setState({
       shareStats: `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`,
+    });
+  };
+
+  // The sharer's own badge: what the encode actually does, which is what every
+  // viewer's quality depends on. The browser, not our Mbps picker, decides the
+  // real bitrate (it ramps up over the first minute and quality-limits on
+  // bandwidth/CPU), so show the real limit live; the cap is only a ceiling
+  pollSendStats = async () => {
+    const pc = Object.values(this.publisherConns)[0];
+    if (!pc) return;
+    const stats = await pc.getStats();
+    let out: any;
+    stats.forEach((r: any) => {
+      if (r.type === "outbound-rtp" && r.kind === "video") out = r;
+    });
+    if (!out) return;
+    const lim = out.qualityLimitationReason ?? "none";
+    const limit =
+      lim === "none"
+        ? ""
+        : lim === "cpu"
+          ? " · encoder limited by CPU"
+          : ` · encoder limited by ${lim}`;
+    this.setState({
+      shareSendStats: ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${Math.round(out.framesPerSecond ?? 0)}fps${limit}`,
     });
   };
 
@@ -3673,6 +3724,7 @@ export class App extends React.Component<AppProps, AppState> {
                     {this.isSharingScreen() && (
                       <div className={styles.shareStats}>
                         You're sharing your screen ({getShareMbps()} Mbps max)
+                        {this.state.shareSendStats}
                       </div>
                     )}
                     {this.state.shareStats && (
