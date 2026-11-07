@@ -97,9 +97,15 @@ export class Room {
   // clientId -> timestamps of accepted intermission changes in the last second
   private intermissionTimes: { [clientId: string]: number[] } = {};
   // Sleep timer: pauses the room for the night if nobody answers the
-  // "still watching?" check within a minute of the deadline. In-memory
-  // only, like intermission
-  public sleepTimer: { by: string; at: number; asking: boolean } | null = null;
+  // "still watching?" check within a minute of the deadline. askedAt is
+  // when that check began (0 until it does). In-memory only, like
+  // intermission
+  public sleepTimer: {
+    by: string;
+    at: number;
+    askedAt: number;
+    asking: boolean;
+  } | null = null;
   // clientId -> timestamps of accepted sleep-timer changes in the last second
   private sleepTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
@@ -136,25 +142,27 @@ export class Room {
     this.tsInterval = setInterval(async () => {
       // console.log(roomId, this.video, this.roster, this.tsMap, this.nameMap);
       // Sleep timer: at the deadline, ask "still watching?" for one minute;
-      // no answer means everyone dozed off, so pause for the night
+      // no answer means everyone dozed off, so pause for the night. A pause
+      // spanning the deadline must not kill the timer (someone pressing play
+      // afterwards would keep it playing all night): it stays armed and the
+      // check begins on the first tick the room is playing again
       if (
         this.sleepTimer &&
         !this.sleepTimer.asking &&
         Date.now() >= this.sleepTimer.at
       ) {
-        if (this.paused) {
-          // Already stopped: nothing to pause, the one-shot timer just ends
-          this.sleepTimer = null;
-          this.io.of(this.roomId).emit("REC:sleep", null);
-        } else {
+        if (!this.paused) {
           this.sleepTimer.asking = true;
+          // Measure the answer window from the ask, not the deadline, so a
+          // late resume always gets the full minute
+          this.sleepTimer.askedAt = Date.now();
           this.io.of(this.roomId).emit("REC:sleep", this.sleepTimer);
         }
       }
       if (
         this.sleepTimer &&
         this.sleepTimer.asking &&
-        Date.now() >= this.sleepTimer.at + 60000
+        Date.now() >= this.sleepTimer.askedAt + 60000
       ) {
         const by = this.sleepTimer.by;
         this.sleepTimer = null;
@@ -1295,7 +1303,12 @@ export class Room {
     this.sleepTimer =
       raw === 0
         ? null
-        : { by: socket.clientId, at: now + raw * 60000, asking: false };
+        : {
+            by: socket.clientId,
+            at: now + raw * 60000,
+            askedAt: 0,
+            asking: false,
+          };
     // Like intermission, relayed to everyone including the sender
     this.io.of(this.roomId).emit("REC:sleep", this.sleepTimer);
     this.addChatMessage(socket, {

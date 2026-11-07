@@ -3418,13 +3418,7 @@ export class App extends React.Component<AppProps, AppState> {
                     )}
                     {this.state.roomSleepTimer?.asking && (
                       <div className={styles.intermissionOverlay}>
-                        <div
-                          className={
-                            styles.intermissionCard +
-                            " " +
-                            styles.sleepCardInteractive
-                          }
-                        >
+                        <div className={styles.intermissionCard}>
                           <div className={styles.intermissionTitle}>
                             😴 Still watching?
                           </div>
@@ -3437,7 +3431,7 @@ export class App extends React.Component<AppProps, AppState> {
                           <div className={styles.sleepBar} />
                           <Button
                             color="violet"
-                            style={{ marginTop: 12 }}
+                            style={{ marginTop: 12, pointerEvents: "auto" }}
                             onClick={() => this.socket.emit("CMD:sleep", 0)}
                           >
                             Yes — keep watching

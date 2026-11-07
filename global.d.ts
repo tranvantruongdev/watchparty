@@ -102,6 +102,9 @@ interface RoomSleepTimer {
   by: string;
   // epoch ms of the deadline (the room then asks "still watching?")
   at: number;
+  // epoch ms the check began, 0 before it does (a pause at the deadline
+  // leaves the timer armed until the room plays again)
+  askedAt: number;
   // true while the room waits for someone to answer the check
   asking: boolean;
 }

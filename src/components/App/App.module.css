@@ -788,11 +788,9 @@
   color: rgba(230, 220, 255, 0.9);
 }
 
-/* Sleep timer's "still watching?" card is clickable (answer button),
-   unlike the BRB card which sits over a paused screen */
-.sleepCardInteractive {
-  pointer-events: auto;
-}
+/* Sleep timer's "still watching?" card: only the answer button takes clicks
+   (pointer-events: auto on it), so the card body can never cover the Unmute
+   button (Mantine Overlay, z-index 200, centered) on short columns */
 
 /* One minute to answer before the room pauses for the night */
 .sleepBar {
