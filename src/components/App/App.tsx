@@ -4,6 +4,7 @@ import { Alert, Loader, Menu, Overlay, Select, Title } from "@mantine/core";
 import io, { Socket } from "socket.io-client";
 import {
   formatSpeed,
+  formatTimestamp,
   iceServers,
   isMobile,
   serverPath,
@@ -32,6 +33,9 @@ import {
   getSavedPasswords,
   getSavedStubs,
   saveStubs,
+  getSavedResume,
+  saveResume,
+  type SavedResume,
 } from "../../utils/utils";
 import { generateName } from "../../utils/generateName";
 import { Chat, type SeekCommand } from "../Chat/Chat";
@@ -78,6 +82,7 @@ import {
   IconChevronRight,
   IconFile,
   IconFiles,
+  IconHistory,
   IconKeyboardFilled,
   IconList,
   IconHeadphones,
@@ -201,6 +206,12 @@ interface AppState {
   isScreenShareModalOpen: boolean;
   isFileShareModalOpen: boolean;
   localCopyNeeded: boolean;
+  // "Continue watching" offer (per-device saved position): what to reopen or
+  // seek to, and whether the room has no media yet (reopen) or is behind us
+  resumeOffer: (SavedResume & { reopen: boolean }) | undefined;
+  // The media the user already declined to reopen, so the 1s tick doesn't
+  // offer it again
+  resumeDismissed: string | undefined;
   isSubtitleModalOpen: boolean;
   isMultiSelectModalOpen: boolean;
   roomLock: string;
@@ -294,6 +305,8 @@ export class App extends React.Component<AppProps, AppState> {
     isScreenShareModalOpen: false,
     isFileShareModalOpen: false,
     localCopyNeeded: false,
+    resumeOffer: undefined,
+    resumeDismissed: undefined,
     isSubtitleModalOpen: false,
     isMultiSelectModalOpen: false,
     roomLock: "",
@@ -343,6 +356,12 @@ export class App extends React.Component<AppProps, AppState> {
   bufferingSince = 0;
   bufferingReported = false;
   ytNeedsFirstPlaySync = false;
+  // Counts 1s ts ticks so the resume point is saved every ~10s
+  resumeTicker = 0;
+  // Position to pull the room to after the "continue watching" reopen loads
+  // (consumed on the first play sync), and the media it belongs to
+  pendingResume?: number;
+  pendingResumeMedia?: string;
   // The current video can't play embedded (removed, or the owner disabled
   // embedding): YouTube shows its own message, so don't cover it with Unmute
   ytUnplayable = false;
@@ -541,6 +560,8 @@ export class App extends React.Component<AppProps, AppState> {
       if (this.state.exploring) {
         return;
       }
+      // A room seek makes the saved-spot offer stale
+      this.setState({ resumeOffer: undefined });
       // Remember where the room was, for /fb
       this.rememberPreSeek();
       this.localSeek(data);
@@ -699,6 +720,10 @@ export class App extends React.Component<AppProps, AppState> {
           // New media: everyone starts it together
           exploring: false,
           localCopyNeeded: false,
+          // Recompute the resume offer: the reopen offer dies here, and a
+          // room behind our saved spot offers to pull the room forward
+          resumeOffer: this.getResumeOffer(currentMedia, data.videoTS),
+          resumeDismissed: undefined,
           isVBrowserLarge: data.isVBrowserLarge,
           vBrowserResolution: "1280x720@30",
           vBrowserQuality: "1",
@@ -915,6 +940,9 @@ export class App extends React.Component<AppProps, AppState> {
               }
               // Resync to leader since the loading might have taken some time
               this.localSeek(ts);
+              // A "continue watching" reopen pulls the room to the saved spot
+              // once the media is actually playing
+              this.consumePendingResume();
               if (data.playbackRate) {
                 // Set playback rate again since it might have been lost
                 console.log("setting playback rate again", data.playbackRate);
@@ -1150,6 +1178,7 @@ export class App extends React.Component<AppProps, AppState> {
         this.socket.emit("CMD:ts", toSend);
         this.reportBuffering();
       }
+      this.tickResume();
     }, 1000);
   };
 
@@ -1269,6 +1298,9 @@ export class App extends React.Component<AppProps, AppState> {
               // position, same as the Sync button, since the cued position is stale
               this.ytNeedsFirstPlaySync = false;
               this.localSeek();
+              // A "continue watching" reopen pulls the room to the saved spot
+              // once the video actually plays (YouTube has no canplay event)
+              this.consumePendingResume();
             }
             if (
               e.data === window.YT?.PlayerState?.PLAYING &&
@@ -2563,6 +2595,99 @@ export class App extends React.Component<AppProps, AppState> {
     this.ensureYtPlaysAfterSeek();
     const toSend = this.getRoomTSToSet(target);
     this.socket.emit("CMD:seek", toSend);
+    this.setState({ resumeOffer: undefined });
+  };
+
+  // "Continue watching": runs every second from the ts tick. An empty room
+  // (deploy restart, fresh server) gets an offer to reopen what this device
+  // watched here last; a playing room just saves the position every ~10s so
+  // the next visit can offer it back
+  tickResume = () => {
+    if (!this.state.roomMedia && !this.state.loading) {
+      const saved = getSavedResume()[this.state.roomId];
+      if (
+        saved &&
+        isHttp(saved.media) &&
+        saved.media !== this.state.resumeDismissed &&
+        saved.media !== this.state.resumeOffer?.media
+      ) {
+        this.setState({ resumeOffer: { ...saved, reopen: true } });
+      }
+      return;
+    }
+    this.resumeTicker++;
+    if (
+      this.resumeTicker % 10 !== 0 ||
+      !this.hasDuration() ||
+      this.state.exploring
+    ) {
+      return;
+    }
+    const t = this.Player().getCurrentTime();
+    if (!Number.isFinite(t) || t < 60) {
+      return;
+    }
+    saveResume(this.state.roomId, {
+      media: this.state.roomMedia!,
+      pos: t,
+      at: Date.now(),
+    });
+  };
+
+  // A room already playing what this device watched here before, but behind
+  // our saved spot (fresh room state): offer to pull the room forward
+  getResumeOffer = (
+    media: string,
+    roomTs: number | undefined,
+  ): (SavedResume & { reopen: boolean }) | undefined => {
+    const saved = getSavedResume()[this.state.roomId];
+    if (!saved || saved.media !== media || saved.pos <= 60) {
+      return undefined;
+    }
+    if (saved.pos - (roomTs ?? 0) > 30) {
+      return { ...saved, reopen: false };
+    }
+    return undefined;
+  };
+
+  continueResume = (offer: SavedResume & { reopen: boolean }) => {
+    // A room seek below covers us; don't let a still-armed reopen seek fire twice
+    this.pendingResume = undefined;
+    this.pendingResumeMedia = undefined;
+    this.setState({ resumeOffer: undefined });
+    if (offer.reopen) {
+      // The room has nothing loaded: host the saved media again, then
+      // consumePendingResume pulls the room to the saved spot once it plays
+      this.pendingResume = offer.pos;
+      this.pendingResumeMedia = offer.media;
+      this.roomSetMedia(offer.media);
+    } else {
+      this.roomSeek(offer.pos);
+    }
+  };
+
+  dismissResume = () => {
+    const offer = this.state.resumeOffer;
+    if (offer) {
+      this.setState({ resumeOffer: undefined, resumeDismissed: offer.media });
+    }
+  };
+
+  consumePendingResume = () => {
+    if (
+      this.pendingResume === undefined ||
+      this.state.roomMedia !== this.pendingResumeMedia
+    ) {
+      this.pendingResume = undefined;
+      this.pendingResumeMedia = undefined;
+      return;
+    }
+    const target = this.pendingResume;
+    this.pendingResume = undefined;
+    this.pendingResumeMedia = undefined;
+    // Fresh room: no lock holder yet, so the seek is ours to give. roomSeek
+    // also moves our own player: the server relays the seek to the others only
+    this.roomSeek(target);
   };
 
   // Chat slash commands (/30 forward, /-10 back, /12:30 or /1h9m54 to jump,
@@ -3610,6 +3735,47 @@ export class App extends React.Component<AppProps, AppState> {
                           </Button>
                         </Overlay>
                       )}
+                    {this.state.resumeOffer && (
+                      <Overlay className={styles.flexCenter}>
+                        <Alert
+                          color="violet"
+                          title="Continue watching"
+                          style={glassCardStyle}
+                        >
+                          <div>
+                            Last time here:{" "}
+                            {this.getMediaDisplayName(
+                              this.state.resumeOffer.media,
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              marginTop: 16,
+                            }}
+                          >
+                            <Button
+                              color="violet"
+                              leftSection={<IconHistory />}
+                              onClick={() =>
+                                this.continueResume(this.state.resumeOffer!)
+                              }
+                            >
+                              Continue from{" "}
+                              {formatTimestamp(this.state.resumeOffer.pos)}
+                            </Button>
+                            <Button
+                              variant="subtle"
+                              color="gray"
+                              onClick={this.dismissResume}
+                            >
+                              Not now
+                            </Button>
+                          </div>
+                        </Alert>
+                      </Overlay>
+                    )}
                     {this.state.localCopyNeeded &&
                       isLocalCopy(this.state.roomMedia) && (
                         <Overlay className={styles.flexCenter}>

@@ -468,6 +468,67 @@ export function saveStubs(roomId: string, stubs: TicketStub[]) {
   }
 }
 
+// Where this device last watched in each room, so a room that lost its place
+// (free-tier deploy waking up empty) can offer "continue from where we left
+// off". Per device on purpose: rooms reset without a database, same as the
+// ticket stubs above. The stored value may be corrupt (hand-edited, older
+// shape): validate it so callers never see a non-object or a bad entry
+export interface SavedResume {
+  media: string;
+  pos: number;
+  at: number;
+}
+
+export function getSavedResume(): Record<string, SavedResume> {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem("watchparty-resume") ?? "{}",
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    const clean: Record<string, SavedResume> = {};
+    for (const [roomId, entry] of Object.entries(parsed)) {
+      const r = entry as Partial<SavedResume>;
+      if (
+        !!r &&
+        typeof r.media === "string" &&
+        typeof r.pos === "number" &&
+        Number.isFinite(r.pos) &&
+        typeof r.at === "number"
+      ) {
+        clean[roomId] = { media: r.media, pos: r.pos, at: r.at };
+      }
+    }
+    return clean;
+  } catch (e) {
+    console.warn("[ALERT] Could not parse saved resume points");
+  }
+  return {};
+}
+
+export function saveResume(roomId: string, entry: SavedResume) {
+  try {
+    // Keep the most recently watched rooms only
+    const entries = Object.entries({
+      ...getSavedResume(),
+      [roomId]: entry,
+    })
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, 8);
+    window.localStorage.setItem(
+      "watchparty-resume",
+      JSON.stringify(Object.fromEntries(entries)),
+    );
+  } catch (e) {
+    console.warn("[ALERT] Could not save resume point");
+  }
+}
+
 export function createUuid() {
   return crypto.randomUUID ? crypto.randomUUID() : uuidv4();
 }
