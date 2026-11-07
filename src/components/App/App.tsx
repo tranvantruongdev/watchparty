@@ -79,6 +79,7 @@ import {
   IconKeyboardFilled,
   IconList,
   IconMicrophone,
+  IconCoffee,
   IconScreenShare,
   IconSettings,
   IconUser,
@@ -145,6 +146,7 @@ interface AppState {
   roomSubtitle: string;
   roomPaused: boolean;
   roomLoop: boolean;
+  roomIntermission: RoomIntermission | null;
   participants: User[];
   rosterUpdateTS: Number;
   chat: ChatMessage[];
@@ -236,6 +238,7 @@ export class App extends React.Component<AppProps, AppState> {
     roomPaused: false,
     roomSubtitle: "",
     roomLoop: false,
+    roomIntermission: null,
     participants: [],
     rosterUpdateTS: Date.now(),
     chat: [],
@@ -531,6 +534,9 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:loop", (data: boolean) => {
       this.setState({ roomLoop: data });
+    });
+    socket.on("REC:intermission", (data: RoomIntermission | null) => {
+      this.setState({ roomIntermission: data });
     });
     socket.on("REC:changeController", (data: string) => {
       this.setState({ controller: data });
@@ -3098,6 +3104,37 @@ export class App extends React.Component<AppProps, AppState> {
                             VBrowser
                           </Button>
                         )}
+                      <Menu withinPortal shadow="sm" width={170}>
+                        <Menu.Target>
+                          <Button
+                            className={styles.shareButton}
+                            color="violet"
+                            disabled={!this.haveLock()}
+                            leftSection={<IconCoffee />}
+                          >
+                            Intermission
+                          </Button>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          {[5, 10, 15].map((m) => (
+                            <Menu.Item
+                              key={m}
+                              onClick={() =>
+                                this.socket.emit("CMD:intermission", m)
+                              }
+                            >
+                              Break for {m} min
+                            </Menu.Item>
+                          ))}
+                          <Menu.Item
+                            onClick={() =>
+                              this.socket.emit("CMD:intermission", 0)
+                            }
+                          >
+                            Back whenever
+                          </Menu.Item>
+                        </Menu.Dropdown>
+                      </Menu>
                       {this.playingVBrowser() && (
                         <>
                           <Button
@@ -3345,6 +3382,30 @@ export class App extends React.Component<AppProps, AppState> {
                         <div
                           className={styles.curtain + " " + styles.curtainRight}
                         />
+                      </div>
+                    )}
+                    {this.state.roomIntermission && (
+                      <div className={styles.intermissionOverlay}>
+                        <div className={styles.intermissionCard}>
+                          <div className={styles.intermissionTitle}>
+                            Intermission
+                          </div>
+                          <div className={styles.intermissionLine}>
+                            {(this.state.nameMap[
+                              this.state.roomIntermission.by
+                            ] ?? "Someone") + " stepped out"}
+                          </div>
+                          <div className={styles.intermissionLine}>
+                            {this.state.roomIntermission.until
+                              ? `Back by ${new Date(
+                                  this.state.roomIntermission.until,
+                                ).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}`
+                              : "Back whenever"}
+                          </div>
+                        </div>
                       </div>
                     )}
                     {(!this.state.isAutoPlayable ||

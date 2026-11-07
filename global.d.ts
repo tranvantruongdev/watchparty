@@ -90,6 +90,13 @@ interface HostState {
   loop: boolean;
 }
 
+interface RoomIntermission {
+  // clientId of whoever called the intermission
+  by: string;
+  // epoch ms it ends at, null = "back whenever"
+  until: number | null;
+}
+
 interface PersistentRoom {
   roomId: string;
   password: string;

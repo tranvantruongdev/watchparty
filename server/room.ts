@@ -91,6 +91,11 @@ export class Room {
   private positionMap: { [clientId: string]: Position } = {};
   // clientId -> timestamps of accepted moves in the last second
   private moveTimes: { [clientId: string]: number[] } = {};
+  // The active intermission ("BRB"): who started it and when it ends
+  // (until null = no end time). In-memory only, like togetherSeconds
+  public intermission: { by: string; until: number | null } | null = null;
+  // clientId -> timestamps of accepted intermission changes in the last second
+  private intermissionTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
@@ -287,6 +292,7 @@ export class Room {
       socket.emit("REC:pictureMap", this.pictureMap);
       socket.emit("REC:tsMap", this.tsMap);
       socket.emit("REC:lock", this.lock);
+      socket.emit("REC:intermission", this.intermission);
       socket.emit("chatinit", this.chat);
       socket.emit("playlist", this.playlist);
       this.getRoomState(socket);
@@ -382,6 +388,11 @@ export class Room {
       );
       on("CMD:move", (data: unknown) => this.move(socket, data));
       on("CMD:emote", (data: unknown) => this.emote(socket, data));
+      // Pauses the room like CMD:pause, so it needs the lock like CMD:pause
+      on(
+        "CMD:intermission",
+        (data: unknown) => validateLock() && this.setIntermission(socket, data),
+      );
       on("CMD:joinVideo", () => this.joinVideo(socket));
       on("CMD:leaveVideo", () => this.leaveVideo(socket));
       on("CMD:joinScreenShare", (data) => {
@@ -652,6 +663,11 @@ export class Room {
     this.playbackRate = 1;
     this.tsMap = {};
     this.bufferingMap = {};
+    // New media ends any intermission
+    if (this.intermission) {
+      this.intermission = null;
+      this.io.of(this.roomId).emit("REC:intermission", null);
+    }
     this.clearBufferPause();
     this.preventTSUpdate = true;
     setTimeout(() => (this.preventTSUpdate = false), 1000);
@@ -873,6 +889,11 @@ export class Room {
       msg: this.tsMap[socket.clientId]?.toString(),
     };
     this.paused = false;
+    // Resuming the show ends any intermission
+    if (this.intermission) {
+      this.intermission = null;
+      this.io.of(this.roomId).emit("REC:intermission", null);
+    }
     // Resuming with a viewer still stuck buffers them behind again — keep watching
     this.armBufferPause();
     this.addChatMessage(socket, chatMsg);
@@ -1145,6 +1166,46 @@ export class Room {
     times.push(now);
     this.emoteTimes[socket.clientId] = times;
     socket.broadcast.emit("REC:emote", { id: socket.clientId, value: raw });
+  };
+
+  // Intermission: one of us steps out, the whole room pauses and shows a
+  // countdown until someone presses play (playVideo and cmdHost clear it).
+  // minutes 0 = no end time ("back whenever"). Unlike move/emote this is
+  // relayed to everyone including the sender (like the buffer auto-pause),
+  // so every player pauses together; capped at 2/s per socket (one click
+  // per break, re-clicking just changes the duration)
+  private setIntermission = (socket: Socket, raw: unknown) => {
+    if (
+      typeof raw !== "number" ||
+      !Number.isInteger(raw) ||
+      raw < 0 ||
+      raw > 30
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const times = (this.intermissionTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 2) {
+      return;
+    }
+    times.push(now);
+    this.intermissionTimes[socket.clientId] = times;
+    this.intermission = {
+      by: socket.clientId,
+      until: raw > 0 ? now + raw * 60000 : null,
+    };
+    this.paused = true;
+    // A manual pause means nobody is falling behind; drop any pending one
+    this.clearBufferPause();
+    this.io.of(this.roomId).emit("REC:pause");
+    this.io.of(this.roomId).emit("REC:intermission", this.intermission);
+    this.addChatMessage(socket, {
+      id: socket.clientId,
+      cmd: "intermission",
+      msg: raw.toString(),
+    });
   };
 
   private setBuffering = (socket: Socket, data: unknown) => {
@@ -1782,6 +1843,7 @@ export class Room {
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
       delete this.emoteTimes[clientId];
+      delete this.intermissionTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];
     }

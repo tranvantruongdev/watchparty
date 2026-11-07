@@ -740,3 +740,50 @@
     opacity: 0;
   }
 }
+
+/* Intermission ("BRB"): pixel marquee card over the paused screen. Same
+   hard-stop palette as the theater frame; pointer-events none so play
+   stays one click away. */
+.intermissionOverlay {
+  position: absolute;
+  inset: 0;
+  /* Above Mantine's Overlay (Unmute / local copy, z-index 200); the card sits at
+     the top so the Unmute button below it stays visible and clickable */
+  z-index: 201;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 24px;
+  justify-content: center;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(5, 3, 8, 0.6) 0 10px,
+    rgba(5, 3, 8, 0.35) 10px 20px
+  );
+}
+
+.intermissionCard {
+  padding: 16px 32px;
+  text-align: center;
+  color: #ffd75e;
+  background: #141031;
+  border: 4px solid #e0a63c;
+  /* Pixel frame steps around the gold border */
+  box-shadow:
+    0 0 0 4px #241a52,
+    0 0 0 8px #8a5a19;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.intermissionTitle {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+
+.intermissionLine {
+  margin-top: 8px;
+  font-size: 13px;
+  color: rgba(230, 220, 255, 0.9);
+}

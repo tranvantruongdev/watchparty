@@ -277,6 +277,8 @@ export class Chat extends React.Component<ChatProps> {
       return `paused the video at ${formatTimestamp(msg)}`;
     } else if (cmd === "bufferPause") {
       return `is stuck buffering — paused for you at ${formatTimestamp(msg)}`;
+    } else if (cmd === "intermission") {
+      return `called an intermission${msg && msg !== "0" ? ` (${msg} min)` : ""}`;
     } else if (cmd === "playbackRate") {
       return `set the playback rate to ${msg === "0" ? "auto" : `${msg}x`}`;
     } else if (cmd === "lock") {
