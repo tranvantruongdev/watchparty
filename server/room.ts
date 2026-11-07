@@ -91,6 +91,10 @@ export class Room {
   private positionMap: { [clientId: string]: Position } = {};
   // clientId -> timestamps of accepted moves in the last second
   private moveTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of popcorn grabs in the last second
+  private popcornTimes: { [clientId: string]: number[] } = {};
+  // Scoops left in the shared popcorn bucket, so a late joiner sees the same heap
+  private popcornScoops = 12;
   // The active intermission ("BRB"): who started it and when it ends
   // (until null = no end time). In-memory only, like togetherSeconds
   public intermission: { by: string; until: number | null } | null = null;
@@ -347,6 +351,7 @@ export class Room {
       socket.emit("REC:lock", this.lock);
       socket.emit("REC:intermission", this.intermission);
       socket.emit("REC:sleep", this.sleepTimer);
+      socket.emit("REC:popcorn", { scoops: this.popcornScoops });
       socket.emit("chatinit", this.chat);
       socket.emit("playlist", this.playlist);
       this.getRoomState(socket);
@@ -442,6 +447,7 @@ export class Room {
       );
       on("CMD:move", (data: unknown) => this.move(socket, data));
       on("CMD:emote", (data: unknown) => this.emote(socket, data));
+      on("CMD:popcorn", () => this.popcorn(socket));
       // Pauses the room like CMD:pause, so it needs the lock like CMD:pause
       on(
         "CMD:intermission",
@@ -1228,6 +1234,25 @@ export class Room {
     socket.broadcast.emit("REC:emote", { id: socket.clientId, value: raw });
   };
 
+  // Shared popcorn bucket beside the front row: the server counts the scoops
+  // (an empty bucket refills on the next grab) and tells everyone, sender
+  // included. No payload to validate; capped at 5/s per socket like emote
+  private popcorn = (socket: Socket) => {
+    const now = Date.now();
+    const times = (this.popcornTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 5) {
+      return;
+    }
+    times.push(now);
+    this.popcornTimes[socket.clientId] = times;
+    this.popcornScoops = this.popcornScoops <= 0 ? 12 : this.popcornScoops - 1;
+    this.io
+      .of(this.roomId)
+      .emit("REC:popcorn", { id: socket.clientId, scoops: this.popcornScoops });
+  };
+
   // Intermission: one of us steps out, the whole room pauses and shows a
   // countdown until someone presses play (playVideo and cmdHost clear it).
   // minutes 0 = no end time ("back whenever"). Unlike move/emote this is
@@ -1953,6 +1978,7 @@ export class Room {
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
       delete this.emoteTimes[clientId];
+      delete this.popcornTimes[clientId];
       delete this.intermissionTimes[clientId];
       delete this.sleepTimes[clientId];
       delete this.positionMap[clientId];

@@ -25,6 +25,9 @@ const SKIN = "#f2c7a5";
 // these and only these)
 const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
 
+// Scoops in a full popcorn bucket (the server counts what is left)
+const POPCORN = 12;
+
 // Seat whose cushion the feet at (x, y) are on, if any
 const seatAt = (x: number, y: number) => {
   for (const row of ROWS) {
@@ -69,6 +72,10 @@ export class PixelFloor extends React.Component<{
   walking = new Set<string>();
   // Emote bubble per character: what it says and when it fades (performance.now)
   emotes: Record<string, { value: string; until: number }> = {};
+  // Scoops left in the shared popcorn bucket, as the server last said
+  scoops = POPCORN;
+  // The current walkTo is a walk to the popcorn bucket: grab on arrival
+  grabWalk = false;
   // Spawn anywhere along the bottom edge: a narrow corner band would stack
   // two people joining at the same time on top of each other (7-unit-wide
   // characters), garbling their name tags
@@ -98,6 +105,7 @@ export class PixelFloor extends React.Component<{
     window.removeEventListener("blur", this.clearKeys);
     this.props.socket?.off("REC:move", this.onRemoteMove);
     this.props.socket?.off("REC:emote", this.onRemoteEmote);
+    this.props.socket?.off("REC:popcorn", this.onRemotePopcorn);
     this.props.socket?.off("connect", this.resend);
     this.props.socket?.off("REC:together", this.onTogether);
     cancelAnimationFrame(this.raf);
@@ -108,10 +116,12 @@ export class PixelFloor extends React.Component<{
     if (prev.socket !== this.props.socket) {
       prev.socket?.off("REC:move", this.onRemoteMove);
       prev.socket?.off("REC:emote", this.onRemoteEmote);
+      prev.socket?.off("REC:popcorn", this.onRemotePopcorn);
       prev.socket?.off("connect", this.resend);
       prev.socket?.off("REC:together", this.onTogether);
       this.props.socket?.on("REC:move", this.onRemoteMove);
       this.props.socket?.on("REC:emote", this.onRemoteEmote);
+      this.props.socket?.on("REC:popcorn", this.onRemotePopcorn);
       this.props.socket?.on("REC:together", this.onTogether);
       // The server forgets positions on disconnect: re-announce on reconnect
       this.props.socket?.on("connect", this.resend);
@@ -161,6 +171,13 @@ export class PixelFloor extends React.Component<{
     this.showEmote(data.id, data.value);
   };
 
+  // The bucket's scoop count, on join (no id) or after someone's grab (own
+  // grabs come back too)
+  onRemotePopcorn = (data: { id?: string; scoops: number }) => {
+    this.scoops = data.scoops;
+    if (data.id) this.showEmote(data.id, "🍿");
+  };
+
   showEmote = (id: string, value: string) => {
     if (!EMOTES.includes(value)) return;
     this.emotes[id] = { value, until: performance.now() + 2500 };
@@ -197,14 +214,19 @@ export class PixelFloor extends React.Component<{
     }
     this.keys.add(k);
     this.walkTo = undefined;
+    this.grabWalk = false;
   };
 
   onClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * W;
     const y = ((e.clientY - r.top) / r.height) * H;
-    // Clicking a seat back walks to that seat's cushion
-    this.walkTo = seatAt(x, y + SEAT_H / 2) || seatAt(x, y) || { x, y };
+    // Clicking the popcorn bucket walks over and grabs a handful; any other
+    // click is a plain walk (and cancels a pending grab)
+    this.grabWalk = x >= 0 && x <= 5 && y >= 11 && y <= 17;
+    this.walkTo = this.grabWalk
+      ? { x: 6, y: 14 }
+      : seatAt(x, y + SEAT_H / 2) || seatAt(x, y) || { x, y };
   };
 
   resend = () => this.send(true);
@@ -238,6 +260,10 @@ export class PixelFloor extends React.Component<{
         me.x = this.walkTo.x;
         me.y = this.walkTo.y;
         this.walkTo = undefined;
+        if (this.grabWalk) {
+          this.grabWalk = false;
+          this.props.socket?.emit("CMD:popcorn");
+        }
       } else {
         dx = ex;
         dy = ey;
@@ -415,6 +441,21 @@ export class PixelFloor extends React.Component<{
         px(sx, row, SEAT_W, 1, "#c23345");
         px(sx + 1, row + SEAT_H - 1, SEAT_W - 2, 1, "#5e1220");
       }
+      // Shared popcorn bucket beside the front row: click it to walk over and
+      // grab a handful. Drawn with the row it stands next to, so characters
+      // behind it are hidden by it
+      if (row === ROWS[0]) {
+        px(1, 16, 4, 1, "#120a24"); // shadow on the carpet
+        px(1, 14, 4, 2, "#c23345"); // striped bucket
+        px(2, 14, 1, 2, "#fff");
+        px(4, 14, 1, 2, "#fff");
+        const heap = this.scoops > POPCORN / 2 ? 2 : this.scoops > 0 ? 1 : 0;
+        if (heap) {
+          px(1, 14 - heap, 4, heap, "#fff7e0");
+          px(2, 14 - heap, 1, 1, "#f2c7a5");
+          px(3, 14 - heap, 1, 1, "#e8c86a");
+        }
+      }
     }
     while (i < order.length) drawChar(order[i++]);
     if (this.props.lightsDown) {
@@ -477,7 +518,7 @@ export class PixelFloor extends React.Component<{
         <canvas
           ref={this.canvasRef}
           onClick={this.onClick}
-          title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm"
+          title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm, bấm xô bắp rang bơ để lấy bắp"
           style={{
             width: "100%",
             // Short enough to leave the screen room on a laptop
