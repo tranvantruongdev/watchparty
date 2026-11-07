@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { ActionIcon, Button } from "@mantine/core";
 import { Socket } from "socket.io-client";
 
@@ -34,11 +35,49 @@ interface VideoChatProps {
   deaf: boolean;
 }
 
-export class VideoChat extends React.Component<VideoChatProps> {
+export class VideoChat extends React.Component<
+  VideoChatProps,
+  { playBlocked: boolean }
+> {
+  state = { playBlocked: false };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
 
   socket = this.props.socket;
+  // One stream per peer that we fill with their tracks ourselves: a track
+  // that starts on a recvonly transceiver (they were listening, then opened
+  // their mic) arrives with no stream of its own
+  remoteStreams: Record<string, MediaStream> = {};
+
+  // Show the peer's stream on their element (which can mount after the track
+  // arrives, or remount) and play it. Autoplay with sound is refused until
+  // the page has had a click, so retry on the next click or key press
+  attach = (id: string) => {
+    const el = window.watchparty.videoRefs[id];
+    const stream = this.remoteStreams[id];
+    if (!el || !stream) {
+      return;
+    }
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    if (el.paused) {
+      el.play().catch(() => {
+        this.setState({ playBlocked: true });
+        document.addEventListener("pointerdown", this.retryPlay, {
+          once: true,
+        });
+        document.addEventListener("keydown", this.retryPlay, { once: true });
+      });
+    }
+  };
+
+  retryPlay = () => {
+    this.setState({ playBlocked: false });
+    Object.keys(this.remoteStreams).forEach((key) =>
+      window.watchparty.videoRefs[key]?.play().catch(() => {}),
+    );
+  };
 
   componentDidMount() {
     this.socket.on("signal", this.handleSignal);
@@ -223,6 +262,7 @@ export class VideoChat extends React.Component<VideoChatProps> {
         track.stop();
       });
     window.watchparty.ourStream = undefined;
+    this.remoteStreams = {};
     Object.keys(videoPCs).forEach((key) => {
       videoPCs[key].close();
       delete videoPCs[key];
@@ -282,6 +322,7 @@ export class VideoChat extends React.Component<VideoChatProps> {
       if (!clientIds.has(key)) {
         value.close();
         delete videoPCs[key];
+        delete this.remoteStreams[key];
       }
     });
 
@@ -317,14 +358,23 @@ export class VideoChat extends React.Component<VideoChatProps> {
         };
         pc.ontrack = (event: RTCTrackEvent) => {
           // Mount the stream from peer
-          // console.log(stream);
-          videoRefs[id].srcObject = event.streams[0];
+          const stream = (this.remoteStreams[id] ||= new MediaStream());
+          stream.getTracks().forEach((t) => {
+            if (t.kind === event.track.kind && t !== event.track) {
+              stream.removeTrack(t);
+            }
+          });
+          if (!stream.getTracks().includes(event.track)) {
+            stream.addTrack(event.track);
+          }
+          this.attach(id);
         };
         pc.oniceconnectionstatechange = () => {
           if (pc.iceConnectionState === "failed") {
             // ICE failed (permanently, not a temporary disconnection, which would be "disconnected"), tear down and attempt to re-establish
             pc.close();
             delete videoPCs[id];
+            delete this.remoteStreams[id];
             this.updateWebRTC();
           }
         };
@@ -370,6 +420,23 @@ export class VideoChat extends React.Component<VideoChatProps> {
           padding: "4px",
         }}
       >
+        {this.state.playBlocked &&
+          // The People panel can be collapsed, so this sits on the page itself
+          createPortal(
+            <Button
+              style={{
+                position: "fixed",
+                bottom: 16,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 1000,
+              }}
+              onClick={this.retryPlay}
+            >
+              🔊 Click to hear voice chat
+            </Button>,
+            document.body,
+          )}
         {participants.map((p) => {
           return (
             <div key={p.id}>
@@ -502,6 +569,9 @@ export class VideoChat extends React.Component<VideoChatProps> {
                       ref={(el) => {
                         if (el) {
                           videoRefs[p.id] = el;
+                          if (p.id !== selfId) {
+                            this.attach(p.id);
+                          }
                         }
                       }}
                       style={{
