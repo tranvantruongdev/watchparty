@@ -3642,7 +3642,8 @@ export class App extends React.Component<AppProps, AppState> {
                 flexDirection: "column",
                 position: "relative",
                 width: this.state.showChatColumn ? 400 : 0,
-                maxWidth: 400,
+                // min() so the 400px column never overflows a phone screen
+                maxWidth: "min(400px, 100%)",
                 overflow: "hidden",
                 gap: "4px",
               }}

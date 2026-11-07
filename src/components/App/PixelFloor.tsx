@@ -1,6 +1,7 @@
 import React from "react";
 import type { Socket } from "socket.io-client";
 import { getColorForStringHex, getOrCreateClientId } from "../../utils/utils";
+import styles from "./App.module.css";
 
 const clientId = getOrCreateClientId();
 
@@ -413,21 +414,31 @@ export class PixelFloor extends React.Component<{
 
   render() {
     return (
-      <canvas
-        ref={this.canvasRef}
-        onClick={this.onClick}
-        title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm"
-        style={{
-          width: "100%",
-          // Short enough to leave the screen room on a laptop
-          maxWidth: `calc(24vh * ${W / H})`,
-          margin: "0 auto",
-          aspectRatio: `${W} / ${H}`,
-          imageRendering: "pixelated",
-          display: "block",
-          cursor: "pointer",
-        }}
-      />
+      <React.Fragment>
+        <canvas
+          ref={this.canvasRef}
+          onClick={this.onClick}
+          title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm"
+          style={{
+            width: "100%",
+            // Short enough to leave the screen room on a laptop
+            maxWidth: `calc(24vh * ${W / H})`,
+            margin: "0 auto",
+            aspectRatio: `${W} / ${H}`,
+            imageRendering: "pixelated",
+            display: "block",
+            cursor: "pointer",
+          }}
+        />
+        {/* Touch has no 1-6 keys: tap these instead (hidden on mouse devices) */}
+        <div className={styles.emoteRow}>
+          {EMOTES.map((e) => (
+            <button key={e} type="button" onClick={() => this.emote(e)}>
+              {e}
+            </button>
+          ))}
+        </div>
+      </React.Fragment>
     );
   }
 }

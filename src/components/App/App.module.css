@@ -31,7 +31,8 @@
   gap: 4px;
   @media only screen and (max-width: 600px) {
     flex-direction: column;
-    width: calc(100% - 8px);
+    /* No width: the element's margin already insets it; an explicit width here
+       double-counted the margin and pushed the page 8px off-screen. */
   }
 }
 
@@ -67,6 +68,9 @@
 
 .fullHeightColumn {
   height: calc(100vh - 72px);
+  /* Mobile browsers: 100vh ignores the collapsing URL bar; dvh tracks it.
+     Browsers without dvh keep the line above. */
+  height: calc(100dvh - 72px);
   /* opacity is the house-lights dim (theaterDim) */
   transition:
     width ease-out 0.5s,
@@ -281,6 +285,32 @@
   padding: 10px 0 2px;
   max-width: 100%;
   transition: opacity 0.4s;
+}
+
+/* Emote buttons under the pixel floor: phones have no 1-6 keys. Only shown
+   where the primary pointer is coarse (touch); mouse devices use the keys. */
+.emoteRow {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .emoteRow {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .emoteRow button {
+    min-width: 44px;
+    min-height: 44px; /* comfortable tap target */
+    font-size: 20px;
+    line-height: 1;
+    touch-action: manipulation; /* no double-tap zoom while spamming emotes */
+    background: rgba(24, 14, 46, 0.55);
+    border: 1px solid rgba(190, 150, 255, 0.2);
+    border-radius: 12px;
+  }
 }
 
 .seatRow {
