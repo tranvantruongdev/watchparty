@@ -2118,10 +2118,20 @@ export class App extends React.Component<AppProps, AppState> {
             }
             if (track.kind === "video") {
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
-              pc.addTransceiver(track, {
+              const tr = pc.addTransceiver(track, {
                 streams: [this.localStreamToPublish],
                 sendEncodings: [{ maxBitrate: 8_000_000 }],
               });
+              // Prefer VP9: on a moving picture VP8 hits the cap and drops
+              // 1080p to 480x270, VP9 keeps 1080p30 at the same bitrate
+              const codecs = RTCRtpSender.getCapabilities?.("video")?.codecs;
+              if (tr.setCodecPreferences && codecs) {
+                const vp9 = codecs.filter((c) => c.mimeType === "video/VP9");
+                tr.setCodecPreferences([
+                  ...vp9,
+                  ...codecs.filter((c) => c.mimeType !== "video/VP9"),
+                ]);
+              }
             } else {
               pc.addTrack(track, this.localStreamToPublish);
             }
