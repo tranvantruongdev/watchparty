@@ -37,6 +37,15 @@ const seatAt = (x: number, y: number) => {
   return undefined;
 };
 
+// Two characters are snuggling: both sat down, same row, neighbouring seats
+// (seat centres are SEAT_W + 1 apart; the aisle is far wider than that)
+const isSnuggle = (a: Position, b: Position) =>
+  a.sit &&
+  b.sit &&
+  Math.abs(a.y - b.y) <= 1 &&
+  Math.abs(a.x - b.x) >= SEAT_W &&
+  Math.abs(a.x - b.x) <= SEAT_W + 2;
+
 const hash = (id: string) =>
   Math.abs(id.split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7));
 
@@ -290,15 +299,24 @@ export class PixelFloor extends React.Component<{
       const hair = HAIR[hash(id) % 4];
       const x = Math.round(p.x) - 3;
       const top = Math.round(p.y) - 11;
-      px(x + 1, top, 5, 2, hair);
-      px(x + 1, top + 2, 5, 3, SKIN);
+      // Head leans 1px toward a seated neighbour
+      let lean = 0;
+      for (const q of Object.values(this.shown)) {
+        if (q !== p && isSnuggle(p, q)) {
+          lean = q.x >= p.x ? 1 : -1;
+          break;
+        }
+      }
+      const hx = x + 1 + lean;
+      px(hx, top, 5, 2, hair);
+      px(hx, top + 2, 5, 3, SKIN);
       if (p.dir === "u") {
-        px(x + 1, top + 2, 5, 2, hair); // back of the head
+        px(hx, top + 2, 5, 2, hair); // back of the head
       } else if (p.dir === "d") {
-        px(x + 2, top + 3, 1, 1, "#1b1b1b");
-        px(x + 4, top + 3, 1, 1, "#1b1b1b");
+        px(hx + 1, top + 3, 1, 1, "#1b1b1b");
+        px(hx + 3, top + 3, 1, 1, "#1b1b1b");
       } else {
-        px(p.dir === "l" ? x + 1 : x + 5, top + 3, 1, 1, "#1b1b1b");
+        px(p.dir === "l" ? hx : hx + 4, top + 3, 1, 1, "#1b1b1b");
       }
       px(x, top + 5, 7, 4, "#" + getColorForStringHex(id)); // shirt
       px(x, top + 6, 1, 2, SKIN); // hands
@@ -312,12 +330,13 @@ export class PixelFloor extends React.Component<{
       }
       // Name tag in real pixels so it stays readable
       ctx.font = `bold ${Math.max(10, u * 2.5)}px monospace`;
-      ctx.textAlign = "center";
+      // Seated neighbours: each name grows away from the other so they don't overlap
+      ctx.textAlign = lean > 0 ? "right" : lean < 0 ? "left" : "center";
       ctx.fillStyle = id === clientId ? "#ffe08a" : "#e9e0ff";
       ctx.fillText(
         (user?.buffering ? "⏳ " : "") +
           (this.props.nameMap[id] || id.slice(0, 6)),
-        (x + 3.5) * u,
+        (lean > 0 ? x + 6 : lean < 0 ? x + 1 : x + 3.5) * u,
         (top - 1) * u,
       );
     };
@@ -357,6 +376,26 @@ export class PixelFloor extends React.Component<{
       ctx.textBaseline = "middle";
       ctx.fillStyle = "#1b1b1b";
       ctx.fillText(e.value, (bx + 3) * u, (by + 2.5) * u);
+    }
+    // Snuggle hearts: neighbours who sat down together get a pulsing pixel
+    // heart between their heads, drawn after the dim so it stays bright
+    const seated = Object.values(this.shown);
+    for (let a = 0; a < seated.length; a++) {
+      for (let b = a + 1; b < seated.length; b++) {
+        if (!isSnuggle(seated[a], seated[b])) continue;
+        const hx = Math.round((seated[a].x + seated[b].x) / 2) - 2;
+        // Above the name tags (baseline at y - 12), clamped to the canvas
+        const hy = Math.max(
+          0,
+          Math.min(Math.round(seated[a].y), Math.round(seated[b].y)) - 19,
+        );
+        const c = Math.floor(now / 400) % 2 ? "#ff4d6d" : "#c9184a";
+        px(hx + 1, hy, 1, 1, c);
+        px(hx + 3, hy, 1, 1, c);
+        px(hx, hy + 1, 5, 1, c);
+        px(hx + 1, hy + 2, 3, 1, c);
+        px(hx + 2, hy + 3, 1, 1, c);
+      }
     }
     ctx.textBaseline = "alphabetic";
     if (this.together >= 60) {
