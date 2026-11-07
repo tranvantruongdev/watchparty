@@ -1546,7 +1546,7 @@ export class App extends React.Component<AppProps, AppState> {
     if (navigator.mediaDevices.getDisplayMedia) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         //@ts-expect-error
-        // Full HD when the screen has it; the direct share sends up to 8 Mbps
+        // Full HD when the screen has it; the direct share sends up to 16 Mbps
         video: { height: { ideal: 1080 }, logicalSurface: true },
         audio: {
           autoGainControl: false,
@@ -2128,7 +2128,9 @@ export class App extends React.Component<AppProps, AppState> {
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
               const tr = pc.addTransceiver(track, {
                 streams: [this.localStreamToPublish],
-                sendEncodings: [{ maxBitrate: 8_000_000 }],
+                // 8 Mbps was reached on busy movie scenes; the browser still
+                // sends less when the link can't carry it
+                sendEncodings: [{ maxBitrate: 16_000_000 }],
               });
               // Prefer VP9: on a moving picture VP8 hits the cap and drops
               // 1080p to 480x270, VP9 keeps 1080p30 at the same bitrate
