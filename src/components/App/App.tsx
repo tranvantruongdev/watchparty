@@ -32,7 +32,7 @@ import {
   getSavedPasswords,
 } from "../../utils/utils";
 import { generateName } from "../../utils/generateName";
-import { Chat } from "../Chat/Chat";
+import { Chat, type SeekCommand } from "../Chat/Chat";
 import { TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
@@ -496,6 +496,8 @@ export class App extends React.Component<AppProps, AppState> {
       this.localPause();
     });
     socket.on("REC:seek", (data: number) => {
+      // Remember where the room was, for /fb
+      this.rememberPreSeek();
       this.localSeek(data);
     });
     socket.on("REC:playbackRate", (data: number) => {
@@ -2355,23 +2357,68 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // Where the room was right before the most recent seek we saw (our own
+  // roomSeek, or a REC:seek from someone else): the target /fb jumps to
+  lastSeekFrom?: number;
+
+  rememberPreSeek = () => {
+    const t = this.Player().getCurrentTime();
+    if (Number.isFinite(t)) {
+      this.lastSeekFrom = t;
+    }
+  };
+
   roomSeek = (time: number) => {
     let target = time;
     target = Math.max(target, 0);
+    // Remember where the room was, for /fb
+    this.rememberPreSeek();
     this.Player().seekVideo(target);
     const toSend = this.getRoomTSToSet(target);
     this.socket.emit("CMD:seek", toSend);
   };
 
-  // Chat slash command (/30 forward, /-10 back): same path as the player's
-  // seek control so everyone syncs and the "jumped to" chat line appears.
-  // Screen/file share streams aren't seekable, and seeking follows the same
-  // lock rule as the controls.
-  roomSeekCommand = (delta: number) => {
+  // Chat slash commands (/30 forward, /-10 back, /12:30 or /1h9m54 to jump,
+  // /fb to rewind the room to before the last seek, /help for a local hint):
+  // same path as the player's seek control so everyone syncs and the "jumped
+  // to" chat line appears. Screen/file share streams aren't seekable, and
+  // seeking follows the same lock rule as the controls.
+  roomSeekCommand = (cmd: SeekCommand) => {
+    if (cmd.kind === "help") {
+      this.localHelpHint();
+      return;
+    }
     if (!this.hasDuration() || !this.haveLock()) {
       return;
     }
-    this.roomSeek(this.Player().getCurrentTime() + delta);
+    if (cmd.kind === "flashback") {
+      // No seek has happened yet, nothing to flash back to
+      if (this.lastSeekFrom === undefined) {
+        return;
+      }
+      this.roomSeek(this.lastSeekFrom);
+      return;
+    }
+    const target =
+      cmd.kind === "absolute"
+        ? cmd.seconds
+        : this.Player().getCurrentTime() + cmd.seconds;
+    this.roomSeek(target);
+  };
+
+  // /help: a hint pushed straight into this client's chat; never emitted, so
+  // nobody else sees it
+  localHelpHint = () => {
+    this.state.chat.push({
+      id: "",
+      cmd: "help",
+      system: true,
+      timestamp: new Date().toISOString(),
+    });
+    if (this.state.chat.length > 100) {
+      this.state.chat.shift();
+    }
+    this.setState({ chat: this.state.chat, scrollTimestamp: Date.now() });
   };
 
   getRoomTSToSet = (time: number) => {

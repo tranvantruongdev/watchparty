@@ -35,6 +35,51 @@ const clientId = getOrCreateClientId();
 const truncateReply = (input?: string, max = 30) =>
   input && input.length > max ? `${input.slice(0, max)}...` : input || "";
 
+// A parsed chat slash command: relative or absolute seek in seconds, rewind
+// to before the last seek, or the local /help hint
+export type SeekCommand =
+  | { kind: "relative" | "absolute"; seconds: number }
+  | { kind: "flashback" }
+  | { kind: "help" };
+
+// Parses a slash seek command, or returns undefined if `text` isn't one
+// (then it's normal chat). Accepted:
+//   /30, /-10             relative seconds
+//   /1h9m54, /9m54, /54s  absolute h/m/s (the seconds letter is optional)
+//   /12:30, /1:02:03      absolute m:ss / h:mm:ss
+// A leading "-" before an h/m/s or colon time means "back by that much"
+// (/-1h9m54, /-12:30); a bare integer is always relative (/-10).
+export const parseSeekCommand = (text: string): SeekCommand | undefined => {
+  let m = /^\/(-?\d+)$/.exec(text);
+  if (m) {
+    return { kind: "relative", seconds: Number(m[1]) };
+  }
+  // h/m/s compound: hours/minutes need their letter, trailing seconds don't
+  m = /^\/(-?)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/.exec(text);
+  if (m && (m[2] || m[3] || m[4])) {
+    const minutes = Number(m[3] || 0);
+    // A unit after a bigger one must be < 60: /1h75m and /90s are typos
+    if ((m[2] && minutes > 59) || Number(m[4] || 0) > 59) {
+      return undefined;
+    }
+    const total = Number(m[2] || 0) * 3600 + minutes * 60 + Number(m[4] || 0);
+    return m[1] === "-"
+      ? { kind: "relative", seconds: -total }
+      : { kind: "absolute", seconds: total };
+  }
+  m = /^\/(-?)(\d+):([0-5]?\d)(?::([0-5]?\d))?$/.exec(text);
+  if (m) {
+    const total =
+      m[4] !== undefined
+        ? Number(m[2]) * 3600 + Number(m[3]) * 60 + Number(m[4])
+        : Number(m[2]) * 60 + Number(m[3]);
+    return m[1] === "-"
+      ? { kind: "relative", seconds: -total }
+      : { kind: "absolute", seconds: total };
+  }
+  return undefined;
+};
+
 interface ChatProps {
   chat: ChatMessage[];
   nameMap: StringDict;
@@ -49,8 +94,9 @@ interface ChatProps {
   ref: RefObject<Chat>;
   // Shown beside the emoji button
   voiceButton?: React.ReactNode;
-  // Handles "/30" style seek commands from the chat input
-  onSeekCommand?: (delta: number) => void;
+  // Handles slash commands from the chat input: seek (relative/absolute),
+  // /fb rewind, and the local /help hint (see parseSeekCommand)
+  onSeekCommand?: (cmd: SeekCommand) => void;
 }
 
 export class Chat extends React.Component<ChatProps> {
@@ -136,12 +182,24 @@ export class Chat extends React.Component<ChatProps> {
     if (this.chatTooLong()) {
       return;
     }
-    // "/30" seeks forward 30s, "/-10" back 10s (SyncTube-style); the command
-    // itself is not sent as chat. Anything else starting with "/" is chat.
-    const seekMatch = /^\/(-?\d+)$/.exec(this.state.chatMsg);
-    if (seekMatch && this.props.onSeekCommand) {
+    // "/30" seeks forward 30s, "/-10" back 10s (SyncTube-style), "/12:30" or
+    // "/1h9m54" jumps to that time, "/fb" rewinds to before the last seek,
+    // "/help" lists them locally. The command itself is not sent as chat;
+    // anything else starting with "/" is chat.
+    if (this.state.chatMsg === "/help") {
       this.setState({ chatMsg: "", replyTo: undefined });
-      this.props.onSeekCommand(Number(seekMatch[1]));
+      this.props.onSeekCommand?.({ kind: "help" });
+      return;
+    }
+    if (this.state.chatMsg === "/fb" || this.state.chatMsg === "/flashback") {
+      this.setState({ chatMsg: "", replyTo: undefined });
+      this.props.onSeekCommand?.({ kind: "flashback" });
+      return;
+    }
+    const seekCmd = parseSeekCommand(this.state.chatMsg);
+    if (seekCmd && this.props.onSeekCommand) {
+      this.setState({ chatMsg: "", replyTo: undefined });
+      this.props.onSeekCommand(seekCmd);
       return;
     }
     if (this.state.replyTo?.id && this.state.replyTo.timestamp) {
@@ -239,6 +297,9 @@ export class Chat extends React.Component<ChatProps> {
           Subscribe for longer sessions.
         </React.Fragment>
       );
+    } else if (cmd === "help") {
+      // Local-only /help: the message never reaches the server
+      return "Seek: /30, /-10, /12:30, /1:02:03, /1h9m54, /-1h9m54, /fb";
     }
     return cmd;
   };
