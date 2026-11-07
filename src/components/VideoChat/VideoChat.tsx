@@ -128,6 +128,12 @@ export class VideoChat extends React.Component<VideoChatProps> {
     }
     // Listening already: send our mic on the same connections (renegotiated)
     // instead of leaving and rejoining, which the peer can't tell apart
+    // A second mic-on click raced past the button state (e.g. double click
+    // while the permission prompt was up): keep the one capture, stop ours
+    if (ourStream.getAudioTracks().length) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
     stream.getTracks().forEach((track) => {
       ourStream.addTrack(track);
       Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
