@@ -1,5 +1,5 @@
 import React, { useContext, useState } from "react";
-import { Modal, Button, Table, SegmentedControl } from "@mantine/core";
+import { Modal, Button, Table } from "@mantine/core";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { MetadataContext } from "../../MetadataContext";
 
@@ -42,21 +42,35 @@ export const ScreenShareModal = ({
       </ul>
       <div>
         Quality (max upload per viewer):{" "}
-        <SegmentedControl
-          value={mbps}
-          onChange={(v) => {
-            setMbps(v);
-            try {
-              window.localStorage.setItem("watchparty-share-mbps", v);
-            } catch {}
-          }}
-          data={[
-            { value: "4", label: "Low 4 Mbps" },
-            { value: "8", label: "Medium 8 Mbps" },
-            { value: "16", label: "High 16 Mbps" },
-          ]}
-        />
+        {[
+          ["4", "Low 4 Mbps"],
+          ["8", "Medium 8 Mbps"],
+          ["16", "High 16 Mbps"],
+        ].map(([v, label]) => (
+          <Button
+            key={v}
+            size="xs"
+            mr={6}
+            variant={mbps === v ? "filled" : "default"}
+            // The app theme gives every button the same look; mark the pick
+            style={
+              mbps === v
+                ? { background: "#e8b84a", color: "#1a1a1a" }
+                : undefined
+            }
+            onClick={() => {
+              setMbps(v);
+              try {
+                window.localStorage.setItem("watchparty-share-mbps", v);
+              } catch {}
+            }}
+          >
+            {mbps === v ? "✓ " : ""}
+            {label}
+          </Button>
+        ))}
       </div>
+      <br />
       <Table striped>
         <Table.Thead>
           <Table.Tr>
