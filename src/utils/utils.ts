@@ -417,12 +417,38 @@ export function getSavedPasswords(): Record<string, string> {
   return {};
 }
 
-// Ticket stubs of the memory wall, one list per room
+// Ticket stubs of the memory wall, one list per room. The stored value may
+// be corrupt (hand-edited, older shape): validate it so callers never see a
+// non-object (App.init indexes into it) or stubs missing fields (PixelFloor
+// draws url/title/at every animation frame)
 export function getSavedStubs(): Record<string, TicketStub[]> {
   try {
     const savedStubsString =
       window.localStorage.getItem("watchparty-stubs") ?? "{}";
-    return JSON.parse(savedStubsString);
+    const parsed = JSON.parse(savedStubsString);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    const clean: Record<string, TicketStub[]> = {};
+    for (const [roomId, stubs] of Object.entries(parsed)) {
+      if (!Array.isArray(stubs)) continue;
+      const valid = stubs.filter(
+        (s) =>
+          !!s &&
+          typeof s.url === "string" &&
+          typeof s.title === "string" &&
+          typeof s.at === "number" &&
+          Number.isFinite(s.at),
+      );
+      if (valid.length) {
+        clean[roomId] = valid;
+      }
+    }
+    return clean;
   } catch (e) {
     console.warn("[ALERT] Could not parse saved ticket stubs");
   }

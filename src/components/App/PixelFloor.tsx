@@ -69,7 +69,15 @@ export class PixelFloor extends React.Component<{
   walking = new Set<string>();
   // Emote bubble per character: what it says and when it fades (performance.now)
   emotes: Record<string, { value: string; until: number }> = {};
-  me: Position = { x: 4 + Math.random() * 3, y: H - 2, dir: "u", sit: false };
+  // Spawn anywhere along the bottom edge: a narrow corner band would stack
+  // two people joining at the same time on top of each other (7-unit-wide
+  // characters), garbling their name tags
+  me: Position = {
+    x: 4 + Math.random() * (W - 8),
+    y: H - 2,
+    dir: "u",
+    sit: false,
+  };
   walkTo?: { x: number; y: number };
   keys = new Set<string>();
   lastSent = 0;
@@ -370,17 +378,27 @@ export class PixelFloor extends React.Component<{
         px(x, top + 1, 1, 3, "#7cf5c8"); // headset
         px(x + 6, top + 1, 1, 3, "#7cf5c8");
       }
-      // Name tag in real pixels so it stays readable
+      // Name tag in real pixels so it stays readable, on a dark plate so two
+      // characters sharing a spot keep readable tags (back-to-front draw
+      // order puts the closer tag — plate and all — on top)
+      const name =
+        (user?.buffering ? "⏳ " : "") +
+        (this.props.nameMap[id] || id.slice(0, 6));
       ctx.font = `bold ${Math.max(10, u * 2.5)}px monospace`;
       // Seated neighbours: each name grows away from the other so they don't overlap
       ctx.textAlign = lean > 0 ? "right" : lean < 0 ? "left" : "center";
-      ctx.fillStyle = id === clientId ? "#ffe08a" : "#e9e0ff";
-      ctx.fillText(
-        (user?.buffering ? "⏳ " : "") +
-          (this.props.nameMap[id] || id.slice(0, 6)),
-        (lean > 0 ? x + 6 : lean < 0 ? x + 1 : x + 3.5) * u,
-        (top - 1) * u,
+      const tagX = (lean > 0 ? x + 6 : lean < 0 ? x + 1 : x + 3.5) * u;
+      const tagW = ctx.measureText(name).width;
+      const em = Math.max(10, u * 2.5);
+      ctx.fillStyle = "#241536";
+      ctx.fillRect(
+        tagX - (lean > 0 ? tagW : lean < 0 ? 0 : tagW / 2) - u * 0.4,
+        (top - 1) * u - em, // alphabetic baseline: plate from ~1em above it
+        tagW + u * 0.8,
+        em * 1.25, // down to ~0.25em below it
       );
+      ctx.fillStyle = id === clientId ? "#ffe08a" : "#e9e0ff";
+      ctx.fillText(name, tagX, (top - 1) * u);
     };
     // Back to front: lower on screen is closer to the viewer, and a seat row
     // hides the legs of whoever sits in it
