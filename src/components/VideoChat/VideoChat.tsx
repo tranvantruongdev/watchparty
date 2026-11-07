@@ -122,6 +122,7 @@ export class VideoChat extends React.Component<
     // Handle messages received from signaling server
     const msg = data.msg;
     const from = data.from;
+    const selfId = getOrCreateClientId();
     let pc = window.watchparty.videoPCs[from];
     if (!pc) {
       return;
@@ -139,6 +140,17 @@ export class VideoChat extends React.Component<
         if (!pc) {
           return;
         }
+      }
+      // Both peers opened their mic at once and both sent an offer: the peer
+      // with the larger id rolls its own half-made offer back and answers
+      // theirs, the other ignores the colliding offer and waits for the
+      // answer to its own (else setRemoteDescription throws and one mic
+      // never gets negotiated)
+      if (pc.signalingState === "have-local-offer") {
+        if (selfId < from) {
+          return;
+        }
+        await pc.setLocalDescription({ type: "rollback" });
       }
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       const answer = await pc.createAnswer();
