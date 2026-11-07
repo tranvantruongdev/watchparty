@@ -38,6 +38,7 @@ export class SubtitleModal extends React.Component<{
     loading: false,
     uploadFailed: false,
     localFailed: false,
+    searchFailed: false,
     searchResults: [],
     titleQuery: this.props
       .getMediaDisplayName(this.props.roomMedia)
@@ -53,11 +54,15 @@ export class SubtitleModal extends React.Component<{
         const fileIndex = match[1];
         if (fileIndex) {
           // Fetch title from the data endpoint
-          const response = await fetch(
-            this.props.roomMedia.replace("/stream", "/data"),
-          );
-          const data = await response.json();
-          this.setState({ titleQuery: data?.files[fileIndex]?.name });
+          try {
+            const response = await fetch(
+              this.props.roomMedia.replace("/stream", "/data"),
+            );
+            const data = await response.json();
+            this.setState({ titleQuery: data?.files[fileIndex]?.name });
+          } catch {
+            // The file name guess from the media URL stays as the fallback
+          }
         }
       }
     }
@@ -73,24 +78,28 @@ export class SubtitleModal extends React.Component<{
     reader.addEventListener("load", async (event) => {
       const subData = event.target?.result;
       // Upload to server
-      const resp = await fetch(serverPath + "/subtitle", {
-        method: "POST",
-        body: subData,
-        headers: { "Content-Type": "text/plain" },
-      });
-      if (!resp.ok) {
-        // Deployments without subtitle storage reject uploads; the local
-        // option below still works
+      try {
+        const resp = await fetch(serverPath + "/subtitle", {
+          method: "POST",
+          body: subData,
+          headers: { "Content-Type": "text/plain" },
+        });
+        if (!resp.ok) {
+          // Deployments without subtitle storage reject uploads; the local
+          // option below still works
+          this.setState({ uploadFailed: true });
+          return;
+        }
+        this.setState({ uploadFailed: false });
+        // Once URL obtained, make those the room subtitles
+        const json = await resp.json();
+        this.props.socket.emit(
+          "CMD:subtitle",
+          serverPath + "/subtitle/" + json.hash,
+        );
+      } catch {
         this.setState({ uploadFailed: true });
-        return;
       }
-      this.setState({ uploadFailed: false });
-      // Once URL obtained, make those the room subtitles
-      const json = await resp.json();
-      this.props.socket.emit(
-        "CMD:subtitle",
-        serverPath + "/subtitle/" + json.hash,
-      );
     });
     reader.readAsText(file);
   };
@@ -173,6 +182,13 @@ export class SubtitleModal extends React.Component<{
                 your own player.
               </Text>
             )}
+            {this.state.searchFailed && (
+              <Text c="red" size="xs">
+                Subtitle search/download failed. Try again, or use "Load
+                subtitle file from this device" instead — it only affects your
+                own player.
+              </Text>
+            )}
             <Divider my="lg" />
             <Title order={6}>OpenSubtitles</Title>
             <TextInput
@@ -187,15 +203,21 @@ export class SubtitleModal extends React.Component<{
                     color="green"
                     disabled={!this.props.haveLock()}
                     onClick={async () => {
-                      this.setState({ loading: true });
-                      const resp = await fetch(
-                        serverPath +
-                          "/searchSubtitles?title=" +
-                          this.state.titleQuery,
-                      );
-                      const json = await resp.json();
-                      this.setState({ searchResults: json });
-                      this.setState({ loading: false });
+                      this.setState({ loading: true, searchFailed: false });
+                      try {
+                        const resp = await fetch(
+                          serverPath +
+                            "/searchSubtitles?title=" +
+                            this.state.titleQuery,
+                        );
+                        const json = await resp.json();
+                        this.setState({ searchResults: json });
+                      } catch {
+                        // A failed search must not leave the spinner running forever
+                        this.setState({ searchFailed: true });
+                      } finally {
+                        this.setState({ loading: false });
+                      }
                     }}
                     leftSection={<IconSearch />}
                   >
@@ -236,16 +258,27 @@ export class SubtitleModal extends React.Component<{
                     <ActionIcon
                       disabled={!this.props.haveLock()}
                       onClick={async (e) => {
-                        const resp = await fetch(
-                          serverPath +
-                            "/downloadSubtitles?file_id=" +
-                            result.attributes.files[0]?.file_id,
-                        );
-                        const data = await resp.json();
-                        this.props.socket.emit(
-                          "CMD:subtitle",
-                          serverPath + data.link,
-                        );
+                        try {
+                          const resp = await fetch(
+                            serverPath +
+                              "/downloadSubtitles?file_id=" +
+                              result.attributes.files[0]?.file_id,
+                          );
+                          const data = await resp.json();
+                          if (!data.link) {
+                            // The download endpoint can fail (quota, upstream);
+                            // say so instead of loading a dead subtitle URL
+                            this.setState({ searchFailed: true });
+                            return;
+                          }
+                          this.setState({ searchFailed: false });
+                          this.props.socket.emit(
+                            "CMD:subtitle",
+                            serverPath + data.link,
+                          );
+                        } catch {
+                          this.setState({ searchFailed: true });
+                        }
                       }}
                     >
                       <IconDownload />

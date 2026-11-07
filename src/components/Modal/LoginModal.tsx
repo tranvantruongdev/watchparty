@@ -44,16 +44,30 @@ export class LoginModal extends React.Component<{
   //   });
   // };
 
+  // The popup providers: a closed/blocked popup would otherwise die as an
+  // unhandled rejection and the modal just sits there
   facebookSignIn = async () => {
-    const firebase = await getFirebase();
-    const provider = new firebase.auth.FacebookAuthProvider();
-    await firebase.auth().signInWithPopup(provider);
+    try {
+      const firebase = await getFirebase();
+      const provider = new firebase.auth.FacebookAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch (e: any) {
+      if (!/popup/.test(e?.code ?? "")) {
+        this.setState({ error: e.message });
+      }
+    }
   };
 
   googleSignIn = async () => {
-    const firebase = await getFirebase();
-    const provider = new firebase.auth.GoogleAuthProvider();
-    await firebase.auth().signInWithPopup(provider);
+    try {
+      const firebase = await getFirebase();
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch (e: any) {
+      if (!/popup/.test(e?.code ?? "")) {
+        this.setState({ error: e.message });
+      }
+    }
   };
 
   render() {

@@ -35,20 +35,31 @@ export async function createRoom(
 ) {
   const uid = user?.uid;
   const token = await user?.getIdToken();
-  const response = await fetch(serverPath + "/createRoom", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      uid,
-      token,
-      video,
-      roomKey: getRoomKey(),
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(serverPath + "/createRoom", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        uid,
+        token,
+        video,
+        roomKey: getRoomKey(),
+      }),
+    });
+  } catch {
+    alert("Could not reach the server. Check your connection and try again.");
+    return;
+  }
   if (response.status === 403) {
     alert("This theater is private. Open the invite link you were given.");
+    return;
+  }
+  if (!response.ok) {
+    // e.g. the shard is out of rooms — "/watch" + undefined would just confuse
+    alert("Could not create a room. Try again in a moment.");
     return;
   }
   const data = await response.json();

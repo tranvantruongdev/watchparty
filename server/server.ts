@@ -233,7 +233,8 @@ app.get("/downloadSubtitles", async (req, res) => {
     if (isAxiosError(e)) {
       console.log(e.response);
     }
-    throw e;
+    // Always answer, otherwise the client hangs until it times out
+    res.status(502).json({ error: "subtitle download failed" });
   }
 });
 
@@ -324,6 +325,12 @@ app.get("/youtubePlaylist/:playlistId", async (req, res) => {
 app.post("/createRoom", async (req, res) => {
   if (!hasRoomKey(req.body?.roomKey)) {
     res.status(403).json({ error: "roomKey" });
+    return;
+  }
+  // ponytail: cap rooms on this shard — each one keeps a namespace and a 1s
+  // timer in memory (~15KB measured) until it's been empty for 8 hours
+  if (rooms.size >= 1000) {
+    res.status(503).json({ error: "too many rooms" });
     return;
   }
   // Pick a name nobody else is using. Collisions in memory or in the DB just retry.

@@ -458,19 +458,25 @@ export class App extends React.Component<AppProps, AppState> {
     let roomId = "/" + this.props.urlRoomId;
     // if a vanity name, resolve the url to a room id
     if (this.props.vanity) {
-      const resp = await fetch(
-        serverPath + "/resolveRoom/" + this.props.vanity,
-      );
-      if (!resp.ok) {
+      try {
+        const resp = await fetch(
+          serverPath + "/resolveRoom/" + this.props.vanity,
+        );
+        if (!resp.ok) {
+          this.setState({ overlayMsg: "Couldn't load this room." });
+          return;
+        }
+        const data = await resp.json();
+        if (!data?.roomId) {
+          this.setState({ overlayMsg: "Couldn't load this room." });
+          return;
+        }
+        roomId = data.roomId;
+      } catch {
+        // A dead server must show the overlay, not die as an unhandled rejection
         this.setState({ overlayMsg: "Couldn't load this room." });
         return;
       }
-      const data = await resp.json();
-      if (!data?.roomId) {
-        this.setState({ overlayMsg: "Couldn't load this room." });
-        return;
-      }
-      roomId = data.roomId;
     }
     this.setState(
       {
@@ -487,8 +493,14 @@ export class App extends React.Component<AppProps, AppState> {
 
   join = async (roomId: string) => {
     const password = getSavedPasswords()[roomId] ?? "";
-    const response = await fetch(serverPath + "/resolveShard" + roomId);
-    const shard = Number(await response.text()) || "";
+    let shard: string | number = "";
+    try {
+      const response = await fetch(serverPath + "/resolveShard" + roomId);
+      shard = Number(await response.text()) || "";
+    } catch {
+      // The socket connection below reports its own error when the server is
+      // unreachable; a dead resolveShard must not die as an unhandled rejection
+    }
     const socket = io(serverPath + roomId, {
       transports: ["websocket"],
       query: {
@@ -975,16 +987,22 @@ export class App extends React.Component<AppProps, AppState> {
           this.setState({ downloaded: 0, total: 0, speed: 0 });
           if (currentMedia.includes("/stream?torrent=magnet")) {
             this.progressUpdater = window.setInterval(async () => {
-              const response = await fetch(
-                currentMedia.replace("/stream", "/progress"),
-              );
-              const data = await response.json();
-              this.setState({
-                downloaded: data.downloaded,
-                total: data.total,
-                speed: data.speed,
-                connections: data.connections,
-              });
+              try {
+                const response = await fetch(
+                  currentMedia.replace("/stream", "/progress"),
+                );
+                const data = await response.json();
+                this.setState({
+                  downloaded: data.downloaded,
+                  total: data.total,
+                  speed: data.speed,
+                  connections: data.connections,
+                });
+              } catch {
+                // The stream server went away; stop polling instead of
+                // throwing an unhandled rejection every second
+                window.clearInterval(this.progressUpdater);
+              }
             }, 1000);
           }
           if (isMagnet(currentMedia)) {
@@ -2881,19 +2899,24 @@ export class App extends React.Component<AppProps, AppState> {
       container.webkitEnterFullscreen();
       return;
     }
-    if (!document.fullscreenElement) {
-      // not currently in fullscreen
-      await container.requestFullscreen();
-    } else {
-      // e.g. switching from video fullscreen to theater mode
-      const bChangeElements = document.fullscreenElement !== container;
-      await document.exitFullscreen();
-      if (bChangeElements) {
+    // The browser can refuse (document lost focus mid-click, Escape race);
+    // don't let it die as an unhandled rejection from a click handler
+    try {
+      if (!document.fullscreenElement) {
+        // not currently in fullscreen
         await container.requestFullscreen();
+      } else {
+        // e.g. switching from video fullscreen to theater mode
+        const bChangeElements = document.fullscreenElement !== container;
+        await document.exitFullscreen();
+        if (bChangeElements) {
+          await container.requestFullscreen();
+        }
       }
+    } catch (e) {
+      console.warn("fullscreen request failed:", e);
     }
   };
-
   localToggleMute = () => {
     this.localSetMute(!this.Player().isMuted());
   };

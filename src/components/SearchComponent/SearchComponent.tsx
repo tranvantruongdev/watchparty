@@ -38,10 +38,15 @@ export class SearchComponent extends React.Component<SearchComponentProps> {
     let query = value || "";
     let results: SearchResult[] = [];
     let timestamp = Date.now();
-    if (this.props.type === "youtube") {
-      results = await getYouTubeResults(query);
-    } else if (this.props.type === "stream" && this.context.streamPath) {
-      results = await getStreamPathResults(this.context.streamPath, query);
+    try {
+      if (this.props.type === "youtube") {
+        results = await getYouTubeResults(query);
+      } else if (this.props.type === "stream" && this.context.streamPath) {
+        results = await getStreamPathResults(this.context.streamPath, query);
+      }
+    } catch {
+      // A failed search must not leave the spinner running forever
+      results = [];
     }
     if (timestamp > this.state.lastResultTimestamp) {
       this.setState({

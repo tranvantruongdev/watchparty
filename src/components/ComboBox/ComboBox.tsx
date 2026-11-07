@@ -49,35 +49,39 @@ export class ComboBox extends React.Component<ComboBoxProps, ComboBoxState> {
     this.setState({ loading: true });
     const query: string = value || "";
     let items = examples;
-    if (
-      query === "" ||
-      // Anything that doesn't pass this check we pass to YouTube as a search query
-      (query && (isHttp(query) || isMagnet(query)))
-    ) {
-      if (!value && this.props.mediaPath) {
-        items = await getMediaPathResults(this.props.mediaPath, "");
-      }
-      if (query) {
-        let type: SearchResult["type"] = "file";
-        if (isYouTube(query)) {
-          type = "youtube";
+    try {
+      if (
+        query === "" ||
+        // Anything that doesn't pass this check we pass to YouTube as a search query
+        (query && (isHttp(query) || isMagnet(query)))
+      ) {
+        if (!value && this.props.mediaPath) {
+          items = await getMediaPathResults(this.props.mediaPath, "");
         }
-        if (isMagnet(query)) {
-          type = "magnet";
+        if (query) {
+          let type: SearchResult["type"] = "file";
+          if (isYouTube(query)) {
+            type = "youtube";
+          }
+          if (isMagnet(query)) {
+            type = "magnet";
+          }
+          // Create entry from user input
+          items = [
+            {
+              name: query,
+              type,
+              url: query,
+              duration: 0,
+            },
+          ];
         }
-        // Create entry from user input
-        items = [
-          {
-            name: query,
-            type,
-            url: query,
-            duration: 0,
-          },
-        ];
+      } else {
+        const data = await getYouTubeResults(query);
+        items = data;
       }
-    } else {
-      const data = await getYouTubeResults(query);
-      items = data;
+    } catch {
+      // A failed lookup must not leave the spinner running forever
     }
     this.setState({
       loading: false,

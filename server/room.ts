@@ -131,6 +131,14 @@ export class Room {
   } | null = null;
   // clientId -> timestamps of accepted sleep-timer changes in the last second
   private sleepTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of accepted broadcast/relay events (chat, seek,
+  // host, roster updates, playlist, reactions) in the last second. One shared
+  // budget: every accepted event makes the server emit to the room, and a
+  // legit client only ever sends a handful per second
+  private relayTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of relayed WebRTC signaling in the last second.
+  // Own, higher budget: connection setup trickles dozens of candidates
+  private signalTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
@@ -420,11 +428,34 @@ export class Room {
         });
       };
 
-      on("CMD:name", (data: unknown) =>
-        this.changeUserName(socket, String(data)),
+      // Shared per-socket gate for every handler that broadcasts or relays
+      // data: returns false once the socket sent `cap` of them in the last
+      // second, so one flooded client can't make the server emit unbounded
+      const allowRelay = (
+        cap = 25,
+        map: { [clientId: string]: number[] } = this.relayTimes,
+      ) => {
+        const now = Date.now();
+        const times = (map[socket.clientId] || []).filter(
+          (t) => now - t < 1000,
+        );
+        if (times.length >= cap) {
+          return false;
+        }
+        times.push(now);
+        map[socket.clientId] = times;
+        return true;
+      };
+
+      on(
+        "CMD:name",
+        (data: unknown) =>
+          allowRelay() && this.changeUserName(socket, String(data)),
       );
-      on("CMD:picture", (data: unknown) =>
-        this.changeUserPicture(socket, String(data)),
+      on(
+        "CMD:picture",
+        (data: unknown) =>
+          allowRelay() && this.changeUserPicture(socket, String(data)),
       );
       on("CMD:uid", async (raw: unknown) => {
         let data = raw as { uid: string; token: string };
@@ -443,31 +474,41 @@ export class Room {
         }
       });
       on("CMD:host", (data: unknown) => {
-        validateLock() && this.startHosting(socket, String(data));
+        validateLock() &&
+          allowRelay() &&
+          this.startHosting(socket, String(data));
       });
       on("CMD:play", () => {
-        validateLock() && this.playVideo(socket);
+        validateLock() && allowRelay() && this.playVideo(socket);
       });
       on("CMD:pause", () => {
-        validateLock() && this.pauseVideo(socket);
+        validateLock() && allowRelay() && this.pauseVideo(socket);
       });
       on("CMD:seek", (data: unknown) => {
-        validateLock() && this.seekVideo(socket, data);
+        validateLock() && allowRelay() && this.seekVideo(socket, data);
       });
       on("CMD:playbackRate", (data: unknown) => {
-        validateLock() && this.setPlaybackRate(socket, data);
+        validateLock() && allowRelay() && this.setPlaybackRate(socket, data);
       });
       on("CMD:loop", (data: unknown) => {
-        validateLock() && this.setLoop(data);
+        validateLock() && allowRelay() && this.setLoop(data);
       });
       on("CMD:ts", (data: unknown) => this.setTimestamp(socket, data));
-      on("CMD:chat", (data: unknown) =>
-        this.sendChatMessage(socket, String(data)),
+      on(
+        "CMD:chat",
+        (data: unknown) =>
+          allowRelay() && this.sendChatMessage(socket, String(data)),
       );
-      on("CMD:chatV2", (data: unknown) => this.sendChatMessage(socket, data));
-      on("CMD:addReaction", (data: unknown) => this.addReaction(socket, data));
+      on(
+        "CMD:chatV2",
+        (data: unknown) => allowRelay() && this.sendChatMessage(socket, data),
+      );
+      on(
+        "CMD:addReaction",
+        (data: unknown) => allowRelay() && this.addReaction(socket, data),
+      );
       on("CMD:removeReaction", (data: unknown) => {
-        this.removeReaction(socket, data);
+        allowRelay() && this.removeReaction(socket, data);
       });
       on("CMD:floatReaction", (data: unknown) =>
         this.floatReaction(socket, data),
@@ -486,13 +527,21 @@ export class Room {
       on("CMD:sleep", (data: unknown) =>
         this.setSleepTimer(socket, data, validateLock()),
       );
-      on("CMD:joinVideo", () => this.joinVideo(socket));
-      on("CMD:leaveVideo", () => this.leaveVideo(socket));
-      on("CMD:joinScreenShare", (data) => {
-        validateLock() && this.joinScreenSharing(socket, data);
+      on("CMD:joinVideo", () => {
+        allowRelay() && this.joinVideo(socket);
       });
-      on("CMD:userMute", (data: unknown) => this.setUserMute(socket, data));
-      on("CMD:leaveScreenShare", () => this.leaveScreenSharing(socket));
+      on("CMD:leaveVideo", () => {
+        allowRelay() && this.leaveVideo(socket);
+      });
+      on("CMD:joinScreenShare", (data) => {
+        validateLock() && allowRelay() && this.joinScreenSharing(socket, data);
+      });
+      on("CMD:userMute", (data: unknown) => {
+        allowRelay() && this.setUserMute(socket, data);
+      });
+      on("CMD:leaveScreenShare", () => {
+        allowRelay() && this.leaveScreenSharing(socket);
+      });
       on("CMD:startVBrowser", (data: unknown) => {
         validateLock() && this.startVBrowser(socket, data);
       });
@@ -500,15 +549,15 @@ export class Room {
         validateLock() && this.stopVBrowser();
       });
       on("CMD:changeController", (data: unknown) => {
-        validateLock() && this.changeController(String(data));
+        validateLock() && allowRelay() && this.changeController(String(data));
       });
       on("CMD:subtitle", (data: unknown) => {
-        validateLock() && this.addSubtitles(String(data));
+        validateLock() && allowRelay() && this.addSubtitles(String(data));
       });
       on("CMD:lock", async (data: unknown) => {
         const hasLock = validateLock();
         const isOwner = await validateOwner();
-        (hasLock || isOwner) && this.lockRoom(socket, data);
+        (hasLock || isOwner) && allowRelay() && this.lockRoom(socket, data);
       });
       on("CMD:buffering", (data: unknown) => this.setBuffering(socket, data));
       on("CMD:askHost", () => {
@@ -522,16 +571,18 @@ export class Room {
         (await validateOwner()) && this.setRoomOwner(socket, data);
       });
       on("CMD:playlistNext", (data: unknown) => {
-        validateLock() && this.playlistNext(data);
+        validateLock() && allowRelay() && this.playlistNext(data);
       });
       on("CMD:playlistAdd", (data: unknown) => {
-        validateLock() && this.playlistAdd(socket, String(data));
+        validateLock() &&
+          allowRelay() &&
+          this.playlistAdd(socket, String(data));
       });
       on("CMD:playlistMove", (data: unknown) => {
-        validateLock() && this.playlistMove(data);
+        validateLock() && allowRelay() && this.playlistMove(data);
       });
       on("CMD:playlistDelete", (data: unknown) => {
-        validateLock() && this.playlistDelete(data);
+        validateLock() && allowRelay() && this.playlistDelete(data);
       });
       on("CMD:kickUser", async (data: unknown) => {
         (await validateOwner()) && this.kickUser(data);
@@ -540,9 +591,19 @@ export class Room {
         (await validateOwner()) && this.deleteChatMessages(data);
       });
 
-      on("signal", (data: unknown) => this.sendSignal(socket, data, "signal"));
-      on("signalSS", (data: unknown) =>
-        this.sendSignal(socket, data, "signalSS"),
+      // Signaling is unicast to one peer and bursts during connection setup
+      // (ICE trickling), so it gets its own higher budget
+      on(
+        "signal",
+        (data: unknown) =>
+          allowRelay(100, this.signalTimes) &&
+          this.sendSignal(socket, data, "signal"),
+      );
+      on(
+        "signalSS",
+        (data: unknown) =>
+          allowRelay(100, this.signalTimes) &&
+          this.sendSignal(socket, data, "signalSS"),
       );
 
       on("disconnect", () => this.onDisconnect(socket));
@@ -1466,7 +1527,8 @@ export class Room {
 
   private setUserMute = (socket: Socket, raw: unknown) => {
     const data = raw as { isMuted: boolean };
-    if (!data) {
+    // isMuted rides the roster broadcast verbatim, so only a real boolean
+    if (!data || typeof data.isMuted !== "boolean") {
       return;
     }
     const match = this.roster.find((user) => user.id === socket.clientId);
@@ -1984,8 +2046,10 @@ export class Room {
     raw: unknown,
     eventName: "signal" | "signalSS",
   ) => {
-    const data = raw as { to: string; msg: string; sharer?: boolean };
-    if (!data) {
+    const data = raw as { to: string; msg: unknown; sharer?: boolean };
+    // msg is the SDP/ICE object the peers exchange; cap the relay size
+    // (real payloads sit far below this)
+    if (!data || data.msg == null || JSON.stringify(data.msg).length > 100000) {
       return;
     }
     const fromClientId = socket.clientId;
@@ -2023,6 +2087,8 @@ export class Room {
       delete this.popcornTimes[clientId];
       delete this.intermissionTimes[clientId];
       delete this.sleepTimes[clientId];
+      delete this.relayTimes[clientId];
+      delete this.signalTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];
     }
