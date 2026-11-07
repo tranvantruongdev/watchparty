@@ -1999,6 +1999,12 @@ export class Room {
       if (index > -1) {
         this.roster.splice(index, 1);
       }
+      // A sharer who dropped (tab closed, reload, crash) can't send
+      // CMD:leaveScreenShare; without this the room stays stuck on their dead
+      // screenshare:// media, which nobody can watch or unpause
+      if (clientId === this.getSharerId()) {
+        this.cmdHost(null, "");
+      }
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
