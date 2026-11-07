@@ -30,6 +30,9 @@ interface ControlsProps {
   currentTime: number;
   disabled?: boolean;
   leaderTime?: number;
+  /** Watching alone (not following the room); toggleExplore leaves or rejoins */
+  exploring?: boolean;
+  toggleExplore?: () => void;
   isPauseDisabled?: boolean;
   playbackRate: number;
   roomPlaybackRate: number;
@@ -195,6 +198,21 @@ export const Controls = (props: ControlsProps) => {
             {Math.max(Math.floor(behindTime), 0)}
           </div> */}
       </div>
+      {props.toggleExplore && (
+        <Button
+          size="compact-xs"
+          color={props.exploring ? "orange" : "grey"}
+          variant={props.exploring ? "filled" : "subtle"}
+          title={
+            props.exploring
+              ? "Go back to the room's time"
+              : "Watch alone: seek and pause without moving the room"
+          }
+          onClick={props.toggleExplore}
+        >
+          {props.exploring ? "Rejoin" : "Solo"}
+        </Button>
+      )}
       <div className={` ${styles.text}`}>
         {formatTimestamp(getCurrent(), isLiveStream ? zeroTime : undefined)}
       </div>

@@ -165,6 +165,9 @@ interface AppState {
   // The player was asked to start but stayed cued (YouTube reports nothing when
   // it drops or refuses the request), so offer the start/unmute overlay
   playbackBlocked: boolean;
+  // Watching alone: room play/pause/seek don't move this player, and this
+  // player's controls don't move the room, until "Rejoin" (watchpoll-style)
+  exploring: boolean;
   downloaded: number;
   total: number;
   speed: number;
@@ -254,6 +257,7 @@ export class App extends React.Component<AppProps, AppState> {
     isVBrowser: false,
     isAutoPlayable: true,
     playbackBlocked: false,
+    exploring: false,
     downloaded: 0,
     total: 0,
     speed: 0,
@@ -490,12 +494,24 @@ export class App extends React.Component<AppProps, AppState> {
       window.location.assign("/");
     });
     socket.on("REC:play", () => {
+      if (this.state.exploring) {
+        // Remember the room state for Rejoin, leave our own player alone
+        this.setState({ roomPaused: false });
+        return;
+      }
       this.localPlay();
     });
     socket.on("REC:pause", () => {
+      if (this.state.exploring) {
+        this.setState({ roomPaused: true });
+        return;
+      }
       this.localPause();
     });
     socket.on("REC:seek", (data: number) => {
+      if (this.state.exploring) {
+        return;
+      }
       // Remember where the room was, for /fb
       this.rememberPreSeek();
       this.localSeek(data);
@@ -625,7 +641,10 @@ export class App extends React.Component<AppProps, AppState> {
             }
           },
         );
-        if (Math.abs(this.Player().getCurrentTime() - data.videoTS) > 2) {
+        if (
+          !this.state.exploring &&
+          Math.abs(this.Player().getCurrentTime() - data.videoTS) > 2
+        ) {
           this.localSeek(data.videoTS);
         }
         return;
@@ -640,6 +659,8 @@ export class App extends React.Component<AppProps, AppState> {
           loading: Boolean(data.video),
           nonPlayableMedia: false,
           playbackBlocked: false,
+          // New media: everyone starts it together
+          exploring: false,
           localCopyNeeded: false,
           isVBrowserLarge: data.isVBrowserLarge,
           vBrowserResolution: "1280x720@30",
@@ -982,6 +1003,7 @@ export class App extends React.Component<AppProps, AppState> {
         // Also not necessary for WebRTC sharing since it should be close to realtime
         if (
           !this.state.roomPaused &&
+          !this.state.exploring &&
           !this.state.isLiveStream &&
           this.hasDuration() &&
           this.state.roomPlaybackRate === 0
@@ -1085,7 +1107,8 @@ export class App extends React.Component<AppProps, AppState> {
     );
     socket.on("REC:getRoomState", this.handleRoomState);
     window.setInterval(() => {
-      if (this.state.roomMedia) {
+      // Not while watching alone: our time would drag the leader time around
+      if (this.state.roomMedia && !this.state.exploring) {
         const toSend = this.getRoomTSToSet(this.Player().getCurrentTime());
         this.socket.emit("CMD:ts", toSend);
         this.reportBuffering();
@@ -2341,6 +2364,15 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   roomTogglePlay = () => {
+    if (this.state.exploring) {
+      if (this.Player().shouldPlay()) {
+        this.Player().playVideo();
+      } else {
+        this.Player().pauseVideo();
+      }
+      this.refreshControls();
+      return;
+    }
     if (!this.haveLock()) {
       return;
     }
@@ -2355,6 +2387,29 @@ export class App extends React.Component<AppProps, AppState> {
       this.socket.emit("CMD:pause");
       this.localPause();
     }
+  };
+
+  // Watch alone / Rejoin. Rejoin jumps to the room's time and play state.
+  toggleExplore = () => {
+    if (!this.state.exploring) {
+      this.setState({ exploring: true });
+      return;
+    }
+    this.setState({ exploring: false }, () => {
+      // Our own last report in tsMap is from before going solo: leave it out
+      const others = Object.entries(this.state.tsMap)
+        .filter(([id]) => id !== clientId)
+        .map(([, ts]) => ts);
+      if (others.length) {
+        this.localSeek(others.length > 1 ? calculateMedian(others) : others[0]);
+      }
+      if (this.state.roomPaused) {
+        this.Player().pauseVideo();
+      } else {
+        this.Player().playVideo();
+      }
+      this.refreshControls();
+    });
   };
 
   // Where the room was right before the most recent seek we saw (our own
@@ -2374,6 +2429,9 @@ export class App extends React.Component<AppProps, AppState> {
     // Remember where the room was, for /fb
     this.rememberPreSeek();
     this.Player().seekVideo(target);
+    if (this.state.exploring) {
+      return;
+    }
     const toSend = this.getRoomTSToSet(target);
     this.socket.emit("CMD:seek", toSend);
   };
@@ -2728,7 +2786,9 @@ export class App extends React.Component<AppProps, AppState> {
         subtitled={this.Player().isSubtitled()}
         currentTime={this.Player().getCurrentTime()}
         duration={this.getDuration()}
-        disabled={!this.haveLock()}
+        disabled={!this.haveLock() && !this.state.exploring}
+        exploring={this.state.exploring}
+        toggleExplore={this.hasDuration() ? this.toggleExplore : undefined}
         leaderTime={this.hasDuration() ? this.getLeaderTime() : undefined}
         isPauseDisabled={this.isPauseDisabled()}
         playbackRate={this.Player().getPlaybackRate()}
