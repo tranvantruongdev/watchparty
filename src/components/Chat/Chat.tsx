@@ -301,7 +301,7 @@ export class Chat extends React.Component<ChatProps> {
       );
     } else if (cmd === "help") {
       // Local-only /help: the message never reaches the server
-      return "Seek: /30, /-10, /12:30, /1:02:03, /1h9m54, /-1h9m54, /fb";
+      return "Seek: /30, /-10, /12:30, /1:02:03, /1h9m54, /-1h9m54, /fb · Emotes: keys 1-6 on the floor";
     }
     return cmd;
   };

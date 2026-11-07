@@ -20,6 +20,10 @@ const SEAT_XS = [
 const HAIR = ["#2b1a12", "#5a3720", "#c9a24a", "#1d1d2b"];
 const SKIN = "#f2c7a5";
 
+// Emote bubbles over the characters, keys 1-6 (server relays CMD:emote with
+// these and only these)
+const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
+
 // Seat whose cushion the feet at (x, y) are on, if any
 const seatAt = (x: number, y: number) => {
   for (const row of ROWS) {
@@ -50,6 +54,8 @@ export class PixelFloor extends React.Component<{
   shown: Record<string, Position> = {};
   targets: Record<string, Position> = {};
   walking = new Set<string>();
+  // Emote bubble per character: what it says and when it fades (performance.now)
+  emotes: Record<string, { value: string; until: number }> = {};
   me: Position = { x: 4 + Math.random() * 3, y: H - 2, dir: "u", sit: false };
   walkTo?: { x: number; y: number };
   keys = new Set<string>();
@@ -70,6 +76,7 @@ export class PixelFloor extends React.Component<{
     window.removeEventListener("keyup", this.onKey);
     window.removeEventListener("blur", this.clearKeys);
     this.props.socket?.off("REC:move", this.onRemoteMove);
+    this.props.socket?.off("REC:emote", this.onRemoteEmote);
     this.props.socket?.off("connect", this.resend);
     this.props.socket?.off("REC:together", this.onTogether);
     cancelAnimationFrame(this.raf);
@@ -79,9 +86,11 @@ export class PixelFloor extends React.Component<{
     // App creates its socket after the first render (and anew on reconnect)
     if (prev.socket !== this.props.socket) {
       prev.socket?.off("REC:move", this.onRemoteMove);
+      prev.socket?.off("REC:emote", this.onRemoteEmote);
       prev.socket?.off("connect", this.resend);
       prev.socket?.off("REC:together", this.onTogether);
       this.props.socket?.on("REC:move", this.onRemoteMove);
+      this.props.socket?.on("REC:emote", this.onRemoteEmote);
       this.props.socket?.on("REC:together", this.onTogether);
       // The server forgets positions on disconnect: re-announce on reconnect
       this.props.socket?.on("connect", this.resend);
@@ -120,10 +129,42 @@ export class PixelFloor extends React.Component<{
     this.targets[data.id] = { ...data, x: data.x * W, y: data.y * H };
   };
 
+  // Emote bubble over your character: drawn here right away, the server
+  // relays it to everyone else as REC:emote
+  emote = (value: string) => {
+    this.showEmote(clientId, value);
+    this.props.socket?.emit("CMD:emote", value);
+  };
+
+  onRemoteEmote = (data: { id: string; value: string }) => {
+    this.showEmote(data.id, data.value);
+  };
+
+  showEmote = (id: string, value: string) => {
+    if (!EMOTES.includes(value)) return;
+    this.emotes[id] = { value, until: performance.now() + 2500 };
+  };
+
   clearKeys = () => this.keys.clear();
 
   onKey = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();
+    // 1-6: emote bubble over your character; ignore key repeats so holding a
+    // key can't flood the room (the server also caps at 5/s)
+    const slot = Number(e.key);
+    if (
+      e.type === "keydown" &&
+      !e.repeat &&
+      slot >= 1 &&
+      slot <= EMOTES.length
+    ) {
+      // Same rule as App's shortcuts: never steal keys from an input
+      if (document.activeElement && document.activeElement.tagName !== "BODY") {
+        return;
+      }
+      this.emote(EMOTES[slot - 1]);
+      return;
+    }
     if (!["w", "a", "s", "d"].includes(k)) return;
     if (e.type === "keyup") {
       this.keys.delete(k);
@@ -213,6 +254,9 @@ export class PixelFloor extends React.Component<{
       }
     }
     this.shown[clientId] = me;
+    for (const [id, e] of Object.entries(this.emotes)) {
+      if (e.until <= now) delete this.emotes[id];
+    }
     this.draw(now);
     this.raf = requestAnimationFrame(this.tick);
   };
@@ -298,6 +342,23 @@ export class PixelFloor extends React.Component<{
       ctx.fillStyle = "rgba(5, 3, 12, 0.35)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+    // Emote bubbles over heads, drawn after the dim so they stay readable
+    for (const [id, e] of Object.entries(this.emotes)) {
+      const p = this.shown[id];
+      if (!p) continue;
+      const bx = Math.round(p.x) - 3;
+      // Clamped so a character at the top edge still shows its bubble
+      const by = Math.max(0, Math.round(p.y) - 18);
+      px(bx, by, 6, 5, "#241536"); // border
+      px(bx + 1, by + 1, 4, 3, "#fff");
+      px(bx + 2, by + 5, 1, 1, "#241536"); // tail pointing at the head
+      ctx.font = `${Math.max(8, u * 2.5)}px monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#1b1b1b";
+      ctx.fillText(e.value, (bx + 3) * u, (by + 2.5) * u);
+    }
+    ctx.textBaseline = "alphabetic";
     if (this.together >= 60) {
       const m = Math.floor(this.together / 60);
       ctx.font = `bold ${Math.max(10, u * 2.5)}px monospace`;
@@ -316,7 +377,7 @@ export class PixelFloor extends React.Component<{
       <canvas
         ref={this.canvasRef}
         onClick={this.onClick}
-        title="WASD hoặc bấm để đi, dừng trên ghế để ngồi"
+        title="WASD hoặc bấm để đi, dừng trên ghế để ngồi, 1-6 để biểu cảm"
         style={{
           width: "100%",
           // Short enough to leave the screen room on a laptop

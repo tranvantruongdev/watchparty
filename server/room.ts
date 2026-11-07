@@ -37,6 +37,10 @@ const MAX_VBROWSERS_PER_USER = 2;
 // The only emojis accepted for CMD:floatReaction, anything else is dropped
 const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 
+// The only emojis accepted for CMD:emote (pixel bubbles on the theater floor),
+// anything else is dropped
+const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -77,6 +81,8 @@ export class Room {
   private sessionMap: StringDict = {};
   // clientId -> timestamps of the float reactions they sent in the last second
   private floatReactionTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of the emotes they sent in the last second
+  private emoteTimes: { [clientId: string]: number[] } = {};
   // clientId -> true while that viewer reports being stuck buffering
   private bufferingMap: BooleanDict = {};
   // clientId -> timestamps of accepted buffering changes in the last second
@@ -375,6 +381,7 @@ export class Room {
         this.floatReaction(socket, data),
       );
       on("CMD:move", (data: unknown) => this.move(socket, data));
+      on("CMD:emote", (data: unknown) => this.emote(socket, data));
       on("CMD:joinVideo", () => this.joinVideo(socket));
       on("CMD:leaveVideo", () => this.leaveVideo(socket));
       on("CMD:joinScreenShare", (data) => {
@@ -1120,6 +1127,26 @@ export class Room {
     socket.broadcast.emit("REC:move", { id: socket.clientId, ...pos });
   };
 
+  // Pixel speech bubble over your character on the theater floor: allowed
+  // emojis only, relayed to everyone else (the sender draws its own right
+  // away), capped at 5/s per socket like floatReaction; not stored anywhere,
+  // the bubble just fades out on the client
+  private emote = (socket: Socket, raw: unknown) => {
+    if (typeof raw !== "string" || !EMOTES.includes(raw)) {
+      return;
+    }
+    const now = Date.now();
+    const times = (this.emoteTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 5) {
+      return;
+    }
+    times.push(now);
+    this.emoteTimes[socket.clientId] = times;
+    socket.broadcast.emit("REC:emote", { id: socket.clientId, value: raw });
+  };
+
   private setBuffering = (socket: Socket, data: unknown) => {
     // Accept only booleans; ignore no-op updates so the roster isn't re-emitted
     if (typeof data !== "boolean") {
@@ -1754,6 +1781,7 @@ export class Room {
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
+      delete this.emoteTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];
     }
