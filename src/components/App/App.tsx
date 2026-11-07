@@ -3396,7 +3396,10 @@ export class App extends React.Component<AppProps, AppState> {
                             ] ?? "Someone") + " stepped out"}
                           </div>
                           <div className={styles.intermissionLine}>
-                            {this.state.roomIntermission.until
+                            {/* An expired deadline is just an open break again:
+                                never show a "Back by" time in the past */}
+                            {this.state.roomIntermission.until &&
+                            this.state.roomIntermission.until > Date.now()
                               ? `Back by ${new Date(
                                   this.state.roomIntermission.until,
                                 ).toLocaleTimeString([], {
