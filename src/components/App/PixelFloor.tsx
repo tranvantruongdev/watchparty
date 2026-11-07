@@ -19,9 +19,10 @@ const SEAT_XS = [
   ...Array.from({ length: 5 }, (_, i) => 54 + i * 7),
 ];
 // Character presets: six anime-chibi people (big head, big eyes, hair styles)
-// plus four original creatures (round bunny, cat loaf, fox sprite, ghost
-// blob). Everything is drawn in code — no image files. The ids must mirror
-// the CHARS allow-list in server/room.ts
+// plus eight original elemental creatures (bunny, cat, fox, ghost, ember
+// kitten, leaf snail, thunder chick, water bunny) drawn at half-cell detail.
+// Everything is drawn in code — no image files. The ids must mirror the CHARS
+// allow-list in server/room.ts
 type CharPreset = {
   id: string;
   name: string;
@@ -33,10 +34,11 @@ type CharPreset = {
   shirt?: string;
   shirtShade?: string;
   // creatures
-  creature?: "tho" | "meo" | "cao" | "ma";
+  creature?: "tho" | "meo" | "cao" | "ma" | "miu" | "oc" | "chim" | "suoi";
   fur?: string;
   furShade?: string;
   belly?: string;
+  accent?: string; // second accent (inner-ear pink, flame, droplet…)
 };
 
 const CHARS: CharPreset[] = [
@@ -132,11 +134,314 @@ const CHARS: CharPreset[] = [
     furShade: "#a894d4",
     belly: "#241a33",
   },
+  {
+    id: "miu",
+    name: "Mèo than hồng",
+    creature: "miu",
+    fur: "#6e6478",
+    furShade: "#4e4658",
+    belly: "#ffb066",
+    accent: "#ff8c5a",
+  },
+  {
+    id: "oc",
+    name: "Ốc lá cuộn",
+    creature: "oc",
+    fur: "#6fbf5a",
+    furShade: "#3f8f3c",
+    belly: "#f6ecc8",
+  },
+  {
+    id: "chim",
+    name: "Gà sấm nhỏ",
+    creature: "chim",
+    fur: "#ffd95c",
+    furShade: "#e0a83a",
+    belly: "#ff8c3a",
+  },
+  {
+    id: "suoi",
+    name: "Thỏ suối",
+    creature: "suoi",
+    fur: "#8fc7e8",
+    furShade: "#5f9cc4",
+    belly: "#e8f6ff",
+    accent: "#3f9cd4",
+  },
 ];
 
 const OUT = "#1b1428"; // silhouette rim
 const BLUSH = "#f2a0a8";
 const LEGS = "#2a2a3a";
+
+// Creature sprites at half-cell detail: 14x22 sub-pixels filling the same
+// 7x11 floor box as before (feet on the bottom rows), so seats, collisions,
+// snuggles and emote positions are unchanged — just twice the resolution.
+// All designs are original: no franchise character, name, color scheme or
+// silhouette. Row strings, chars: O outline, f fur, s furShade, b belly,
+// k accent, w white, . empty. Eyes, blush, mouth, tails and the ghost hem
+// are painted over the body by paintChar
+type CreatureArt = {
+  art: string[];
+  eyeY: number; // top row of the eyes
+  eyeW?: number; // eye width in sub-pixels (4, or 3 on the narrow face)
+  eyeL?: number; // left eye x (default 2; the right eye sits at 8)
+  eyeR?: number;
+  mouthY: number;
+  mouthX?: number; // default 6 (a 2-sub-pixel mouth)
+  blushY?: number; // blush row; omit for no blush
+  blushX?: number; // default 1, mirrored on the right side
+};
+const CREATURE_ART: Record<string, CreatureArt> = {
+  tho: {
+    // Round bunny: tall pink-inner ears, dome head, white belly patch
+    eyeY: 9,
+    mouthY: 14,
+    blushY: 14,
+    art: [
+      "..OO......OO..",
+      "..ObO....ObO..",
+      "..ObO....ObO..",
+      "..ObO....ObO..",
+      "..ObO....ObO..",
+      "..ObO....ObO..",
+      "..OOOOOOOOOO..",
+      ".OfffffffffsO.",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      ".OsffffffffsO.",
+      "..OwwwwwwssO..",
+      "..OwwwwwwssO..",
+      "..OwwwwwwssO..",
+      "..OOssssssOO..",
+      "..OfO....OfO..",
+      "..OOO....OOO..",
+    ],
+  },
+  meo: {
+    // Cream cat loaf: triangle ears, forehead stripes, flat bottom
+    eyeY: 9,
+    mouthY: 15,
+    blushY: 14,
+    art: [
+      "..O........O..",
+      ".ObO......ObO.",
+      ".ObO......ObO.",
+      ".ObO......ObO.",
+      ".OOOOOOOOOOOO.",
+      "OffffffffffssO",
+      "OfffssffssfffO",
+      "OfffssffssfffO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OssffffffffssO",
+      "OssffffffffssO",
+      "OssssssssssssO",
+      "OssssssssssssO",
+      ".OOOOOOOOOOOO.",
+    ],
+  },
+  cao: {
+    // Fire fox: tall shaded-tip ears, cream muzzle, slim chest
+    eyeY: 8,
+    mouthY: 13,
+    blushY: 13,
+    art: [
+      ".OsO......OsO.",
+      ".OfO......OfO.",
+      ".OfO......OfO.",
+      ".OfO......OfO.",
+      ".OfO......OfO.",
+      ".OOOOOOOOOOOO.",
+      "OfffffffffffsO",
+      "OfffffffffffsO",
+      "OfffffffffffsO",
+      "OfffffffffffsO",
+      "OfffffffffffsO",
+      "OfffffffffffsO",
+      "OfffbbbbbbffsO",
+      "OffbbbbbbbbfsO",
+      "OffbbbbbbbbfsO",
+      ".OfffffffffsO.",
+      "..ObbbbbbssO..",
+      "..ObbbbbbssO..",
+      "..OffffffssO..",
+      "..OOssssssOO..",
+      "..OfO....OfO..",
+      "..OOO....OOO..",
+    ],
+  },
+  ma: {
+    // Ghost blob: bell dome; the wavy hem below is procedural
+    eyeY: 8,
+    mouthY: 14,
+    blushY: 13,
+    blushX: 2,
+    art: [
+      "....OOOOOO....",
+      "..OOffffffOO..",
+      ".OffffffffffO.",
+      ".OffffffffffO.",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      ".OffffffffffO.",
+      ".OsffffffffsO.",
+      ".OsffffffffsO.",
+      "..OssssssssO..",
+      "...OssssssO...",
+      "....OOOOOO....",
+      "..............",
+      "..............",
+      "..............",
+    ],
+  },
+  miu: {
+    // Ember kitten: smoky gray dome, ember inner ears and chest
+    eyeY: 9,
+    mouthY: 14,
+    blushY: 14,
+    blushX: 2,
+    art: [
+      "..O........O..",
+      ".ObO......ObO.",
+      ".ObO......ObO.",
+      ".ObO......ObO.",
+      ".OfO......OfO.",
+      ".OOOOOOOOOOOO.",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      ".OfffffffffsO.",
+      ".OfffffffffsO.",
+      "..ObbbbbbssO..",
+      "..ObbbbbbssO..",
+      "..OffffffssO..",
+      "..OffffffssO..",
+      "..OOssssssOO..",
+      "..OfO....OfO..",
+      "..OOO....OOO..",
+    ],
+  },
+  oc: {
+    // Leaf snail: rolled-leaf shell (spiral + stem) on a cream slug
+    eyeY: 13,
+    eyeW: 3,
+    eyeL: 1,
+    eyeR: 6,
+    mouthY: 17,
+    mouthX: 2,
+    art: [
+      "..........ss..",
+      ".........OOO..",
+      "........OwwO..",
+      "........OfffO.",
+      "........OffffO",
+      "........OsssfO",
+      "........OsffsO",
+      "........OsffsO",
+      "........OsffsO",
+      "........OfssfO",
+      "...OOOOOOffffO",
+      "..OffffOOOffOO",
+      ".OffffffOOOO..",
+      "OffffffffO....",
+      "OffffffffO....",
+      "OffffffffO....",
+      "OffffffffO....",
+      "OffffffffO....",
+      ".OOOOOOOObbbbO",
+      "ObbbbbbbbbbbbO",
+      "ObbbbbbbbbbbbO",
+      ".OOOOOOOOOOOO.",
+    ],
+  },
+  chim: {
+    // Thunder chick: round bird, sprout crest, orange beak and legs,
+    // wing stubs, chest bolt
+    eyeY: 8,
+    mouthY: 14,
+    blushY: 13,
+    blushX: 3,
+    art: [
+      "......ss......",
+      ".....OOOOOO...",
+      "...OOffffOO...",
+      "..OffffffffO..",
+      ".OffffffffffO.",
+      "OffffffffffffO",
+      "OffffffffffffO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OffffffffffssO",
+      "OsffffffffffsO",
+      "OssfffffffffsO",
+      "OssfffffffffsO",
+      "OssfffbbfffssO",
+      "OssfffbbfffssO",
+      "ObbbbbbbbbbssO",
+      "ObbbbbssbbbssO",
+      "ObbbbssbbbbssO",
+      "ObbbbsbbbbbssO",
+      "ObsssssssssssO",
+      "....bb....bb..",
+      "...bbb....bbb.",
+    ],
+  },
+  suoi: {
+    // Water bunny: lop ears down the sides, forehead droplet
+    eyeY: 9,
+    mouthY: 14,
+    blushY: 14,
+    blushX: 2,
+    art: [
+      "...OOOOOOOO...",
+      "..OffffffffO..",
+      ".OffffffffffO.",
+      ".OffffffffffO.",
+      "OsffffffffffsO",
+      "OsffffkkffffsO",
+      "OsffffkkffffsO",
+      "OsffffkkffffsO",
+      "OsffffffffffsO",
+      "OsffffffffffsO",
+      "OsffffffffffsO",
+      "OsffffffffffsO",
+      "OsffffffffffsO",
+      "OOffffffffffOO",
+      ".OffffffffffO.",
+      ".OfffffffffsO.",
+      "..ObbbbbbssO..",
+      "..ObbbbbbssO..",
+      "..ObbbbbbssO..",
+      "..OOssssssOO..",
+      "..OfO....OfO..",
+      "..OOO....OOO..",
+    ],
+  },
+};
 
 // Paint one character through a px(x, y, w, h, color) helper, inside the
 // 7x11 box whose top-left is (fx, fy) (feet on its bottom row). Chibi rules
@@ -244,95 +549,90 @@ const paintChar = (
       px(hx + 6, hy, 1, 3, "#7cf5c8");
     }
   } else {
-    // Creatures: same 7x11 box, one round body with ears on top. They hop
-    // while walking, keep a rim, and glance 1px toward their facing
+    // Creatures: half-cell sprites from CREATURE_ART (14x22 sub-pixels in
+    // the same 7x11 box). They hop while walking, squash-bob when idle (the
+    // ghost floats instead), glance 1 sub-pixel toward their facing
     const fur = c.fur || "#f4f0ff";
     const furShade = c.furShade || "#cfc6ec";
     const belly = c.belly || "#fff";
+    const accent = c.accent || BLUSH;
+    const a = CREATURE_ART[c.creature];
     const fy = o.fy - (o.walking && o.step ? 1 : 0); // hop frame
     const fx = o.fx;
     const back = o.dir === "u";
-    const shift = o.dir === "l" ? -1 : o.dir === "r" ? 1 : 0;
-    if (c.creature === "tho") {
-      // Bunny: tall ears with pink insides, round loaf, paw feet
-      px(fx + 2, fy, 1, 3, fur);
-      px(fx + 4, fy, 1, 3, fur);
-      px(fx + 2, fy + 1, 1, 1, belly);
-      px(fx + 4, fy + 1, 1, 1, belly);
-      px(fx, fy + 2, 7, 9, OUT);
-      px(fx + 1, fy + 2, 5, 8, fur);
-      px(fx + 2, fy + 7, 3, 2, "#fff"); // belly patch
-      px(fx + 1, fy + 10, 2, 1, furShade); // paws
-      px(fx + 4, fy + 10, 2, 1, furShade);
-      if (!back) {
-        eye(fx + 1 + shift, fy + 4);
-        eye(fx + 4 + shift, fy + 4);
-        px(fx + 3, fy + 6, 1, 1, OUT);
-        px(fx + 1, fy + 6, 1, 1, BLUSH);
-        px(fx + 5, fy + 6, 1, 1, BLUSH);
+    // sp paints in sprite coords: one sub-pixel is half a floor cell
+    const sp = (x: number, y: number, w: number, h: number, col: string) =>
+      px(fx + x / 2, fy + y / 2, w / 2, h / 2, col);
+    const pal: Record<string, string> = {
+      O: OUT,
+      f: fur,
+      s: furShade,
+      b: belly,
+      k: accent,
+      w: "#fff",
+    };
+    // Idle: the body sinks 1 sub-pixel onto its planted feet every other
+    // beat (same 700ms rhythm as the people bob); the ghost has no feet,
+    // so it floats 1 unit up instead
+    const beat = Math.floor(o.now / 700) % 2;
+    const bob = c.creature === "ma" ? (beat ? -2 : 0) : beat ? 1 : 0;
+    a.art.forEach((row, y) => {
+      const dy = y < 20 ? bob : 0; // the bottom 2 rows are the feet
+      for (let x = 0; x < 14; x++) {
+        const ch = row[x];
+        if (ch !== ".") sp(x, y + dy, 1, 1, pal[ch] || fur);
       }
-    } else if (c.creature === "meo") {
-      // Cat loaf: triangle ears over the rim, forehead stripes, wiggling tail
-      px(fx, fy + 2, 7, 9, OUT);
-      px(fx + 1, fy + 3, 5, 8, fur);
-      px(fx + 1, fy + 10, 5, 1, furShade);
-      px(fx + 1, fy + 1, 2, 2, fur);
-      px(fx + 4, fy + 1, 2, 2, fur);
-      px(fx + 2, fy + 3, 1, 1, furShade);
-      px(fx + 4, fy + 3, 1, 1, furShade);
-      const wag = Math.floor(o.now / 400) % 2;
-      px(fx + 7, fy + 6 + wag, 1, 3, fur);
-      px(fx + 7, fy + 6 + wag, 1, 1, furShade);
-      if (!back) {
-        eye(fx + 1 + shift, fy + 5);
-        eye(fx + 4 + shift, fy + 5);
-        px(fx + 3, fy + 7, 1, 1, OUT);
-        px(fx + 1, fy + 7, 1, 1, BLUSH);
-        px(fx + 5, fy + 7, 1, 1, BLUSH);
-      }
-    } else if (c.creature === "cao") {
-      // Fox sprite: tall ears with shaded tips, muzzle, bushy light-tipped tail
-      px(fx + 1, fy, 2, 3, fur);
-      px(fx + 4, fy, 2, 3, fur);
-      px(fx + 1, fy, 2, 1, furShade);
-      px(fx + 4, fy, 2, 1, furShade);
-      px(fx, fy + 2, 7, 9, OUT);
-      px(fx + 1, fy + 2, 5, 8, fur);
-      px(fx + 2, fy + 5, 3, 2, belly); // muzzle
-      px(fx + 2, fy + 7, 3, 3, belly);
-      px(fx + 1, fy + 10, 2, 1, furShade);
-      px(fx + 4, fy + 10, 2, 1, furShade);
-      px(fx + 7, fy + 7, 1, 3, fur);
-      px(fx + 7, fy + 7, 1, 1, belly); // tail tip
-      if (!back) {
-        eye(fx + 1 + shift, fy + 3);
-        eye(fx + 4 + shift, fy + 3);
-        px(fx + 3, fy + 5, 1, 1, OUT); // nose on the muzzle
-        px(fx + 1, fy + 6, 1, 1, BLUSH);
-        px(fx + 5, fy + 6, 1, 1, BLUSH);
-      }
-    } else {
-      // Ghost blob: dome body with an animated wavy hem
-      px(fx, fy, 7, 11, OUT);
-      px(fx + 2, fy, 3, 1, fur);
-      px(fx + 1, fy + 1, 5, 8, fur);
-      for (let i = 0; i < 5; i++) {
-        const h = ((i + Math.floor(o.now / 500)) % 2) + 1;
-        px(fx + 1 + i, fy + 10 - h, 1, h, fur);
-      }
-      if (!back) {
-        eye(fx + 1 + shift, fy + 3);
-        eye(fx + 4 + shift, fy + 3);
-        px(fx + 3, fy + 5, 1, 1, OUT);
-        px(fx + 1, fy + 5, 1, 1, BLUSH);
-        px(fx + 5, fy + 5, 1, 1, BLUSH);
+    });
+    // Ghost hem: 8 scallops waving under the bell
+    if (c.creature === "ma") {
+      for (let i = 0; i < 8; i++) {
+        const h = ((i + beat) % 2) + 2;
+        sp(3 + i, 22 - h + bob, 1, h, fur);
       }
     }
+    // Tail (or flame) poking past the right edge of the box, wagging on a
+    // 2-frame cycle; tho, ma, oc and chim have none
+    const wag = Math.floor(o.now / 400) % 2;
+    if (c.creature === "meo") {
+      sp(14, 11 + wag * 2 + bob, 2, 6, fur);
+      sp(14, 11 + wag * 2 + bob, 2, 2, furShade);
+    } else if (c.creature === "cao") {
+      sp(14, 12 + wag * 2 + bob, 2, 6, fur);
+      sp(14, 12 + wag * 2 + bob, 2, 2, belly);
+    } else if (c.creature === "miu") {
+      sp(14, 9 + wag * 2 + bob, 2, 5, accent);
+      sp(14, 14 + wag * 2 + bob, 2, 2, furShade);
+    } else if (c.creature === "suoi") {
+      sp(14, 12 + wag * 2 + bob, 2, 4, fur);
+    }
+    // Face: big glossy eyes (a blink squashes them to a line), blush, tiny
+    // mouth; a back view keeps the body and drops the face
+    if (!back) {
+      const ew = a.eyeW || 4;
+      const eh = a.eyeW ? 4 : 5;
+      const shift = o.dir === "l" ? -1 : o.dir === "r" ? 1 : 0;
+      const seye = (ex: number) => {
+        if (blink) {
+          sp(ex + shift, a.eyeY + bob + (eh >> 1), ew, 1, OUT);
+          return;
+        }
+        sp(ex + shift, a.eyeY + bob, ew, eh, OUT);
+        sp(ex + shift, a.eyeY + bob, 2, 2, "#fff"); // highlight, light top-left
+      };
+      seye(a.eyeL ?? 2);
+      seye(a.eyeR ?? 8);
+      const bx = a.blushX ?? 1;
+      if (a.blushY !== undefined) {
+        sp(bx, a.blushY + bob, 2, 1, BLUSH);
+        sp(12 - bx, a.blushY + bob, 2, 1, BLUSH);
+      }
+      const mx = a.mouthX ?? 6;
+      sp(mx, a.mouthY + bob, 2, 1, OUT);
+    }
     if (o.headset) {
-      const top = c.creature === "meo" ? fy + 1 : fy;
-      px(fx, top - 1, 7, 1, "#7cf5c8");
-      px(fx, top, 1, 2, "#7cf5c8");
-      px(fx + 6, top, 1, 2, "#7cf5c8");
+      px(fx, fy - 1, 7, 1, "#7cf5c8");
+      px(fx, fy, 1, 2, "#7cf5c8");
+      px(fx + 6, fy, 1, 2, "#7cf5c8");
     }
   }
 };
@@ -592,9 +892,15 @@ export class PixelFloor extends React.Component<{
     const ctx = el.getContext("2d");
     if (!ctx) return;
     const u = 4;
+    // px accepts half-unit coords: creature sprites draw at half-cell detail
     const px = (x: number, y: number, w: number, h: number, col: string) => {
       ctx.fillStyle = col;
-      ctx.fillRect(Math.round(x) * u, Math.round(y) * u, w * u, h * u);
+      ctx.fillRect(
+        (Math.round(x * 2) / 2) * u,
+        (Math.round(y * 2) / 2) * u,
+        w * u,
+        h * u,
+      );
     };
     ctx.clearRect(0, 0, el.width, el.height);
     paintChar(px, c, {
@@ -684,9 +990,15 @@ export class PixelFloor extends React.Component<{
       canvas.width = W * u;
       canvas.height = H * u;
     }
+    // px accepts half-unit coords: creature sprites draw at half-cell detail
     const px = (x: number, y: number, w: number, h: number, c: string) => {
       ctx.fillStyle = c;
-      ctx.fillRect(Math.round(x) * u, Math.round(y) * u, w * u, h * u);
+      ctx.fillRect(
+        (Math.round(x * 2) / 2) * u,
+        (Math.round(y * 2) / 2) * u,
+        w * u,
+        h * u,
+      );
     };
     // Carpet with a checker weave, red aisle runner in the middle
     px(0, 0, W, H, "#1a1030");

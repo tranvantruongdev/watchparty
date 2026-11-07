@@ -54,6 +54,10 @@ const CHARS = [
   "meo",
   "cao",
   "ma",
+  "miu",
+  "oc",
+  "chim",
+  "suoi",
 ];
 
 // Extend the interface
