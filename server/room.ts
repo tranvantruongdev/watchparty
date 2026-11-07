@@ -1165,6 +1165,14 @@ export class Room {
       }
       this.paused = true;
       this.io.of(this.roomId).emit("REC:pause");
+      // REC:pause pauses every player, so a genuinely stuck viewer un-stalls
+      // and reports false on its next tick, re-reporting true only if it
+      // stalls again after a resume. Consuming the claims here means a resume
+      // can only re-pause on a new report; a client that went silent with
+      // true still in the map would otherwise re-pause the room after every
+      // play, forever.
+      this.bufferingMap = {};
+      this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       this.addChatMessage(null, {
         id: stuck,
         cmd: "bufferPause",
