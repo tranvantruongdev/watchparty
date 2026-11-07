@@ -426,11 +426,23 @@ export class Chat extends React.Component<ChatProps> {
           <div
             style={{
               position: "fixed",
-              top: Math.min(
-                this.state.reactionMenu.yPosition - 150,
-                window.innerHeight - 450,
+              // Clamp into the viewport: on a short screen (landscape phone,
+              // 390px tall) a raw offset puts the picker off-screen entirely
+              top: Math.max(
+                8,
+                Math.min(
+                  this.state.reactionMenu.yPosition - 150,
+                  window.innerHeight - 450,
+                ),
               ),
-              left: this.state.reactionMenu.xPosition - 240,
+              left: Math.max(
+                8,
+                Math.min(
+                  this.state.reactionMenu.xPosition - 240,
+                  window.innerWidth - 370,
+                ),
+              ),
+              maxWidth: "calc(100vw - 16px)",
             }}
           >
             <Picker
@@ -505,7 +517,13 @@ export class Chat extends React.Component<ChatProps> {
         <TextInput
           ref={this.chatInputRef}
           style={{ marginTop: "10px" }}
-          onKeyDown={(e: any) => e.key === "Enter" && this.sendChatMsg()}
+          // isComposing: Enter that commits an IME composition (CJK input,
+          // some Vietnamese keyboards) must not send the half-typed message
+          onKeyDown={(e: any) =>
+            e.key === "Enter" &&
+            !e.nativeEvent.isComposing &&
+            this.sendChatMsg()
+          }
           onChange={this.updateChatMsg}
           value={this.state.chatMsg}
           error={this.chatTooLong()}

@@ -1312,7 +1312,9 @@ export class App extends React.Component<AppProps, AppState> {
               e.data === window.YT?.PlayerState?.ENDED
             ) {
               console.log(e.data, e.target.getVideoUrl());
-              this.onVideoEnded(e.target.getVideoUrl());
+              // The room's url string, not the player's normalized one — the
+              // server matches the playlist-next trigger against its own video
+              this.onVideoEnded(this.state.roomMedia);
             }
             if (
               this.ytDebounce &&
@@ -2957,11 +2959,20 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   roomPlaylistMove = (index: number, toIndex: number) => {
-    this.socket.emit("CMD:playlistMove", { index, toIndex });
+    // The url lets the server reject the op when our list is stale (two
+    // people editing at once): the index must still point at this item
+    this.socket.emit("CMD:playlistMove", {
+      index,
+      toIndex,
+      url: this.state.playlist[index]?.url,
+    });
   };
 
   roomPlaylistDelete = (index: number) => {
-    this.socket.emit("CMD:playlistDelete", index);
+    this.socket.emit("CMD:playlistDelete", {
+      index,
+      url: this.state.playlist[index]?.url,
+    });
   };
 
   updateName = (name: string) => {
@@ -3995,7 +4006,9 @@ export class App extends React.Component<AppProps, AppState> {
                           maxHeight: VIDEO_MAX_HEIGHT_CSS,
                         }}
                         id="leftVideo"
-                        onEnded={(e) => this.onVideoEnded(e.currentTarget.src)}
+                        // roomMedia, not e.currentTarget.src (the resolved
+                        // absolute/blob src would never match the server's url)
+                        onEnded={() => this.onVideoEnded(this.state.roomMedia)}
                         playsInline
                         onClick={this.roomTogglePlay}
                       ></video>

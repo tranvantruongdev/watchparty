@@ -935,15 +935,17 @@ export class Room {
   private playlistNext = (raw: unknown) => {
     const data = raw ? String(raw) : null;
     // Clients may pass the URL that should be the current one.
-    // If we've already advanced the playlist, we can ignore duplicate calls
-    if (
-      data &&
-      this.video &&
-      data !== this.video &&
-      getYoutubeVideoID(data) !== getYoutubeVideoID(this.video)
-    ) {
-      // Validation didn't match
-      return;
+    // If we've already advanced the playlist, we can ignore duplicate calls.
+    // Same video = the exact url, or two YouTube links for the same video
+    // (a non-YouTube url pairs with null on both sides, which must NOT count
+    // as "same" — any garbage payload would advance the playlist)
+    if (data && this.video && data !== this.video) {
+      const ytEnded = getYoutubeVideoID(data);
+      const ytCurrent = getYoutubeVideoID(this.video);
+      if (!(ytEnded && ytEnded === ytCurrent)) {
+        // Validation didn't match
+        return;
+      }
     }
     const next = this.playlist.shift();
     this.io.of(this.roomId).emit("playlist", this.playlist);
@@ -999,14 +1001,24 @@ export class Room {
     }
   };
 
-  private playlistDelete = (index: unknown) => {
-    // splice() treats NaN as 0 and negatives as offsets from the end, so be strict
+  private playlistDelete = (raw: unknown) => {
+    // The client sends the item's url alongside the index. Two people can edit
+    // the playlist at once (rooms without a lock have no editor exclusivity),
+    // and an index computed against a stale list silently kills the wrong
+    // item — the url must still match the item at that index.
+    const data = raw as { index: number; url: string } | null;
     if (
-      typeof index !== "number" ||
-      !Number.isInteger(index) ||
-      index < 0 ||
-      index >= this.playlist.length
+      !data ||
+      !Number.isInteger(data.index) ||
+      typeof data.url !== "string"
     ) {
+      return;
+    }
+    const index = data.index;
+    if (index < 0 || index >= this.playlist.length) {
+      return;
+    }
+    if (this.playlist[index].url !== data.url) {
       return;
     }
     this.playlist.splice(index, 1);
@@ -1014,7 +1026,7 @@ export class Room {
   };
 
   private playlistMove = (raw: unknown) => {
-    const data = raw as { index: number; toIndex: number } | null;
+    const data = raw as { index: number; toIndex: number; url: string } | null;
     if (!data) {
       return;
     }
@@ -1023,11 +1035,16 @@ export class Room {
     if (
       !Number.isInteger(index) ||
       !Number.isInteger(toIndex) ||
+      typeof data.url !== "string" ||
       index < 0 ||
       index >= len ||
       toIndex < 0 ||
       toIndex >= len
     ) {
+      return;
+    }
+    // Same stale-list protection as playlistDelete
+    if (this.playlist[index].url !== data.url) {
       return;
     }
     const [item] = this.playlist.splice(index, 1);

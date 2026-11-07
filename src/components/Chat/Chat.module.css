@@ -128,6 +128,15 @@
   display: flex;
 }
 
+/* Touch has no hover: without this the per-message reply/react buttons are
+   unreachable on phones (round 30's emote row covers room reactions, not
+   reactions to a message) */
+@media (pointer: coarse) {
+  .comment .commentMenu {
+    display: flex;
+  }
+}
+
 .replyMessage {
   background: radial-gradient(
     at top right,
