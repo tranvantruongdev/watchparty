@@ -808,3 +808,18 @@
     width: 0%;
   }
 }
+
+/* Screen-share link badge: direct / relay, size, fps, bitrate */
+.shareStats {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 202;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  font-family: monospace;
+  pointer-events: none;
+}

@@ -150,6 +150,8 @@ interface AppState {
   roomLoop: boolean;
   roomIntermission: RoomIntermission | null;
   roomSleepTimer: RoomSleepTimer | null;
+  // What the incoming screen share really gets: path, size, fps, bitrate
+  shareStats: string;
   participants: User[];
   rosterUpdateTS: Number;
   chat: ChatMessage[];
@@ -245,6 +247,7 @@ export class App extends React.Component<AppProps, AppState> {
     roomLoop: false,
     roomIntermission: null,
     roomSleepTimer: null,
+    shareStats: "",
     participants: [],
     rosterUpdateTS: Date.now(),
     chat: [],
@@ -359,6 +362,8 @@ export class App extends React.Component<AppProps, AppState> {
   transcoder?: ClientTranscoder;
   publisherConns: PCDict = {};
   consumerConn?: RTCPeerConnection;
+  shareStatsTimer?: number;
+  shareStatsLast?: { bytes: number; ts: number };
   progressUpdater?: number;
   heartbeat: number | undefined = undefined;
   YouTubeInterface: YouTube = new YouTube(null);
@@ -2046,6 +2051,9 @@ export class App extends React.Component<AppProps, AppState> {
       this.consumerConn.close();
       this.consumerConn = undefined;
     }
+    window.clearInterval(this.shareStatsTimer);
+    this.shareStatsLast = undefined;
+    this.setState({ shareStats: "" });
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2157,6 +2165,11 @@ export class App extends React.Component<AppProps, AppState> {
     if (sharer && !this.consumerConn && !this.isLocalStreamAFile) {
       const pc = new RTCPeerConnection({ iceServers: iceServers() });
       this.consumerConn = pc;
+      window.clearInterval(this.shareStatsTimer);
+      this.shareStatsTimer = window.setInterval(
+        () => this.pollShareStats(pc),
+        2000,
+      );
       pc.onicecandidate = (event) => {
         // We generated an ICE candidate, send it to sharer
         if (event.candidate) {
@@ -2174,6 +2187,35 @@ export class App extends React.Component<AppProps, AppState> {
         }
       };
     }
+  };
+
+  // Badge over the shared video: "direct" or "relay (TURN)" plus what really
+  // arrives, so a blurry share shows whether the path or the sender is the limit
+  pollShareStats = async (pc: RTCPeerConnection) => {
+    if (pc !== this.consumerConn) return;
+    const stats = await pc.getStats();
+    let video: any;
+    let pair: any;
+    stats.forEach((r: any) => {
+      if (r.type === "inbound-rtp" && r.kind === "video") video = r;
+      if (r.type === "transport" && r.selectedCandidatePairId) {
+        pair = stats.get(r.selectedCandidatePairId);
+      }
+    });
+    if (!video || !pair) return;
+    const relay = [pair.localCandidateId, pair.remoteCandidateId].some(
+      (id) => stats.get(id)?.candidateType === "relay",
+    );
+    const now = Date.now();
+    const last = this.shareStatsLast;
+    this.shareStatsLast = { bytes: video.bytesReceived, ts: now };
+    if (!last) return;
+    const mbps =
+      ((video.bytesReceived - last.bytes) * 8) / (now - last.ts) / 1000;
+    const codec = stats.get(video.codecId)?.mimeType?.split("/")[1] ?? "";
+    this.setState({
+      shareStats: `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`,
+    });
   };
 
   startVBrowser = async (options: { size: string }) => {
@@ -3450,6 +3492,11 @@ export class App extends React.Component<AppProps, AppState> {
                         <div
                           className={styles.curtain + " " + styles.curtainRight}
                         />
+                      </div>
+                    )}
+                    {this.state.shareStats && (
+                      <div className={styles.shareStats}>
+                        {this.state.shareStats}
                       </div>
                     )}
                     {this.state.roomIntermission && (
