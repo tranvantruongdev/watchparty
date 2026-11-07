@@ -336,9 +336,17 @@ export class Room {
           }
         }
 
-        // Disconnect other sockets with this clientId
-        if (this.socketIdMap[clientId]) {
-          io.of(roomId).sockets.get(this.socketIdMap[clientId])?.disconnect();
+        // Disconnect other sockets with this clientId. The kicked socket gets
+        // the same "back to home" flow as an owner kick: that's the second tab
+        // of the same browser (localStorage identity), not a dropped
+        // connection — reconnects kick a transport that is already dead, so
+        // the emit never reaches the reconnecting client
+        const superseded = this.socketIdMap[clientId]
+          ? io.of(roomId).sockets.get(this.socketIdMap[clientId])
+          : undefined;
+        if (superseded) {
+          superseded.emit("kicked");
+          superseded.disconnect();
         }
         // Keep track of the current socketID associated with this client (only used for signaling and kicking)
         this.socketIdMap[clientId] = socket.id;
