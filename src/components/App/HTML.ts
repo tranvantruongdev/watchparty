@@ -12,6 +12,11 @@ export class HTML implements Player {
     return document.getElementById(this.elId) as HTMLMediaElement;
   };
 
+  // Native files have no title metadata; the wall shows the URL-derived name
+  getVideoTitle = (): string => {
+    return "";
+  };
+
   getCurrentTime = () => {
     return this.getVideoEl()?.currentTime ?? 0;
   };

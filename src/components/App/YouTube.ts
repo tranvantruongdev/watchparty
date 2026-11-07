@@ -154,4 +154,14 @@ export class YouTube implements Player {
   getVideoEl = (): HTMLMediaElement => {
     return document.getElementById("leftYt") as HTMLMediaElement;
   };
+
+  // Real title from the iframe player (populated once the video's metadata
+  // loads); empty until then, so callers fall back to the URL-derived name
+  getVideoTitle = (): string => {
+    try {
+      return this.watchPartyYTPlayer?.getVideoData().title ?? "";
+    } catch (e) {
+      return "";
+    }
+  };
 }

@@ -32,6 +32,14 @@ interface Reaction {
   msgTimestamp: string;
 }
 
+// A ticket stub on the memory wall: pinned when a video actually ended,
+// stored per room in this device's localStorage (see App.addTicketStub)
+interface TicketStub {
+  url: string;
+  title: string;
+  at: number;
+}
+
 type ChatPayload = {
   msg: string;
   replyToId?: string;

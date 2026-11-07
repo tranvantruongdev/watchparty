@@ -22,4 +22,7 @@ export abstract class Player {
   public abstract getTimeRanges: () => { start: number; end: number }[];
   public abstract setLoop: (loop: boolean) => void;
   public abstract getVideoEl: () => HTMLMediaElement;
+  // Title of the current video when the player itself knows it (YouTube),
+  // empty when it doesn't (native files)
+  public abstract getVideoTitle: () => string;
 }

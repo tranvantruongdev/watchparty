@@ -417,6 +417,31 @@ export function getSavedPasswords(): Record<string, string> {
   return {};
 }
 
+// Ticket stubs of the memory wall, one list per room
+export function getSavedStubs(): Record<string, TicketStub[]> {
+  try {
+    const savedStubsString =
+      window.localStorage.getItem("watchparty-stubs") ?? "{}";
+    return JSON.parse(savedStubsString);
+  } catch (e) {
+    console.warn("[ALERT] Could not parse saved ticket stubs");
+  }
+  return {};
+}
+
+export function saveStubs(roomId: string, stubs: TicketStub[]) {
+  // Called from onVideoEnded before the playlist advances: a blocked or full
+  // storage must not throw there
+  try {
+    window.localStorage.setItem(
+      "watchparty-stubs",
+      JSON.stringify({ ...getSavedStubs(), [roomId]: stubs }),
+    );
+  } catch (e) {
+    console.warn("[ALERT] Could not save ticket stubs");
+  }
+}
+
 export function createUuid() {
   return crypto.randomUUID ? crypto.randomUUID() : uuidv4();
 }

@@ -58,6 +58,9 @@ export class PixelFloor extends React.Component<{
   nameMap: StringDict;
   socket?: Socket;
   lightsDown: boolean;
+  // Ticket stubs of the videos that ran to the end here (App keeps them in
+  // this device's localStorage and passes the room's list)
+  stubs: TicketStub[];
 }> {
   canvasRef = React.createRef<HTMLCanvasElement>();
   // Where each character is drawn (remote ones ease toward their target)
@@ -292,6 +295,44 @@ export class PixelFloor extends React.Component<{
     }
     px(44, 0, 9, H, "#4a1022");
     for (let y = 0; y < H; y += 4) px(48, y, 1, 2, "#c9a24a");
+
+    // Memory wall: ticket stubs of the videos that ran to the end here,
+    // pinned to a board on the back wall (characters draw over it, the way
+    // they'd sit in front of it). The stubs live in this device's
+    // localStorage — see App.addTicketStub
+    px(57, 0, 38, 10, "#c9a24a"); // gold frame
+    px(58, 1, 36, 8, "#241536"); // cork
+    const stubs = this.props.stubs.slice(-3);
+    for (let i = 0; i < stubs.length; i++) {
+      const s = stubs[i];
+      const x = 60 + i * 11;
+      const y = 2;
+      px(x, y, 10, 6, "#fff"); // stub paper
+      px(x - 1, y + 3, 1, 1, "#241536"); // perforation notches
+      px(x + 10, y + 3, 1, 1, "#241536");
+      px(x + 4, y, 1, 1, "#c23345"); // pin
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#1b1b1b";
+      ctx.font = `bold ${Math.max(8, u * 1.5)}px monospace`;
+      // Shorten until it fits on the 10-unit paper
+      let label = s.title;
+      while (label.length > 1 && ctx.measureText(label).width > 9 * u) {
+        label = label.slice(0, -2) + "…";
+      }
+      ctx.fillText(label, (x + 5) * u, (y + 2.3) * u);
+      ctx.font = `${Math.max(7, u * 1.2)}px monospace`;
+      ctx.fillStyle = "#c23345";
+      ctx.fillText(
+        new Date(s.at).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        }),
+        (x + 5) * u,
+        (y + 4.6) * u,
+      );
+    }
+    ctx.textBaseline = "alphabetic";
 
     const users = new Map(this.props.participants.map((p) => [p.id, p]));
     const step = Math.floor(now / 150) % 2;
