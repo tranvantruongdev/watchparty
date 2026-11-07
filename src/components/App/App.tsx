@@ -56,7 +56,7 @@ import firebase from "firebase/compat/app";
 import { SubtitleModal } from "../Modal/SubtitleModal";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
-import { TheaterSeats } from "./TheaterSeats";
+import { PixelFloor } from "./PixelFloor";
 import styles from "./App.module.css";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
@@ -2768,7 +2768,14 @@ export class App extends React.Component<AppProps, AppState> {
     );
     return (
       <React.Fragment>
-        {theater && <div className={styles.theaterBackdrop} />}
+        {theater && (
+          <div
+            className={
+              styles.theaterBackdrop +
+              (lightsDown ? " " + styles.theaterLightsDown : "")
+            }
+          />
+        )}
         {this.state.isMultiSelectModalOpen && (
           <MultiStreamModal
             streams={this.state.fileSelection}
@@ -3485,10 +3492,10 @@ export class App extends React.Component<AppProps, AppState> {
                 </div>
                 {this.state.roomMedia && controls}
                 {theater && (
-                  <TheaterSeats
+                  <PixelFloor
                     participants={this.state.participants}
                     nameMap={this.state.nameMap}
-                    pictureMap={this.state.pictureMap}
+                    socket={this.socket}
                     lightsDown={lightsDown}
                   />
                 )}

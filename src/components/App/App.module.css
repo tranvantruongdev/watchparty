@@ -106,27 +106,71 @@
   inset: 0;
   z-index: -1;
   pointer-events: none;
+  /* Pixel front wall: only hard-stop gradients, no soft blends.
+     Layers top to bottom: gold rail, wainscot band, panel seams, wall weave. */
   background:
-    radial-gradient(
-      70% 60% at 15% 0%,
-      rgba(124, 58, 237, 0.35),
-      transparent 60%
+    linear-gradient(
+      180deg,
+      transparent 0 80%,
+      #8a5a19 80% 82%,
+      transparent 82%
     ),
-    radial-gradient(
-      60% 50% at 90% 100%,
-      rgba(236, 72, 153, 0.22),
-      transparent 60%
-    ),
-    linear-gradient(180deg, #120a24 0%, #07050e 100%);
+    linear-gradient(180deg, transparent 0 82%, #1c1440 82% 100%, #1c1440 100%),
+    repeating-linear-gradient(90deg, transparent 0 76px, #241a52 76px 80px),
+    repeating-linear-gradient(0deg, #141031 0 64px, #171238 64px 128px);
+}
+
+/* Pixel ceiling lights: a strip of warm dashes across the top of the wall. */
+.theaterBackdrop::before {
+  content: "";
+  position: absolute;
+  top: 6%;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: repeating-linear-gradient(
+    90deg,
+    #ffd75e 0 8px,
+    #e0a63c 8px 12px,
+    #241a52 12px 24px
+  );
+  transition: opacity 0.4s;
+}
+
+/* Pixel wall sconces: one 10px core square, the rest drawn with box-shadow
+   steps on a 10px grid — two flames on the side walls plus their brackets. */
+.theaterBackdrop::after {
+  content: "";
+  position: absolute;
+  top: 28%;
+  left: 3vw;
+  width: 10px;
+  height: 10px;
+  background: #ffd75e;
+  box-shadow:
+    10px 0 0 #e0a63c,
+    0 12px 0 #8a5a19,
+    calc(94vw - 3vw) 0 0 #ffd75e,
+    calc(94vw - 3vw + 10px) 0 0 #e0a63c,
+    calc(94vw - 3vw) 12px 0 #8a5a19;
+  transition: opacity 0.4s;
+}
+
+/* House lights down: the wall fixtures dim with the rest of the chrome. */
+.theaterLightsDown::before,
+.theaterLightsDown::after {
+  opacity: 0.25;
 }
 
 .theaterPlayer {
   background: #050308;
-  border-radius: 14px;
+  border-radius: 0;
+  border: 4px solid #241a52;
+  /* Pixel screen frame: hard gold/dark steps instead of the soft glow. */
   box-shadow:
-    0 0 0 1px rgba(200, 160, 255, 0.35),
-    0 0 28px 4px rgba(168, 85, 247, 0.35),
-    0 0 120px 30px rgba(236, 72, 153, 0.15);
+    0 0 0 4px #e0a63c,
+    0 0 0 8px #241a52,
+    0 0 0 10px #8a5a19;
 }
 
 .curtainClip {
@@ -137,6 +181,22 @@
   z-index: 2;
 }
 
+/* Pixel valance: red blocks across the top with a stepped gold fringe,
+   drawn over the curtain tops (z-index above the curtains). */
+.curtainClip::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 18px;
+  z-index: 3;
+  background:
+    repeating-linear-gradient(90deg, #e0a63c 0 8px, #8a5a19 8px 16px) 0 14px /
+      16px 4px repeat-x,
+    repeating-linear-gradient(90deg, #b91c1c 0 18px, #8f1d1d 18px 24px);
+}
+
 .curtain {
   position: absolute;
   top: 0;
@@ -145,26 +205,28 @@
      the picture on a narrow window. */
   width: 12%;
   max-width: 140px;
-  transition: transform 0.9s ease;
+  transition: transform 0.9s steps(9, end);
+  /* Pixel velvet: hard-stop pleats plus a gold fringe hanging at the bottom. */
   background:
+    repeating-linear-gradient(90deg, #e0a63c 0 6px, #8a5a19 6px 12px) left
+      bottom / 12px 8px repeat-x,
     repeating-linear-gradient(
       90deg,
-      rgba(0, 0, 0, 0.55) 0px,
-      rgba(0, 0, 0, 0) 9px,
-      rgba(0, 0, 0, 0.55) 18px
-    ),
-    linear-gradient(90deg, #3b1366, #5b21b6 30%, #3b1366 60%, #1e0a3c);
-  box-shadow:
-    inset 0 -40px 60px rgba(0, 0, 0, 0.55),
-    0 0 24px rgba(0, 0, 0, 0.5);
+      #8f1d1d 0 8px,
+      #b91c1c 8px 16px,
+      #e23a3a 16px 18px,
+      #b91c1c 18px 26px
+    );
 }
 
 .curtainLeft {
   left: 0;
+  box-shadow: inset -4px 0 0 0 #6d1414;
 }
 
 .curtainRight {
   right: 0;
+  box-shadow: inset 4px 0 0 0 #6d1414;
 }
 
 .curtainClipOpen .curtainLeft {

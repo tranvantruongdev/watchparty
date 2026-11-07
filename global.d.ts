@@ -14,6 +14,15 @@ interface User {
   isMuted?: boolean;
   isScreenShare?: boolean;
   buffering?: boolean;
+  pos?: Position;
+}
+
+// A pixel character on the theater floor: x/y are 0..1 of the floor area
+interface Position {
+  x: number;
+  y: number;
+  dir: "l" | "r" | "u" | "d";
+  sit: boolean;
 }
 
 interface Reaction {

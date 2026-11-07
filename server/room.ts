@@ -78,6 +78,10 @@ export class Room {
   private bufferingMap: BooleanDict = {};
   // clientId -> timestamps of accepted buffering changes in the last second
   private bufferingChangeTimes: { [clientId: string]: number[] } = {};
+  // clientId -> where their pixel character stands on the theater floor
+  private positionMap: { [clientId: string]: Position } = {};
+  // clientId -> timestamps of accepted moves in the last second
+  private moveTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
@@ -360,6 +364,7 @@ export class Room {
       on("CMD:floatReaction", (data: unknown) =>
         this.floatReaction(socket, data),
       );
+      on("CMD:move", (data: unknown) => this.move(socket, data));
       on("CMD:joinVideo", () => this.joinVideo(socket));
       on("CMD:leaveVideo", () => this.leaveVideo(socket));
       on("CMD:joinScreenShare", (data) => {
@@ -547,6 +552,7 @@ export class Room {
         ...p,
         isScreenShare: p.id === this.getSharerId(),
         buffering: this.bufferingMap[p.id],
+        pos: this.positionMap[p.id],
       };
     });
   };
@@ -1067,6 +1073,35 @@ export class Room {
       user: socket.clientId,
       value: raw,
     });
+  };
+
+  // Pixel character walking on the theater floor: x/y are 0..1 of the floor,
+  // dir is the facing. Stored so late joiners get it via the roster, relayed
+  // to everyone else, capped at 20/s per socket (clients send ~10/s)
+  private move = (socket: Socket, raw: unknown) => {
+    const data = raw as Position;
+    if (
+      !data ||
+      typeof data.x !== "number" ||
+      typeof data.y !== "number" ||
+      !(data.x >= 0 && data.x <= 1 && data.y >= 0 && data.y <= 1) ||
+      !["l", "r", "u", "d"].includes(data.dir as string) ||
+      typeof data.sit !== "boolean"
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const times = (this.moveTimes[socket.clientId] || []).filter(
+      (t) => now - t < 1000,
+    );
+    if (times.length >= 20) {
+      return;
+    }
+    times.push(now);
+    this.moveTimes[socket.clientId] = times;
+    const pos = { x: data.x, y: data.y, dir: data.dir, sit: data.sit };
+    this.positionMap[socket.clientId] = pos;
+    socket.broadcast.emit("REC:move", { id: socket.clientId, ...pos });
   };
 
   private setBuffering = (socket: Socket, data: unknown) => {
@@ -1658,6 +1693,8 @@ export class Room {
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
+      delete this.positionMap[clientId];
+      delete this.moveTimes[clientId];
     }
     // Keep namemap/picturemap so old chat messages still render correctly after disconnect
     // When serializing we only write values with messages in chat
