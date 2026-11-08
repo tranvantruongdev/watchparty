@@ -61,6 +61,8 @@ const defaults = {
   VBROWSER_ADMIN_KEY: "", // Optional, the key to hit admin endpoints on the vbrowser
   OPENSUBTITLES_KEY: "", // Optional, key to OpenSubtitles API
   ROOM_KEY: "", // Optional, secret needed to create or join rooms (share links as /?key=<ROOM_KEY>)
+  TURN_KEY_ID: "", // Optional, Cloudflare Realtime TURN key ID (dashboard → Realtime → TURN)
+  TURN_KEY_API_TOKEN: "", // Optional, that TURN key's API token; with both set, clients relay through Cloudflare
 };
 
 export default {

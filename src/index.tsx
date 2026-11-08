@@ -11,7 +11,12 @@ import { Privacy, Terms, FAQ } from "./components/Pages/Pages";
 import { TopBar } from "./components/TopBar/TopBar";
 import { Footer } from "./components/Footer/Footer";
 import type firebase from "firebase/compat/app";
-import { getRoomKey, serverPath, softWhite } from "./utils/utils";
+import {
+  getRoomKey,
+  loadIceServers,
+  serverPath,
+  softWhite,
+} from "./utils/utils";
 import { Create } from "./components/Create/Create";
 import { Discord } from "./components/Discord/Discord";
 import config from "./config";
@@ -46,6 +51,8 @@ const firebaseConfig = config.VITE_FIREBASE_CONFIG;
 // doesn't store the stats key either
 if (!window.location.pathname.startsWith("/debug")) {
   getRoomKey();
+  // TURN relay credentials, ready before anyone opens voice or a share
+  loadIceServers();
 }
 
 // Redirect old-style URLs

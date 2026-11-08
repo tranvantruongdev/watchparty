@@ -221,7 +221,29 @@ export function shuffle(array: any[]) {
   }
 }
 
-export const iceServers = () => [
+// Cloudflare TURN credentials from our server (POST /iceServers), fetched once at
+// startup. Until they arrive, or when the server has no TURN key, the list below
+// is used
+let fetchedIceServers: RTCIceServer[] | null = null;
+export const loadIceServers = async () => {
+  try {
+    const res = await fetch(serverPath + "/iceServers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomKey: getRoomKey() }),
+    });
+    if (res.ok) {
+      fetchedIceServers = (await res.json()).iceServers;
+    }
+  } catch {
+    // Network error: keep the fallback list
+  }
+};
+
+export const iceServers = (): RTCIceServer[] =>
+  fetchedIceServers ?? fallbackIceServers;
+
+const fallbackIceServers: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   // Measured 2026-11-08 (relay candidate + relay-to-relay DataChannel, headless probe):
   // these two allocate a relay in ~0.5s and forward data; the other three upstream

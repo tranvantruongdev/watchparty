@@ -322,6 +322,53 @@ app.get("/youtubePlaylist/:playlistId", async (req, res) => {
   }
 });
 
+// Cloudflare TURN credentials for viewers. The key/token stay here; browsers get
+// 24 h credentials. Room key required so strangers can't burn the free quota.
+// ponytail: one shared credential set cached 12 h; per-user creds if this ever
+// has more than a couple of viewers
+let turnCache: { at: number; iceServers: unknown } | undefined;
+app.post("/iceServers", async (req, res) => {
+  if (!hasRoomKey(req.body?.roomKey)) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
+  if (!config.TURN_KEY_ID || !config.TURN_KEY_API_TOKEN) {
+    res.json({ iceServers: null });
+    return;
+  }
+  if (!turnCache || Date.now() - turnCache.at > 12 * 3600_000) {
+    try {
+      const r = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${config.TURN_KEY_ID}/credentials/generate-ice-servers`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.TURN_KEY_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ttl: 86400 }),
+        },
+      );
+      if (!r.ok) {
+        throw new Error(`cloudflare turn ${r.status}`);
+      }
+      const { iceServers } = await r.json();
+      // Browsers block port 53, so those urls only time out
+      for (const s of iceServers) {
+        if (Array.isArray(s.urls)) {
+          s.urls = s.urls.filter((u: string) => !/:53(\?|$)/.test(u));
+        }
+      }
+      turnCache = { at: Date.now(), iceServers };
+    } catch (e) {
+      console.error(e);
+      res.status(502).json({ iceServers: null });
+      return;
+    }
+  }
+  res.json({ iceServers: turnCache.iceServers });
+});
+
 app.post("/createRoom", async (req, res) => {
   if (!hasRoomKey(req.body?.roomKey)) {
     res.status(403).json({ error: "roomKey" });
