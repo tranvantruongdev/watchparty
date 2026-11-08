@@ -129,7 +129,9 @@ export class VideoChat extends React.Component<
     }
     console.log("recv", from, data);
     if (msg.ice !== undefined) {
-      pc.addIceCandidate(new RTCIceCandidate(msg.ice));
+      // Candidates can outlive the PC they belong to (rebuild races during a
+      // network blip); dropping them is fine, throwing is not
+      pc.addIceCandidate(new RTCIceCandidate(msg.ice)).catch(() => {});
     } else if (msg.sdp && msg.sdp.type === "offer") {
       // If our PC is stale, replace it with a fresh one before handling the offer
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
@@ -157,7 +159,9 @@ export class VideoChat extends React.Component<
       await pc.setLocalDescription(answer);
       this.sendSignal(from, { sdp: pc.localDescription });
     } else if (msg.sdp && msg.sdp.type === "answer") {
-      pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch((e) =>
+        console.warn("stale voice answer dropped", e),
+      );
     }
   };
 
@@ -263,6 +267,10 @@ export class VideoChat extends React.Component<
         console.warn(e);
       }
     }
+    // Mic unplugged or revoked by the OS: the track ends and would stream
+    // silence forever behind a green mic icon — show the manual mic-off state
+    // instead (keep listening if someone else is in voice, else leave)
+    stream.getAudioTracks()[0]?.addEventListener("ended", () => this.micOff());
     return stream;
   };
 
@@ -381,13 +389,54 @@ export class VideoChat extends React.Component<
           }
           this.attach(id);
         };
+        // Transport failed (permanently; a temporary drop would be "disconnected"):
+        // tear down and attempt to re-establish. Chrome can set connectionState
+        // "failed" while iceConnectionState stays "disconnected" forever (measured
+        // round 52), and the two states fire different events — watch both or the
+        // rebuild never runs. The guard keeps a second event from killing the
+        // replacement PC that updateWebRTC already made.
+        const rebuildFailed = () => {
+          if (videoPCs[id] !== pc) {
+            return;
+          }
+          pc.close();
+          delete videoPCs[id];
+          delete this.remoteStreams[id];
+          this.updateWebRTC();
+          // The peer's PC may have died so quietly that it never renegotiates
+          // (frozen tab, killed app): offer ourselves after a beat even though
+          // we are normally the answerer. Colliding offers are safe —
+          // handleSignal rolls the larger id's half-offer back.
+          const fresh = videoPCs[id];
+          if (fresh) {
+            window.setTimeout(() => {
+              if (
+                videoPCs[id] === fresh &&
+                !fresh.currentRemoteDescription &&
+                fresh.signalingState === "stable" &&
+                this.props.participants.some(
+                  (p) => p.id === id && p.isVideoChat,
+                )
+              ) {
+                fresh
+                  .createOffer()
+                  .then((offer) => fresh.setLocalDescription(offer))
+                  .then(() =>
+                    this.sendSignal(id, { sdp: fresh.localDescription }),
+                  )
+                  .catch(() => {});
+              }
+            }, 3000);
+          }
+        };
         pc.oniceconnectionstatechange = () => {
           if (pc.iceConnectionState === "failed") {
-            // ICE failed (permanently, not a temporary disconnection, which would be "disconnected"), tear down and attempt to re-establish
-            pc.close();
-            delete videoPCs[id];
-            delete this.remoteStreams[id];
-            this.updateWebRTC();
+            rebuildFailed();
+          }
+        };
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === "failed") {
+            rebuildFailed();
           }
         };
         // For each pair, have the lexicographically smaller ID be the offerer.

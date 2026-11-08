@@ -223,13 +223,13 @@ export function shuffle(array: any[]) {
 
 export const iceServers = () => [
   { urls: "stun:stun.l.google.com:19302" },
+  // Measured 2026-11-08 (relay candidate + relay-to-relay DataChannel, headless probe):
+  // these two allocate a relay in ~0.5s and forward data; the other three upstream
+  // entries are dead (TCP 3478 refused, no STUN answer, no relay ever) and stalled
+  // every ICE gather ~15s, so they are removed. Add a TURN url here when new
+  // credentials exist; keep only measured-working servers.
   {
     urls: "turn:5.161.207.54:3478",
-    username: "username",
-    credential: "password",
-  },
-  {
-    urls: "turn:5.161.49.183:3478",
     username: "username",
     credential: "password",
   },
@@ -238,21 +238,6 @@ export const iceServers = () => [
     username: "username",
     credential: "password",
   },
-  {
-    urls: "turn:5.78.83.26:3478",
-    username: "username",
-    credential: "password",
-  },
-  {
-    urls: "turn:5.223.48.157:3478",
-    username: "username",
-    credential: "password",
-  },
-  // {
-  //   urls: 'turn:numb.viagenie.ca',
-  //   credential: 'watchparty',
-  //   username: 'howardzchung@gmail.com',
-  // },
 ];
 
 export const serverPath =

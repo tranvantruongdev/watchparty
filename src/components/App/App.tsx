@@ -1174,12 +1174,39 @@ export class App extends React.Component<AppProps, AppState> {
         const msg = data.msg;
         const from = data.from;
         // Determine whether the message came from the sharer or the sharee
-        const pc = (
+        let pc = (
           data.sharer ? this.consumerConn : this.publisherConns[from]
         ) as RTCPeerConnection;
         if (msg.ice !== undefined) {
-          pc.addIceCandidate(new RTCIceCandidate(msg.ice));
+          // Candidates can outlive the PC they belong to (rebuild races during
+          // a network blip); dropping them is fine, throwing is not
+          if (pc) {
+            pc.addIceCandidate(new RTCIceCandidate(msg.ice)).catch(() => {});
+          }
         } else if (msg.sdp && msg.sdp.type === "offer") {
+          // Our PC is stale (rebuilt after a network failure): replace it with
+          // a fresh one before answering, same pattern as VideoChat.handleSignal
+          if (
+            !pc ||
+            pc.connectionState === "failed" ||
+            pc.connectionState === "closed"
+          ) {
+            if (pc) {
+              pc.close();
+            }
+            if (data.sharer) {
+              this.consumerConn = undefined;
+            } else {
+              delete this.publisherConns[from];
+            }
+            await this.setupRTCConnections();
+            pc = (
+              data.sharer ? this.consumerConn : this.publisherConns[from]
+            ) as RTCPeerConnection;
+            if (!pc) {
+              return;
+            }
+          }
           // console.log('offer');
           // TODO Currently ios/Safari cannot handle this property, so remove it from the offer
           const _sdp = msg.sdp.sdp
@@ -1211,7 +1238,17 @@ export class App extends React.Component<AppProps, AppState> {
           await pc.setLocalDescription(answer);
           this.sendSignalSS(from, { sdp: pc.localDescription }, !data.sharer);
         } else if (msg.sdp && msg.sdp.type === "answer") {
-          pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          // An answer for a PC we already tore down (blip rebuild) answers an
+          // offer that no longer exists: drop it, the new negotiation is in flight
+          if (
+            pc &&
+            pc.connectionState !== "closed" &&
+            pc.connectionState !== "failed"
+          ) {
+            pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(
+              (e) => console.warn("stale share answer dropped", e),
+            );
+          }
         }
       },
     );
@@ -2252,6 +2289,28 @@ export class App extends React.Component<AppProps, AppState> {
               this.sendSignalSS(id, { ice: event.candidate }, true);
             }
           };
+          // A hard transport failure would freeze the share forever: rebuild like
+          // VideoChat does, on the same roster-driven path. connectionState can go
+          // "failed" while iceConnectionState stays "disconnected" (measured round
+          // 52) and the two fire different events — watch both, guard double-fire.
+          const rebuildShare = () => {
+            if (this.publisherConns[id] !== pc) {
+              return;
+            }
+            pc.close();
+            delete this.publisherConns[id];
+            this.setupRTCConnections();
+          };
+          pc.oniceconnectionstatechange = () => {
+            if (pc.iceConnectionState === "failed") {
+              rebuildShare();
+            }
+          };
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === "failed") {
+              rebuildShare();
+            }
+          };
           pc.onnegotiationneeded = async () => {
             // Start connection for peer's video
             const offer = await pc.createOffer();
@@ -2281,6 +2340,28 @@ export class App extends React.Component<AppProps, AppState> {
         // We generated an ICE candidate, send it to sharer
         if (event.candidate) {
           this.sendSignalSS(sharer.id, { ice: event.candidate });
+        }
+      };
+      // Transport dead (see the sharer-side note): drop our copy and wait; the
+      // sharer rebuilds its side and the new offer lands on the fresh
+      // consumerConn created by handleSignalSS's stale guard. Both events,
+      // because connectionState can fail while iceConnectionState hangs at
+      // "disconnected" (measured round 52); the guard keeps double-fire safe.
+      const dropDeadConsumer = () => {
+        if (this.consumerConn !== pc) {
+          return;
+        }
+        pc.close();
+        this.consumerConn = undefined;
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "failed") {
+          dropDeadConsumer();
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed") {
+          dropDeadConsumer();
         }
       };
       pc.ontrack = (event: RTCTrackEvent) => {
