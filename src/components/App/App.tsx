@@ -2354,6 +2354,17 @@ export class App extends React.Component<AppProps, AppState> {
                   ...codecs.filter((c) => c.mimeType !== "video/VP9"),
                 ]);
               }
+              // Chrome's default degradation (balanced) trades resolution for fps even when
+              // the encoder could hold full resolution at the same fps: on a capped share
+              // (1.0/1.5 Mbps, round 57) balanced sent 720p where maintain-resolution held
+              // 1080p at the same ~29 fps, so text stayed readable. A screen share is mostly
+              // text — keep the resolution; a shared video file stays on balanced, where
+              // smoothness matters more than sharpness
+              if (!this.isLocalStreamAFile) {
+                const params = tr.sender.getParameters();
+                params.degradationPreference = "maintain-resolution";
+                tr.sender.setParameters(params).catch(() => {});
+              }
             } else {
               pc.addTrack(track, this.localStreamToPublish);
             }
