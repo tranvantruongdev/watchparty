@@ -145,6 +145,19 @@ export class VideoChat extends React.Component<
     const from = data.from;
     const selfId = getOrCreateClientId();
     let pc = window.watchparty.videoPCs[from];
+    // An offer can outrun our own roster commit (updateWebRTC has not created
+    // videoPCs[from] yet): re-check after a beat instead of dropping it — the
+    // sender never re-offers, so a drop leaves the pair silenced until the
+    // next renegotiation (measured round 54 on a slow device)
+    if (!pc && msg?.sdp?.type === "offer") {
+      for (const ms of [300, 1000]) {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        pc = window.watchparty.videoPCs[from];
+        if (pc) {
+          break;
+        }
+      }
+    }
     if (!pc) {
       return;
     }

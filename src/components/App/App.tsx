@@ -1249,10 +1249,23 @@ export class App extends React.Component<AppProps, AppState> {
             } else {
               delete this.publisherConns[from];
             }
-            await this.setupRTCConnections();
-            pc = (
-              data.sharer ? this.consumerConn : this.publisherConns[from]
-            ) as RTCPeerConnection;
+            // The offer can outrun the REC:host/roster commits that create our
+            // PC (setupRTCConnections bails while roomMedia/participants are
+            // still stale): retry on a beat instead of dropping it — the sharer
+            // never re-offers and its ICE never starts without an answer, so a
+            // drop blacks the share out until re-share (measured round 54)
+            for (const ms of [0, 300, 1000]) {
+              if (ms) {
+                await new Promise((resolve) => setTimeout(resolve, ms));
+              }
+              await this.setupRTCConnections();
+              pc = (
+                data.sharer ? this.consumerConn : this.publisherConns[from]
+              ) as RTCPeerConnection;
+              if (pc) {
+                break;
+              }
+            }
             if (!pc) {
               return;
             }
