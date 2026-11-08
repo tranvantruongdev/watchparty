@@ -332,6 +332,20 @@ app.post("/iceServers", async (req, res) => {
     res.status(403).json({ error: "roomKey" });
     return;
   }
+  // Static TURN (e.g. ExpressTURN free plan): urls + fixed username/password
+  if (config.TURN_URLS) {
+    res.json({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        {
+          urls: config.TURN_URLS.split(",").map((u: string) => u.trim()),
+          username: config.TURN_USERNAME,
+          credential: config.TURN_PASSWORD,
+        },
+      ],
+    });
+    return;
+  }
   if (!config.TURN_KEY_ID || !config.TURN_KEY_API_TOKEN) {
     res.json({ iceServers: null });
     return;
