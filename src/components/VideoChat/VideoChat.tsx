@@ -36,6 +36,16 @@ interface VideoChatProps {
   deaf: boolean;
 }
 
+// Headset-style mic: keep the close voice, drop the room. voiceIsolation is
+// Chrome's ML voice filter (ignored where unsupported); auto gain off so quiet
+// far-away sounds aren't boosted up to speech level
+const micConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: false,
+  voiceIsolation: true,
+} as MediaTrackConstraints;
+
 export class VideoChat extends React.Component<
   VideoChatProps,
   { playBlocked: boolean; voiceVolume: number }
@@ -286,7 +296,7 @@ export class VideoChat extends React.Component<
 
     try {
       stream = await navigator?.mediaDevices.getUserMedia({
-        audio: true,
+        audio: micConstraints,
         video: true,
       });
     } catch (e) {
@@ -294,7 +304,7 @@ export class VideoChat extends React.Component<
       try {
         console.log("attempt audio only stream");
         stream = await navigator?.mediaDevices?.getUserMedia({
-          audio: true,
+          audio: micConstraints,
           video: false,
         });
       } catch (e) {
