@@ -46,6 +46,15 @@ const micConstraints = {
   voiceIsolation: true,
 } as MediaTrackConstraints;
 
+// HD voice: Chrome encodes opus at ~32 kbps mono by default. maxaveragebitrate
+// in the fmtp is the encoder cap (RFC 7587 §6.1) — raise it to 64 kbps, the
+// level voice chat apps like Discord ship at; inband FEC is already on, and it
+// gets more room to work at the higher bitrate. Munged into our offer AND our
+// answer so whichever side encodes reads it (jitsi's mungeOpus does both
+// directions the same way)
+const hdVoiceSdp = (sdp: string | undefined) =>
+  sdp?.replace("useinbandfec=1", "useinbandfec=1; maxaveragebitrate=64000");
+
 export class VideoChat extends React.Component<
   VideoChatProps,
   { playBlocked: boolean; voiceVolume: number }
@@ -200,6 +209,7 @@ export class VideoChat extends React.Component<
       }
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
       const answer = await pc.createAnswer();
+      answer.sdp = hdVoiceSdp(answer.sdp);
       await pc.setLocalDescription(answer);
       this.sendSignal(from, { sdp: pc.localDescription });
     } else if (msg.sdp && msg.sdp.type === "answer") {
@@ -464,7 +474,10 @@ export class VideoChat extends React.Component<
               ) {
                 fresh
                   .createOffer()
-                  .then((offer) => fresh.setLocalDescription(offer))
+                  .then((offer) => {
+                    offer.sdp = hdVoiceSdp(offer.sdp);
+                    return fresh.setLocalDescription(offer);
+                  })
                   .then(() =>
                     this.sendSignal(id, { sdp: fresh.localDescription }),
                   )
@@ -490,6 +503,7 @@ export class VideoChat extends React.Component<
           if (!isOfferer && !pc.currentRemoteDescription) return;
           // Start connection for peer's video
           const offer = await pc.createOffer();
+          offer.sdp = hdVoiceSdp(offer.sdp);
           await pc.setLocalDescription(offer);
           this.sendSignal(id, { sdp: pc.localDescription });
         };
