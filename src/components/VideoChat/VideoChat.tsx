@@ -52,8 +52,12 @@ const micConstraints = {
 // gets more room to work at the higher bitrate. Munged into our offer AND our
 // answer so whichever side encodes reads it (jitsi's mungeOpus does both
 // directions the same way)
+const HD_VOICE_BITRATE = 64000;
 const hdVoiceSdp = (sdp: string | undefined) =>
-  sdp?.replace("useinbandfec=1", "useinbandfec=1; maxaveragebitrate=64000");
+  sdp?.replace(
+    "useinbandfec=1",
+    `useinbandfec=1; maxaveragebitrate=${HD_VOICE_BITRATE}`,
+  );
 
 export class VideoChat extends React.Component<
   VideoChatProps,
@@ -253,6 +257,17 @@ export class VideoChat extends React.Component<
         if (tr) {
           tr.direction = "sendrecv";
           tr.sender.replaceTrack(track);
+          // Chrome can leave a sender that started life recvonly at its ~32 kbps
+          // opus default even though every applied SDP carries maxaveragebitrate
+          // (measured over TURN: answer-then-offer glare + replaceTrack → the
+          // peer hears ~33 kbps one-way). Pin the cap on the sender itself; the
+          // SDP munge above still tells the peers what to send us
+          const params = tr.sender.getParameters();
+          if (!params.encodings || !params.encodings.length) {
+            params.encodings = [{}];
+          }
+          params.encodings[0].maxBitrate = HD_VOICE_BITRATE;
+          tr.sender.setParameters(params).catch(() => {});
         } else {
           pc.addTrack(track, ourStream);
         }
