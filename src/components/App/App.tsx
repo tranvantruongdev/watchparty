@@ -1279,27 +1279,34 @@ export class App extends React.Component<AppProps, AppState> {
             })
             .join("\n");
           msg.sdp.sdp = _sdp;
-          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-          const answer = await pc.createAnswer();
-          // Allow stereo audio
-          answer.sdp = answer.sdp?.replace(
-            "useinbandfec=1",
-            "useinbandfec=1; stereo=1; maxaveragebitrate=510000",
-          );
-          // console.log(answer.sdp);
-          // Allow multichannel audio if Chromium
-          //@ts-expect-error
-          const isChromium = Boolean(window.chrome);
-          if (isChromium) {
-            answer.sdp = answer.sdp
-              ?.replace("opus/48000/2", "multiopus/48000/6")
-              .replace(
-                "useinbandfec=1",
-                "channel_mapping=0,4,1,2,3,5; num_streams=4; coupled_streams=2;maxaveragebitrate=510000;minptime=10;useinbandfec=1",
-              );
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            const answer = await pc.createAnswer();
+            // Allow stereo audio
+            answer.sdp = answer.sdp?.replace(
+              "useinbandfec=1",
+              "useinbandfec=1; stereo=1; maxaveragebitrate=510000",
+            );
+            // console.log(answer.sdp);
+            // Allow multichannel audio if Chromium
+            //@ts-expect-error
+            const isChromium = Boolean(window.chrome);
+            if (isChromium) {
+              answer.sdp = answer.sdp
+                ?.replace("opus/48000/2", "multiopus/48000/6")
+                .replace(
+                  "useinbandfec=1",
+                  "channel_mapping=0,4,1,2,3,5; num_streams=4; coupled_streams=2;maxaveragebitrate=510000;minptime=10;useinbandfec=1",
+                );
+            }
+            await pc.setLocalDescription(answer);
+            this.sendSignalSS(from, { sdp: pc.localDescription }, !data.sharer);
+          } catch (e) {
+            // The PC can be closed out from under this answer (blip rebuild,
+            // roster change) while the answer chain is in flight: drop it, the
+            // replacement PC negotiates on its own (measured round 58)
+            console.warn("stale share offer dropped", e);
           }
-          await pc.setLocalDescription(answer);
-          this.sendSignalSS(from, { sdp: pc.localDescription }, !data.sharer);
         } else if (msg.sdp && msg.sdp.type === "answer") {
           // An answer for a PC we already tore down (blip rebuild) answers an
           // offer that no longer exists: drop it, the new negotiation is in flight
@@ -2387,9 +2394,32 @@ export class App extends React.Component<AppProps, AppState> {
             delete this.publisherConns[id];
             this.setupRTCConnections();
           };
+          // A wifi switch rebinds the NAT: the old pair never answers again but
+          // ICE hangs at "disconnected" and Chrome only escalates to "failed"
+          // ~25-30 s later (measured round 52) — a black share that whole time.
+          // A short blip self-heals in ~1-2 s (measured round 58, freeze test),
+          // so 10 s of dead air is a rebind: restart ICE now instead of waiting
+          // for the failed rebuild. The sharer is the offerer and drives it; the
+          // viewer's half restarts from the offer it receives.
+          let shareDiscTimer = 0;
           pc.oniceconnectionstatechange = () => {
             if (pc.iceConnectionState === "failed") {
               rebuildShare();
+            } else if (pc.iceConnectionState === "disconnected") {
+              window.clearTimeout(shareDiscTimer);
+              shareDiscTimer = window.setTimeout(() => {
+                if (
+                  pc.iceConnectionState === "disconnected" &&
+                  this.publisherConns[id] === pc &&
+                  pc.signalingState === "stable" &&
+                  pc.currentRemoteDescription
+                ) {
+                  // fires negotiationneeded: the handler below sends the offer
+                  pc.restartIce();
+                }
+              }, 10000);
+            } else {
+              window.clearTimeout(shareDiscTimer);
             }
           };
           pc.onconnectionstatechange = () => {

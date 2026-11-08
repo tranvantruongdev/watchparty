@@ -205,17 +205,24 @@ export class VideoChat extends React.Component<
       // theirs, the other ignores the colliding offer and waits for the
       // answer to its own (else setRemoteDescription throws and one mic
       // never gets negotiated)
-      if (pc.signalingState === "have-local-offer") {
-        if (selfId < from) {
-          return;
+      try {
+        if (pc.signalingState === "have-local-offer") {
+          if (selfId < from) {
+            return;
+          }
+          await pc.setLocalDescription({ type: "rollback" });
         }
-        await pc.setLocalDescription({ type: "rollback" });
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        const answer = await pc.createAnswer();
+        answer.sdp = hdVoiceSdp(answer.sdp);
+        await pc.setLocalDescription(answer);
+        this.sendSignal(from, { sdp: pc.localDescription });
+      } catch (e) {
+        // The PC can be closed out from under this answer (blip rebuild,
+        // roster change) while the glare/answer chain is in flight: drop it,
+        // the replacement PC negotiates on its own (measured round 58)
+        console.warn("stale voice offer dropped", e);
       }
-      await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-      const answer = await pc.createAnswer();
-      answer.sdp = hdVoiceSdp(answer.sdp);
-      await pc.setLocalDescription(answer);
-      this.sendSignal(from, { sdp: pc.localDescription });
     } else if (msg.sdp && msg.sdp.type === "answer") {
       pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch((e) =>
         console.warn("stale voice answer dropped", e),
@@ -251,6 +258,10 @@ export class VideoChat extends React.Component<
       ourStream.addTrack(track);
       Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
         if (id === getOrCreateClientId()) return;
+        // A blip rebuild or roster change can close a PC between our roster
+        // snapshot and this loop (measured round 58): touching it throws
+        // synchronously and the click's promise chain dies unhandled
+        if (pc.connectionState === "closed") return;
         const tr = pc
           .getTransceivers()
           .find((t) => t.receiver.track.kind === track.kind && !t.sender.track);
@@ -290,6 +301,8 @@ export class VideoChat extends React.Component<
     }
     Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
       if (id === selfId) return;
+      // Same closed-PC race as setupWebRTC's mic-on loop (measured round 58)
+      if (pc.connectionState === "closed") return;
       pc.getTransceivers().forEach((t) => {
         if (t.sender.track) {
           t.sender.replaceTrack(null);
@@ -501,9 +514,35 @@ export class VideoChat extends React.Component<
             }, 3000);
           }
         };
+        // For each pair, have the lexicographically smaller ID be the offerer.
+        // Once connected either side may renegotiate (mic on/off in place)
+        const isOfferer = selfId < id;
+        let voiceDiscTimer = 0;
         pc.oniceconnectionstatechange = () => {
           if (pc.iceConnectionState === "failed") {
             rebuildFailed();
+          } else if (isOfferer && pc.iceConnectionState === "disconnected") {
+            // A wifi switch rebinds the NAT: the old pair never answers again
+            // but ICE hangs at "disconnected" and Chrome only escalates to
+            // "failed" ~25-30 s later (measured round 52) — one-way silence
+            // that whole time. A short blip self-heals in ~1-2 s (measured
+            // round 58, freeze test), so 10 s of dead air is a rebind: restart
+            // ICE now instead of waiting for the failed rebuild. The offerer
+            // drives it; the answerer half restarts from the offer it gets.
+            window.clearTimeout(voiceDiscTimer);
+            voiceDiscTimer = window.setTimeout(() => {
+              if (
+                videoPCs[id] === pc &&
+                pc.iceConnectionState === "disconnected" &&
+                pc.signalingState === "stable" &&
+                pc.currentRemoteDescription
+              ) {
+                // fires negotiationneeded: the handler below sends the offer
+                pc.restartIce();
+              }
+            }, 10000);
+          } else {
+            window.clearTimeout(voiceDiscTimer);
           }
         };
         pc.onconnectionstatechange = () => {
@@ -511,9 +550,6 @@ export class VideoChat extends React.Component<
             rebuildFailed();
           }
         };
-        // For each pair, have the lexicographically smaller ID be the offerer.
-        // Once connected either side may renegotiate (mic on/off in place)
-        const isOfferer = selfId < id;
         pc.onnegotiationneeded = async () => {
           if (!isOfferer && !pc.currentRemoteDescription) return;
           // Start connection for peer's video
