@@ -112,6 +112,7 @@ declare global {
       ourStream: MediaStream | undefined;
       videoRefs: HTMLVideoElementDict;
       videoPCs: PCDict;
+      voiceVolume?: number;
       webtorrent?: WebTorrent.Instance;
       hls?: Hls;
       dash?: MediaPlayerClass;
@@ -207,6 +208,9 @@ interface AppState {
   isSubscribeModalOpen: boolean;
   isVBrowserModalOpen: boolean;
   isScreenShareModalOpen: boolean;
+  // The sharer's capture ended without them asking for it (network cut the
+  // share, display unplugged): offer to share again
+  shareEndedPrompt: boolean;
   isFileShareModalOpen: boolean;
   localCopyNeeded: boolean;
   // "Continue watching" offer (per-device saved position): what to reopen or
@@ -308,6 +312,7 @@ export class App extends React.Component<AppProps, AppState> {
     isVBrowserModalOpen: false,
     isScreenShareModalOpen: false,
     isFileShareModalOpen: false,
+    shareEndedPrompt: false,
     localCopyNeeded: false,
     resumeOffer: undefined,
     resumeDismissed: undefined,
@@ -383,6 +388,14 @@ export class App extends React.Component<AppProps, AppState> {
   };
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
+  // Set when the stop was the user's own doing (Stop Share button, failed
+  // conversion): stopPublishingLocalStream stays quiet instead of offering
+  // "share again"
+  shareStopSilent = false;
+  // A socket reconnect re-announced our still-live share (CMD:resumeShare)
+  // and the answer hasn't landed yet: REC:host with "" in that window is the
+  // pre-resume snapshot, not a share end, so the capture must survive it
+  resumeShareInFlight = false;
   // "Local copy" mode: the file this client plays from its own disk
   localCopyFile?: File;
   localCopyObjectUrl?: string;
@@ -523,6 +536,19 @@ export class App extends React.Component<AppProps, AppState> {
         successMessage: "",
         warningMessage: "",
       });
+      // Re-announce our screen/file share if the capture survived the socket
+      // gap: short blips never cleared it (server grace window), long ones
+      // did and this puts it back without re-picking the screen. Before the
+      // name await below, so the in-flight flag is up before the connect-time
+      // REC:host snapshot ("" after a cleared share) is processed
+      const shareMedia = this.state.roomMedia;
+      if (
+        this.localStreamToPublish?.getVideoTracks()[0]?.readyState === "live" &&
+        (isScreenShare(shareMedia) || isFileShare(shareMedia))
+      ) {
+        this.resumeShareInFlight = true;
+        socket.emit("CMD:resumeShare", { media: shareMedia });
+      }
       // Use the name in our state, generate one if empty
       this.updateName(this.state.myName || (await generateName()));
       this.loadSignInData(this.context.user);
@@ -659,10 +685,27 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:host", async (data: HostState) => {
       let currentMedia = data.video || "";
-      if (this.playingScreenShare() && !isScreenShare(currentMedia)) {
+      // A share resume is in flight (the socket reconnected while our capture
+      // is still live and CMD:resumeShare is on its way): the empty "" here is
+      // the pre-resume snapshot, our own share is the resume landing — the
+      // capture survives both. Any other media really did take over
+      if (this.resumeShareInFlight && currentMedia) {
+        this.resumeShareInFlight = false;
+      }
+      // "" while a resume is in flight is not a share end (see above)
+      const shareResuming = !currentMedia && this.resumeShareInFlight;
+      if (
+        this.playingScreenShare() &&
+        !isScreenShare(currentMedia) &&
+        !shareResuming
+      ) {
         this.stopPublishingLocalStream();
       }
-      if (this.playingFileShare() && !isFileShare(currentMedia)) {
+      if (
+        this.playingFileShare() &&
+        !isFileShare(currentMedia) &&
+        !shareResuming
+      ) {
         this.stopPublishingLocalStream();
       }
       if (this.playingVBrowser() && !isVBrowser(currentMedia)) {
@@ -737,6 +780,11 @@ export class App extends React.Component<AppProps, AppState> {
       }
       // /fb must not jump into the new media at the old media's time
       this.lastSeekFrom = undefined;
+      // A new video from someone else makes a pending "share again" moot
+      const newVideoCame =
+        !!currentMedia &&
+        !isScreenShare(currentMedia) &&
+        !isFileShare(currentMedia);
       this.setState(
         {
           roomMedia: currentMedia,
@@ -750,6 +798,8 @@ export class App extends React.Component<AppProps, AppState> {
           // New media: everyone starts it together
           exploring: false,
           localCopyNeeded: false,
+          // A new video from someone else makes a pending "share again" moot
+          shareEndedPrompt: newVideoCame ? false : this.state.shareEndedPrompt,
           // Recompute the resume offer: the reopen offer dies here, and a
           // room behind our saved spot offers to pull the room forward
           resumeOffer: this.getResumeOffer(currentMedia, data.videoTS),
@@ -1597,6 +1647,7 @@ export class App extends React.Component<AppProps, AppState> {
       const transcoder = this.createTranscoder(file, leftVideo, 0, (err) => {
         // Conversion failed mid-share
         this.showError(`Conversion failed: ${err.message}`);
+        this.shareStopSilent = true;
         this.stopPublishingLocalStream();
       });
       try {
@@ -2172,6 +2223,11 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   stopPublishingLocalStream = async () => {
+    // Only a stop of something real can offer "share again"; intentional
+    // stops (Stop Share button, failed conversion) set shareStopSilent first
+    const wasSharing = Boolean(this.localStreamToPublish);
+    const silent = this.shareStopSilent;
+    this.shareStopSilent = false;
     this.stopConvert();
     if (this.localStreamToPublish) {
       this.socket.emit("CMD:leaveScreenShare");
@@ -2202,6 +2258,12 @@ export class App extends React.Component<AppProps, AppState> {
     if (this.mediasoupSubSocket) {
       this.mediasoupSubSocket.close();
       this.mediasoupSubSocket = null;
+    }
+    if (wasSharing && !silent) {
+      // The capture ended without the user asking (display unplugged, browser
+      // ended it, the room cleared a dead-looking share): say so and offer the
+      // re-share one click away
+      this.setState({ shareEndedPrompt: true });
     }
   };
 
@@ -3516,12 +3578,31 @@ export class App extends React.Component<AppProps, AppState> {
                       {this.localStreamToPublish && (
                         <Button
                           color="red"
-                          onClick={this.stopPublishingLocalStream}
+                          onClick={() => {
+                            this.shareStopSilent = true;
+                            this.stopPublishingLocalStream();
+                          }}
                           leftSection={<IconX />}
                         >
                           Stop Share
                         </Button>
                       )}
+                      {this.state.shareEndedPrompt &&
+                        !this.localStreamToPublish && (
+                          <Button
+                            color="yellow"
+                            onClick={() => {
+                              this.setState({
+                                shareEndedPrompt: false,
+                                isScreenShareModalOpen:
+                                  !this.isLocalStreamAFile,
+                                isFileShareModalOpen: this.isLocalStreamAFile,
+                              });
+                            }}
+                          >
+                            Share stopped — share again
+                          </Button>
+                        )}
                       {!this.localStreamToPublish &&
                         !sharer &&
                         !this.playingVBrowser() && (

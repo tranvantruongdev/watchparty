@@ -1,6 +1,6 @@
 import React from "react";
 import { createPortal } from "react-dom";
-import { ActionIcon, Button } from "@mantine/core";
+import { ActionIcon, Button, Slider } from "@mantine/core";
 import { Socket } from "socket.io-client";
 
 import {
@@ -18,6 +18,7 @@ import {
   IconMicrophone,
   IconScreenShare,
   IconVideo,
+  IconVolume,
   IconX,
 } from "@tabler/icons-react";
 
@@ -37,9 +38,14 @@ interface VideoChatProps {
 
 export class VideoChat extends React.Component<
   VideoChatProps,
-  { playBlocked: boolean }
+  { playBlocked: boolean; voiceVolume: number }
 > {
-  state = { playBlocked: false };
+  // Voice volume also lives on window.watchparty so it survives element
+  // remounts and People-panel collapse (a fresh instance re-seeds from there)
+  state = {
+    playBlocked: false,
+    voiceVolume: window.watchparty.voiceVolume ?? 1,
+  };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
 
@@ -61,6 +67,8 @@ export class VideoChat extends React.Component<
     if (el.srcObject !== stream) {
       el.srcObject = stream;
     }
+    // The chosen voice volume rides on every (re)mount of the element
+    el.volume = window.watchparty.voiceVolume ?? 1;
     if (el.paused) {
       el.play().catch(() => {
         this.setState({ playBlocked: true });
@@ -77,6 +85,19 @@ export class VideoChat extends React.Component<
     Object.keys(this.remoteStreams).forEach((key) =>
       window.watchparty.videoRefs[key]?.play().catch(() => {}),
     );
+  };
+
+  // One "voice volume" for everyone else (the movie keeps its own slider).
+  // State drives the slider thumb; window.watchparty drives attach() on every
+  // (re)mount, so the setting outlives element remounts and panel collapse
+  setVoiceVolume = (v: number) => {
+    window.watchparty.voiceVolume = v;
+    this.setState({ voiceVolume: v });
+    Object.entries(window.watchparty.videoRefs).forEach(([id, el]) => {
+      if (el && id !== getOrCreateClientId()) {
+        el.volume = v;
+      }
+    });
   };
 
   componentDidMount() {
@@ -498,6 +519,30 @@ export class VideoChat extends React.Component<
             </Button>,
             document.body,
           )}
+        {ourStream && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              width: "100%",
+              padding: "0 8px",
+            }}
+          >
+            <IconVolume size={16} style={{ flexShrink: 0 }} />
+            <Slider
+              title="Voice volume (the others, vs the movie's own volume)"
+              value={this.state.voiceVolume}
+              onChange={this.setVoiceVolume}
+              onChangeEnd={this.setVoiceVolume}
+              min={0}
+              max={1}
+              step={0.05}
+              label={(v) => `${Math.round(v * 100)}%`}
+              style={{ flexGrow: 1 }}
+            />
+          </div>
+        )}
         {participants.map((p) => {
           return (
             <div key={p.id}>

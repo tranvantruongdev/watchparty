@@ -37,6 +37,11 @@ const MAX_VBROWSERS_PER_USER = 2;
 // The only emojis accepted for CMD:floatReaction, anything else is dropped
 const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 
+// How long a dropped sharer's socket keeps the room's share alive before it
+// counts as dead (tab closed / crash). Covers a network blip: the client
+// reconnects within seconds of the link returning and re-announces
+const SHARER_GRACE_MS = 10_000;
+
 // The only emojis accepted for CMD:emote (pixel bubbles on the theater floor),
 // anything else is dropped
 const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
@@ -142,6 +147,10 @@ export class Room {
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
+  // Ends a dead sharer's share (round 44) after a grace window: a network
+  // blip can drop the sharer's socket while their capture keeps running, and
+  // they re-announce with CMD:resumeShare when the socket comes back
+  private sharerGraceTimer: NodeJS.Timeout | undefined = undefined;
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
   private preventTSUpdate = false;
@@ -542,6 +551,9 @@ export class Room {
       on("CMD:leaveScreenShare", () => {
         allowRelay() && this.leaveScreenSharing(socket);
       });
+      on("CMD:resumeShare", (data: unknown) =>
+        this.resumeSharing(socket, data),
+      );
       on("CMD:startVBrowser", (data: unknown) => {
         validateLock() && this.startVBrowser(socket, data);
       });
@@ -1602,6 +1614,35 @@ export class Room {
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
 
+  // A sharer whose socket dropped and came back re-announces their share.
+  // Fast path: the grace timer hasn't fired, the room media is untouched —
+  // just cancel the pending clear. Slow path: the grace already fired and the
+  // room is empty — put their share back without a re-pick. A room that moved
+  // on (someone else hosts now) refuses, and the client stops its capture
+  private resumeSharing = (socket: Socket, raw: unknown) => {
+    const data = raw as { media?: string };
+    if (!data?.media) {
+      return;
+    }
+    // Only their own share value, exact (no mediasoup suffix) or with one
+    const own =
+      data.media === "screenshare://" + socket.clientId ||
+      data.media === "fileshare://" + socket.clientId ||
+      data.media.startsWith("screenshare://" + socket.clientId + "@") ||
+      data.media.startsWith("fileshare://" + socket.clientId + "@");
+    if (!own) {
+      return;
+    }
+    if (socket.clientId === this.getSharerId()) {
+      clearTimeout(this.sharerGraceTimer);
+      this.sharerGraceTimer = undefined;
+      return;
+    }
+    if (!this.video) {
+      this.cmdHost(socket, data.media);
+    }
+  };
+
   private startVBrowser = async (socket: Socket, raw: unknown) => {
     const data = raw as {
       options?: { size: string; region: string; provider: string };
@@ -2090,9 +2131,18 @@ export class Room {
       }
       // A sharer who dropped (tab closed, reload, crash) can't send
       // CMD:leaveScreenShare; without this the room stays stuck on their dead
-      // screenshare:// media, which nobody can watch or unpause
+      // screenshare:// media, which nobody can watch or unpause. A short
+      // network blip drops the socket the same way while the capture keeps
+      // running: give the sharer a grace window to reconnect and re-announce
+      // (CMD:resumeShare) before declaring the share dead
       if (clientId === this.getSharerId()) {
-        this.cmdHost(null, "");
+        clearTimeout(this.sharerGraceTimer);
+        this.sharerGraceTimer = setTimeout(() => {
+          this.sharerGraceTimer = undefined;
+          if (clientId === this.getSharerId()) {
+            this.cmdHost(null, "");
+          }
+        }, SHARER_GRACE_MS);
       }
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       delete this.tsMap[clientId];
