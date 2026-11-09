@@ -141,6 +141,12 @@ export class Room {
   // budget: every accepted event makes the server emit to the room, and a
   // legit client only ever sends a handful per second
   private relayTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of accepted picture changes in the last minute.
+  // A login sets the avatar once, so a legit client sends a handful per
+  // minute at most; every accepted picture re-broadcasts the whole map
+  // (up to 10KB per member) to everyone, so the shared 25/s relay budget
+  // still let one client push ~220KB/s into every peer's socket
+  private pictureTimes: { [clientId: string]: number[] } = {};
   // clientId -> timestamps of relayed WebRTC signaling in the last second.
   // Own, higher budget: connection setup trickles dozens of candidates
   private signalTimes: { [clientId: string]: number[] } = {};
@@ -443,10 +449,11 @@ export class Room {
       const allowRelay = (
         cap = 25,
         map: { [clientId: string]: number[] } = this.relayTimes,
+        windowMs = 1000,
       ) => {
         const now = Date.now();
         const times = (map[socket.clientId] || []).filter(
-          (t) => now - t < 1000,
+          (t) => now - t < windowMs,
         );
         if (times.length >= cap) {
           return false;
@@ -464,7 +471,8 @@ export class Room {
       on(
         "CMD:picture",
         (data: unknown) =>
-          allowRelay() && this.changeUserPicture(socket, String(data)),
+          allowRelay(3, this.pictureTimes, 60000) &&
+          this.changeUserPicture(socket, String(data)),
       );
       on("CMD:uid", async (raw: unknown) => {
         let data = raw as { uid: string; token: string };
@@ -2155,6 +2163,7 @@ export class Room {
       delete this.intermissionTimes[clientId];
       delete this.sleepTimes[clientId];
       delete this.relayTimes[clientId];
+      delete this.pictureTimes[clientId];
       delete this.signalTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];

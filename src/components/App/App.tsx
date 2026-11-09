@@ -255,6 +255,9 @@ interface AppState {
   chatOverlayMsg: string;
   // Memory wall: ticket stubs of the videos that reached the end in this room
   ticketStubs: TicketStub[];
+  // Catch-up chip (round 62): seconds this viewer is behind the room leader
+  // while the chip is showing, null when it is hidden
+  catchUpBehind: number | null;
 }
 
 export class App extends React.Component<AppProps, AppState> {
@@ -278,6 +281,7 @@ export class App extends React.Component<AppProps, AppState> {
     chatOverlayTyping: false,
     chatOverlayMsg: "",
     ticketStubs: [],
+    catchUpBehind: null,
     playlist: [],
     tsMap: {},
     nameMap: {},
@@ -1148,6 +1152,9 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:tsMap", (data: NumberDict) => {
       this.tsMapData = data;
+      // When the map arrived: a leader position is up to ~2 s stale (their 1 s
+      // report tick + this 1 s broadcast), the catch-up click compensates it
+      this.tsMapAt = Date.now();
       const onTick = () => {
         // Dynamic playback rate based on timestamps
         // Disable for sharing types where the users can have different timestamps
@@ -1173,6 +1180,22 @@ export class App extends React.Component<AppProps, AppState> {
           if (this.Player().getPlaybackRate() !== pbr) {
             this.Player().setPlaybackRate(pbr);
           }
+        }
+        // Catch-up chip: drift matters at any room playback rate, so this
+        // does NOT share the pbr block's roomPlaybackRate === 0 clause — the
+        // server's default room rate is 1, so that clause never fires after a
+        // normal join and the pbr correction above is effectively dormant
+        if (
+          !this.state.roomPaused &&
+          !this.state.exploring &&
+          !this.state.isLiveStream &&
+          this.hasDuration()
+        ) {
+          this.updateCatchUpChip(this.getLeaderTime() - data[clientId]);
+        } else {
+          // Paused / solo / live / no duration: no drift to report, take the
+          // chip down if it was up
+          this.updateCatchUpChip(0);
         }
         if (this.state.roomSubtitle) {
           const sharer = this.state.participants.find((p) => p.isScreenShare);
@@ -2645,6 +2668,48 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // Consecutive REC:tsMap ticks (>2 s behind the leader) before the chip
+  // shows, so a transient hiccup doesn't flash it
+  catchUpStreak = 0;
+  // Milliseconds timestamp until which the chip stays hidden after a catch-up
+  // click (our own tsMap entry is stale for ~2 s, which would re-arm it)
+  catchUpSuppressedUntil = 0;
+  // When the last REC:tsMap arrived (see catchUpNow)
+  tsMapAt = 0;
+
+  // Catch-up chip (round 62): this viewer is playing > 2 s behind the room
+  // leader. The room-wide sync only nudges the playback rate (max +10%), so
+  // a genuinely lagged viewer never recovers — offer a one-click local resync
+  // (localSeek, no CMD:seek, the room must not follow one laggy client).
+  // Held back while anyone is buffering — a stalled player's ts freezes, so
+  // the "leader" position would be stale — and while we're stalled ourselves
+  // (bufferingReported), same ticks the room's buffer auto-pause uses
+  updateCatchUpChip = (delta: number) => {
+    const othersBuffering = this.state.participants.some(
+      (p) => p.id !== clientId && p.buffering,
+    );
+    const behind =
+      Number.isFinite(delta) &&
+      delta > 2 &&
+      !othersBuffering &&
+      !this.bufferingReported &&
+      Date.now() > this.catchUpSuppressedUntil;
+    this.catchUpStreak = behind ? this.catchUpStreak + 1 : 0;
+    const next = behind && this.catchUpStreak >= 3 ? Math.round(delta) : null;
+    if (next !== this.state.catchUpBehind) {
+      this.setState({ catchUpBehind: next });
+    }
+  };
+
+  catchUpNow = () => {
+    this.catchUpStreak = 0;
+    this.catchUpSuppressedUntil = Date.now() + 5000;
+    this.setState({ catchUpBehind: null });
+    // The leader is playing, so their position has advanced since the map
+    // arrived — add the staleness back instead of landing 1-2 s short
+    this.localSeek(this.getLeaderTime() + (Date.now() - this.tsMapAt) / 1000);
+  };
+
   // seekTo() keeps whatever state the YouTube player is in: a seek that lands
   // while it is CUED (autoplay was swallowed) only re-cues, and the iframe API
   // can leave a seek paused or stuck in BUFFERING. The room keeps playing, so
@@ -3606,6 +3671,18 @@ export class App extends React.Component<AppProps, AppState> {
                   gap: "4px",
                 }}
               >
+                {/* Catch-up chip: one-click local resync when this viewer is
+                    clearly behind the room (fullscreen overlays live here too,
+                    see round 15) */}
+                {this.state.catchUpBehind !== null && (
+                  <button
+                    className={styles.catchUpChip}
+                    onClick={this.catchUpNow}
+                  >
+                    You're {this.state.catchUpBehind}s behind — click to catch
+                    up
+                  </button>
+                )}
                 {!this.state.fullScreen && (
                   <React.Fragment>
                     <div

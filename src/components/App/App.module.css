@@ -729,6 +729,28 @@
   }
 }
 
+/* Catch-up chip: this viewer is playing behind the room leader; click resyncs
+   only this client to the leader's time. Sits over the video like the other
+   player overlays */
+.catchUpChip {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  border: 1px solid rgba(168, 85, 247, 0.8);
+  border-radius: 999px;
+  background: rgba(20, 12, 36, 0.88);
+  color: rgba(230, 220, 255, 0.95);
+  font-size: 13px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.catchUpChip:hover {
+  background: rgba(43, 24, 74, 0.92);
+}
+
 /* Fullscreen chat overlay: newest messages over the player, fading out ~8s
    after each arrives. pointer-events none so the player/controls stay clickable;
    the input opts back in. */
