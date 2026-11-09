@@ -408,6 +408,9 @@ export class App extends React.Component<AppProps, AppState> {
   consumerConn?: RTCPeerConnection;
   shareStatsTimer?: number;
   shareStatsLast?: { bytes: number; ts: number };
+  // Last 3 instantaneous encode fps samples for the sharer badge: the single
+  // poll value swings 2-8 fps while the window average is steady (round 64)
+  shareSendFps: number[] = [];
   progressUpdater?: number;
   tsInterval?: number;
   heartbeat: number | undefined = undefined;
@@ -2288,6 +2291,7 @@ export class App extends React.Component<AppProps, AppState> {
     }
     window.clearInterval(this.shareStatsTimer);
     this.shareStatsLast = undefined;
+    this.shareSendFps = [];
     this.setState({ shareStats: "", shareSendStats: "" });
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
@@ -2572,6 +2576,14 @@ export class App extends React.Component<AppProps, AppState> {
       if (r.type === "outbound-rtp" && r.kind === "video") out = r;
     });
     if (!out) return;
+    const fps = Math.round(out.framesPerSecond ?? 0);
+    // Badge over the last 3 polls, not one: the instantaneous value swings so
+    // much it reads as broken (2-8 fps shown while the window average was 9)
+    this.shareSendFps.push(fps);
+    if (this.shareSendFps.length > 3) this.shareSendFps.shift();
+    const avgFps = (
+      this.shareSendFps.reduce((a, b) => a + b, 0) / this.shareSendFps.length
+    ).toFixed(1);
     const lim = out.qualityLimitationReason ?? "none";
     const limit =
       lim === "none"
@@ -2580,7 +2592,7 @@ export class App extends React.Component<AppProps, AppState> {
           ? " · encoder limited by CPU"
           : ` · encoder limited by ${lim}`;
     this.setState({
-      shareSendStats: ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${Math.round(out.framesPerSecond ?? 0)}fps${limit}`,
+      shareSendStats: ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${avgFps}fps${limit}`,
     });
   };
 
