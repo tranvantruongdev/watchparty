@@ -61,13 +61,14 @@ const hdVoiceSdp = (sdp: string | undefined) =>
 
 export class VideoChat extends React.Component<
   VideoChatProps,
-  { playBlocked: boolean; voiceVolume: number }
+  { playBlocked: boolean; voiceVolume: number; speaking: string[] }
 > {
   // Voice volume also lives on window.watchparty so it survives element
   // remounts and People-panel collapse (a fresh instance re-seeds from there)
   state = {
     playBlocked: false,
     voiceVolume: window.watchparty.voiceVolume ?? 1,
+    speaking: [] as string[],
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -77,6 +78,10 @@ export class VideoChat extends React.Component<
   // that starts on a recvonly transceiver (they were listening, then opened
   // their mic) arrives with no stream of its own
   remoteStreams: Record<string, MediaStream> = {};
+  // Who is talking: clientId -> last poll where their incoming audio level
+  // was above the speaking threshold (see pollSpeaking)
+  speakSeen: { [id: string]: number } = {};
+  speakTimer: NodeJS.Timeout | undefined = undefined;
 
   // Show the peer's stream on their element (which can mount after the track
   // arrives, or remount) and play it. Autoplay with sound is refused until
@@ -125,11 +130,74 @@ export class VideoChat extends React.Component<
 
   componentDidMount() {
     this.socket.on("signal", this.handleSignal);
+    // ~2 polls a second is plenty; Chrome updates audioLevel roughly that fast
+    this.speakTimer = setInterval(this.pollSpeaking, 450);
   }
 
   componentWillUnmount() {
     this.socket.off("signal", this.handleSignal);
+    if (this.speakTimer) {
+      clearInterval(this.speakTimer);
+    }
   }
+
+  // Who is talking right now, so a dead mic or a half-broken route is visible
+  // at a glance. Chrome publishes each receiver's incoming audio level
+  // (RFC 6464) via getSynchronizationSources — polling it needs no
+  // AudioContext, no permissions and no capture. Browsers without the API
+  // just never light up. A source must have sent a packet recently too: a
+  // muted peer stops (or silences) its packets, but the entry lingers with
+  // its last audioLevel (s.timestamp is on the performance.now() clock).
+  // A ring stays on ~600ms after the level drops so it doesn't flicker
+  // between words. Our own mic is not shown; the mic button already shows
+  // its own state
+  pollSpeaking = () => {
+    const videoPCs = window.watchparty.videoPCs ?? {};
+    const now = Date.now();
+    const pageNow = performance.now();
+    Object.entries(videoPCs).forEach(([id, pc]) => {
+      let active = false;
+      try {
+        for (const receiver of pc.getReceivers()) {
+          if (receiver.track.kind !== "audio") {
+            continue;
+          }
+          // Typed loosely: the API is Chrome-only and older TS lib.dom
+          // versions don't declare it
+          const withSources = receiver as RTCRtpReceiver & {
+            getSynchronizationSources?: () => {
+              audioLevel?: number;
+              timestamp?: number;
+            }[];
+          };
+          if (
+            withSources
+              .getSynchronizationSources?.()
+              .some(
+                (s) =>
+                  (s.audioLevel ?? 0) > 0.01 &&
+                  pageNow - (s.timestamp ?? -Infinity) < 2000,
+              )
+          ) {
+            active = true;
+            break;
+          }
+        }
+      } catch {
+        // not supported on this receiver/browser
+      }
+      if (active) {
+        this.speakSeen[id] = now;
+      } else if (now - (this.speakSeen[id] ?? 0) > 600) {
+        delete this.speakSeen[id];
+      }
+    });
+    const ids = Object.keys(this.speakSeen).sort();
+    const prev = this.state.speaking;
+    if (ids.length !== prev.length || ids.some((id, i) => id !== prev[i])) {
+      this.setState({ speaking: ids });
+    }
+  };
 
   componentDidUpdate(prevProps: VideoChatProps) {
     if (
@@ -580,6 +648,11 @@ export class VideoChat extends React.Component<
       position: "relative",
     };
     const selfId = getOrCreateClientId();
+    // Violet ring on seats whose mic is picking up sound right now
+    const isSpeaking = (id: string) => this.state.speaking.includes(id);
+    const speakingStyle: React.CSSProperties = {
+      boxShadow: "0 0 0 3px #a78bfa",
+    };
     return (
       <div
         style={{
@@ -635,6 +708,7 @@ export class VideoChat extends React.Component<
           return (
             <div key={p.id}>
               <div
+                data-speaking={isSpeaking(p.id) ? "true" : "false"}
                 style={{
                   position: "relative",
                 }}
@@ -770,6 +844,7 @@ export class VideoChat extends React.Component<
                       }}
                       style={{
                         ...videoChatContentStyle,
+                        ...(isSpeaking(p.id) ? speakingStyle : {}),
                         // mirror the video if it's our stream. this style mimics Zoom where your
                         // video is mirrored only for you)
                         transform: `scaleX(${p.id === selfId ? "-1" : "1"})`,
@@ -780,7 +855,10 @@ export class VideoChat extends React.Component<
                     />
                   ) : (
                     <img
-                      style={videoChatContentStyle}
+                      style={{
+                        ...videoChatContentStyle,
+                        ...(isSpeaking(p.id) ? speakingStyle : {}),
+                      }}
                       src={
                         pictureMap[p.id] ||
                         getDefaultPicture(

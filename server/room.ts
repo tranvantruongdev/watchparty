@@ -2158,10 +2158,28 @@ export class Room {
       delete this.signalTimes[clientId];
       delete this.positionMap[clientId];
       delete this.moveTimes[clientId];
+      // Prune name/picture entries nobody renders anymore. Chat history is
+      // the only reason to keep a departed visitor's name/picture (the same
+      // rule serialize() uses), and the roster keeps live seats labeled.
+      // Without this the maps grow forever with every visitor (a 10KB
+      // picture stays until the room is unloaded) and every new joiner
+      // re-downloads all of it. Reconnects restore their own values: the
+      // client re-emits CMD:name on connect and CMD:picture on login.
+      const keep = new Set([
+        ...this.chat.map((msg) => msg.id),
+        ...this.roster.map((user) => user.id),
+      ]);
+      Object.keys(this.nameMap).forEach((id) => {
+        if (!keep.has(id)) {
+          delete this.nameMap[id];
+        }
+      });
+      Object.keys(this.pictureMap).forEach((id) => {
+        if (!keep.has(id)) {
+          delete this.pictureMap[id];
+        }
+      });
     }
-    // Keep namemap/picturemap so old chat messages still render correctly after disconnect
-    // When serializing we only write values with messages in chat
-    // This will keep growing in memory until the room is unloaded
   };
 
   private kickUser = async (raw: unknown) => {

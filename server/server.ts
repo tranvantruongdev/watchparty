@@ -79,7 +79,14 @@ if (config.SSL_KEY_FILE && config.SSL_CRT_FILE) {
 }
 server?.listen(config.PORT, config.HOST);
 
-const io = new Server(server, { cors: {}, transports: ["websocket"] });
+// maxHttpBufferSize bounds the memory one socket frame can make us allocate.
+// The largest legit relayed payload is a signal msg (capped at 100KB in
+// sendSignal); anything over 256KB gets the sender disconnected by the engine.
+const io = new Server(server, {
+  cors: {},
+  transports: ["websocket"],
+  maxHttpBufferSize: 256 * 1024,
+});
 io.engine.use(async (req: any, res: Response, next: () => void) => {
   const roomId = req._query.roomId;
   if (!roomId) {
