@@ -61,7 +61,12 @@ const hdVoiceSdp = (sdp: string | undefined) =>
 
 export class VideoChat extends React.Component<
   VideoChatProps,
-  { playBlocked: boolean; voiceVolume: number; speaking: string[] }
+  {
+    playBlocked: boolean;
+    voiceVolume: number;
+    speaking: string[];
+    reconnecting: string[];
+  }
 > {
   // Voice volume also lives on window.watchparty so it survives element
   // remounts and People-panel collapse (a fresh instance re-seeds from there)
@@ -69,6 +74,7 @@ export class VideoChat extends React.Component<
     playBlocked: false,
     voiceVolume: window.watchparty.voiceVolume ?? 1,
     speaking: [] as string[],
+    reconnecting: [] as string[],
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -82,6 +88,9 @@ export class VideoChat extends React.Component<
   // was above the speaking threshold (see pollSpeaking)
   speakSeen: { [id: string]: number } = {};
   speakTimer: NodeJS.Timeout | undefined = undefined;
+  // Peers whose voice link came up once (so a later non-connected state is a
+  // REconnection, not the normal first connect) — see pollSpeaking
+  everConnected: { [id: string]: boolean } = {};
 
   // Show the peer's stream on their element (which can mount after the track
   // arrives, or remount) and play it. Autoplay with sound is refused until
@@ -196,6 +205,49 @@ export class VideoChat extends React.Component<
     const prev = this.state.speaking;
     if (ids.length !== prev.length || ids.some((id, i) => id !== prev[i])) {
       this.setState({ speaking: ids });
+    }
+    // Seats whose voice link is down: ICE disconnected/failed, or the PC was
+    // rebuilt (blip recovery, failed rebuild) and has not connected again yet.
+    // "reconnecting…" on the seat turns a dead peer's silence into something
+    // visible. A PC that never connected shows nothing — that is the normal
+    // first connect, not a reconnection (and the failed rebuild covers it)
+    const videoPCsNow = window.watchparty.videoPCs ?? {};
+    const selfId = getOrCreateClientId();
+    const recon: string[] = [];
+    Object.entries(videoPCsNow).forEach(([id, pc]) => {
+      if (id === selfId) {
+        return;
+      }
+      if (
+        pc.connectionState === "connected" ||
+        pc.iceConnectionState === "connected"
+      ) {
+        this.everConnected[id] = true;
+        return;
+      }
+      if (
+        this.everConnected[id] ||
+        pc.iceConnectionState === "disconnected" ||
+        pc.iceConnectionState === "failed" ||
+        pc.connectionState === "failed"
+      ) {
+        recon.push(id);
+      }
+    });
+    // A PC deleted from the map (peer left, rebuild swapped it) must not keep
+    // its flag: a rejoin starts from scratch
+    Object.keys(this.everConnected).forEach((id) => {
+      if (!videoPCsNow[id]) {
+        delete this.everConnected[id];
+      }
+    });
+    recon.sort();
+    const prevRecon = this.state.reconnecting;
+    if (
+      recon.length !== prevRecon.length ||
+      recon.some((id, i) => id !== prevRecon[i])
+    ) {
+      this.setState({ reconnecting: recon });
     }
   };
 
@@ -589,14 +641,18 @@ export class VideoChat extends React.Component<
         pc.oniceconnectionstatechange = () => {
           if (pc.iceConnectionState === "failed") {
             rebuildFailed();
-          } else if (isOfferer && pc.iceConnectionState === "disconnected") {
+          } else if (pc.iceConnectionState === "disconnected") {
             // A wifi switch rebinds the NAT: the old pair never answers again
             // but ICE hangs at "disconnected" and Chrome only escalates to
             // "failed" ~25-30 s later (measured round 52) — one-way silence
             // that whole time. A short blip self-heals in ~1-2 s (measured
             // round 58, freeze test), so 10 s of dead air is a rebind: restart
-            // ICE now instead of waiting for the failed rebuild. The offerer
-            // drives it; the answerer half restarts from the offer it gets.
+            // ICE now instead of waiting for the failed rebuild. Either half
+            // drives it (measured round 63: with the watchdog answerer-side an
+            // offerer death recovers in ~18 s; without, the answerer waits for
+            // the failed escalation — ~23 s). The guards below keep a PC that
+            // never connected from restarting: nothing to restart, the failed
+            // rebuild owns that case.
             window.clearTimeout(voiceDiscTimer);
             voiceDiscTimer = window.setTimeout(() => {
               if (
@@ -868,6 +924,29 @@ export class VideoChat extends React.Component<
                       }
                     />
                   )}
+                  {p.id !== selfId &&
+                    this.state.reconnecting.includes(p.id) && (
+                      <div
+                        data-reconnecting={p.id}
+                        title="Their voice link is down — reconnecting"
+                        style={{
+                          position: "absolute",
+                          top: "4px",
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          backgroundColor: "rgba(20,12,40,0.75)",
+                          color: "#fbbf24",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          padding: "2px 8px",
+                          borderRadius: "4px",
+                          zIndex: 1,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        reconnecting…
+                      </div>
+                    )}
                 </div>
               </div>
             </div>

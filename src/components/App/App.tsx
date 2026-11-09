@@ -2550,6 +2550,20 @@ export class App extends React.Component<AppProps, AppState> {
   // real bitrate (it ramps up over the first minute and quality-limits on
   // bandwidth/CPU), so show the real limit live; the cap is only a ceiling
   pollSendStats = async () => {
+    // A PC can die without a single event: Chrome changes iceConnectionState/
+    // connectionState to "closed" on a page-side close() but fires NOTHING
+    // (probed round 63), so the "closed" rebuild handlers above never run and
+    // that viewer stays black forever. Scan the map on this 2 s poll instead —
+    // PCs we close ourselves (stop, rebuild, roster prune) are deleted in the
+    // same tick they close, so only a foreign dead entry can be found here
+    const dead = Object.entries(this.publisherConns).filter(
+      ([, pc]) =>
+        pc.connectionState === "closed" || pc.iceConnectionState === "closed",
+    );
+    if (dead.length) {
+      dead.forEach(([id]) => delete this.publisherConns[id]);
+      this.setupRTCConnections();
+    }
     const pc = Object.values(this.publisherConns)[0];
     if (!pc) return;
     const stats = await pc.getStats();
