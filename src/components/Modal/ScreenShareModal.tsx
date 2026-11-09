@@ -5,13 +5,29 @@ import { MetadataContext } from "../../MetadataContext";
 
 // Max bitrate of a direct share, per viewer. 16 can fill a home upload link
 // and lag the sharer's own network, so the sharer picks it
-const SHARE_MBPS = ["4", "8", "16"];
+const SHARE_MBPS = ["1.5", "2", "4", "8", "16"];
 export const getShareMbps = () => {
   let v: string | null = null;
   try {
     v = window.localStorage.getItem("watchparty-share-mbps");
   } catch {}
   return Number(v && SHARE_MBPS.includes(v) ? v : "8");
+};
+
+// With the dialog left on the default, a big room runs the sharer out of CPU
+// before upload bandwidth (round 66: 3 viewers on software VP9 at 8 Mbps each
+// = 7-9 fps and ~3 freezes/10s per viewer; capped at 1.5 Mbps at sender
+// creation = 10 fps, ~1.5 freezes, text no worse). Each publisher PC is
+// created for one viewer, so the cap is chosen per PC at creation — never
+// changed mid-stream. An explicit dialog pick (the stored value is only ever
+// written by a click) always wins over the auto rule
+export const getShareCapMbps = (viewers: number) => {
+  let picked: string | null = null;
+  try {
+    picked = window.localStorage.getItem("watchparty-share-mbps");
+  } catch {}
+  if (!picked && viewers > 2) return 1.5;
+  return getShareMbps();
 };
 
 export const ScreenShareModal = ({
@@ -43,6 +59,8 @@ export const ScreenShareModal = ({
       <div>
         Quality (max upload per viewer):{" "}
         {[
+          ["1.5", "1.5 Mbps — many viewers / slow PC"],
+          ["2", "2 Mbps — many viewers"],
           ["4", "Low 4 Mbps"],
           ["8", "Medium 8 Mbps"],
           ["16", "High 16 Mbps"],

@@ -51,7 +51,11 @@ import { VBrowserModal } from "../Modal/VBrowserModal";
 import { SettingsModal } from "../Settings/SettingsModal";
 import { ErrorModal } from "../Modal/ErrorModal";
 import { PasswordModal } from "../Modal/PasswordModal";
-import { ScreenShareModal, getShareMbps } from "../Modal/ScreenShareModal";
+import {
+  ScreenShareModal,
+  getShareMbps,
+  getShareCapMbps,
+} from "../Modal/ScreenShareModal";
 import { FileShareModal } from "../Modal/FileShareModal";
 import {
   ClientTranscoder,
@@ -2374,9 +2378,17 @@ export class App extends React.Component<AppProps, AppState> {
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
               const tr = pc.addTransceiver(track, {
                 streams: [this.localStreamToPublish],
-                // Quality picked in the share dialog (4/8/16 Mbps); the browser
-                // still sends less when the link can't carry it
-                sendEncodings: [{ maxBitrate: getShareMbps() * 1_000_000 }],
+                // Quality picked in the share dialog (1.5-16 Mbps); on the
+                // untouched default a >2-viewer room caps each new PC lower —
+                // the sharer's CPU fills up before its upload (round 66). The
+                // browser still sends less when the link can't carry it
+                sendEncodings: [
+                  {
+                    maxBitrate:
+                      getShareCapMbps(this.state.participants.length - 1) *
+                      1_000_000,
+                  },
+                ],
               });
               // Prefer VP9: on a moving picture VP8 hits the cap and drops
               // 1080p to 480x270, VP9 keeps 1080p30 at the same bitrate
@@ -4076,7 +4088,9 @@ export class App extends React.Component<AppProps, AppState> {
                     )}
                     {this.isSharingScreen() && (
                       <div className={styles.shareStats}>
-                        You're sharing your screen ({getShareMbps()} Mbps max)
+                        You're sharing your screen (
+                        {getShareCapMbps(this.state.participants.length - 1)}{" "}
+                        Mbps max)
                         {this.state.shareSendStats}
                       </div>
                     )}
