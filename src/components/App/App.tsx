@@ -3436,6 +3436,12 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   onVideoEnded = (url: string) => {
+    // Ignore 'ended' that fires while a new source is still loading (source
+    // switch, stale event from the previous media) — it would pause the room,
+    // pin a ticket stub, and advance the playlist for a video that never ended
+    if (this.state.loading) {
+      return;
+    }
     this.localPause();
     // check if looping is on, if so set time back to 0 and restart
     if (this.state.roomLoop) {

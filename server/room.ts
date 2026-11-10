@@ -964,6 +964,11 @@ export class Room {
 
   private playlistNext = (raw: unknown) => {
     const data = raw ? String(raw) : null;
+    // We just changed the video: an ENDED carrying the new url is the old
+    // player's late event, not the end of the video that has barely started
+    if (data && this.preventTSUpdate) {
+      return;
+    }
     // Clients may pass the URL that should be the current one.
     // If we've already advanced the playlist, we can ignore duplicate calls.
     // Same video = the exact url, or two YouTube links for the same video
