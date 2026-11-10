@@ -66,7 +66,6 @@ import type firebase from "firebase/compat/app";
 import { SubtitleModal } from "../Modal/SubtitleModal";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
-import { PixelFloor } from "./PixelFloor";
 import styles from "./App.module.css";
 import config from "../../config";
 import { getFirebase } from "../../firebaseLazy";
@@ -4055,7 +4054,7 @@ export class App extends React.Component<AppProps, AppState> {
                         multiline
                         w={280}
                         refProp="rootRef"
-                        label="Cinema look: curtains, house lights and seats. Turn off for the classic layout."
+                        label="Cinema look: curtains and house lights. Turn off for the classic layout."
                       >
                         <Switch
                           label="Theater"
@@ -4455,15 +4454,6 @@ export class App extends React.Component<AppProps, AppState> {
                   </div>
                 </div>
                 {this.state.roomMedia && controls}
-                {theater && (
-                  <PixelFloor
-                    participants={this.state.participants}
-                    nameMap={this.state.nameMap}
-                    socket={this.socket}
-                    lightsDown={lightsDown}
-                    stubs={this.state.ticketStubs}
-                  />
-                )}
                 {!isMobile() && !this.state.fullScreen && (
                   <div className={styles.expandButton}>
                     <ActionIcon
