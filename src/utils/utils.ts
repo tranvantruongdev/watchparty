@@ -295,7 +295,12 @@ export async function getMediaPathResults(
     const playlistID = mediaPath.split(
       "https://www.youtube.com/playlist?list=",
     )[1];
-    const response = await fetch(serverPath + "/youtubePlaylist/" + playlistID);
+    const response = await fetch(
+      serverPath + "/youtubePlaylist/" + playlistID,
+      {
+        headers: { "X-Room-Key": getRoomKey() },
+      },
+    );
     results = await response.json();
   } else {
     // Assume it's a text list of URLs
@@ -327,6 +332,7 @@ export async function getYouTubeResults(
 ): Promise<SearchResult[]> {
   const response = await fetch(
     serverPath + "/youtube?q=" + encodeURIComponent(query),
+    { headers: { "X-Room-Key": getRoomKey() } },
   );
   const data = await response.json();
   return data.map((d: any) => ({ ...d, type: "youtube" }));

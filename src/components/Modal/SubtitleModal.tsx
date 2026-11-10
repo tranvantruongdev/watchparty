@@ -11,7 +11,7 @@ import {
   Divider,
 } from "@mantine/core";
 import { Socket } from "socket.io-client";
-import { openFileSelector, serverPath } from "../../utils/utils";
+import { openFileSelector, serverPath, getRoomKey } from "../../utils/utils";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
 import {
@@ -209,6 +209,7 @@ export class SubtitleModal extends React.Component<{
                           serverPath +
                             "/searchSubtitles?title=" +
                             this.state.titleQuery,
+                          { headers: { "X-Room-Key": getRoomKey() } },
                         );
                         const json = await resp.json();
                         this.setState({ searchResults: json });
@@ -263,6 +264,7 @@ export class SubtitleModal extends React.Component<{
                             serverPath +
                               "/downloadSubtitles?file_id=" +
                               result.attributes.files[0]?.file_id,
+                            { headers: { "X-Room-Key": getRoomKey() } },
                           );
                           const data = await resp.json();
                           if (!data.link) {

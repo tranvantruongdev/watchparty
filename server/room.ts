@@ -248,6 +248,16 @@ export class Room {
 
     io.of(roomId).use(async (socket, next) => {
       try {
+        // Cap concurrent connections on this process. Join bursts broadcast
+        // roster to every socket (O(n²) frames), so one client opening
+        // thousands of sockets with a valid roomKey would stall every room
+        // sharing this server long before the heap fills. The joining client
+        // is already counted, so reject when the room is at the cap.
+        const maxConnections = Number(config.MAX_CONNECTIONS);
+        if (maxConnections && io.engine.clientsCount >= maxConnections) {
+          next(new Error("Server full"));
+          return;
+        }
         if (!hasRoomKey(socket.handshake.auth.roomKey)) {
           next(new Error("roomKey"));
           return;

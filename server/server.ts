@@ -200,6 +200,11 @@ app.post("/subtitle", async (req, res) => {
 });
 
 app.get("/downloadSubtitles", async (req, res) => {
+  // Outbound calls to OpenSubtitles burn its quota, so only roomKey holders
+  if (!hasRoomKey(req.get("x-room-key"))) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   // Request the URL from OS
   try {
     const urlResp = await axios<{ link: string }>({
@@ -246,6 +251,10 @@ app.get("/downloadSubtitles", async (req, res) => {
 });
 
 app.get("/searchSubtitles", async (req, res) => {
+  if (!hasRoomKey(req.get("x-room-key"))) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   let result: unknown = [];
   try {
     const title =
@@ -307,6 +316,11 @@ app.get("/timeSeries", async (req, res) => {
 });
 
 app.get("/youtube", async (req, res) => {
+  // search.list costs YouTube API quota, so only roomKey holders may search
+  if (!hasRoomKey(req.get("x-room-key"))) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   if (typeof req.query.q === "string") {
     try {
       redisCount("youtubeSearch");
@@ -321,6 +335,10 @@ app.get("/youtube", async (req, res) => {
 });
 
 app.get("/youtubePlaylist/:playlistId", async (req, res) => {
+  if (!hasRoomKey(req.get("x-room-key"))) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   try {
     const items = await youtubePlaylist(req.params.playlistId);
     res.json(items);
