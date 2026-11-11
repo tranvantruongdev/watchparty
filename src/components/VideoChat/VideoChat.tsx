@@ -145,6 +145,8 @@ export class VideoChat extends React.Component<
       gain: GainNode;
     };
   } = {};
+  // A mic switch is in flight (serialize changeMic — see the guard there)
+  micSwitching = false;
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
@@ -315,51 +317,77 @@ export class VideoChat extends React.Component<
   // stream and into every connection's audio sender (same sender, so the 64
   // kbps cap stays). Any failure keeps the old mic and does not save the pick
   changeMic = async (deviceId: string) => {
-    const ourStream = window.watchparty.ourStream;
-    const oldTrack = ourStream?.getAudioTracks()[0];
-    if (!ourStream || !oldTrack) {
-      this.saveMic(deviceId);
+    // One switch at a time: two switches started while the old track is live
+    // share the same oldTrack, so the stale checks below cannot tell them
+    // apart and both would finish — ourStream ends with two captures while
+    // the sender carries only one of them, and the mic button mutes the
+    // wrong one. A pick during a switch is dropped (the select snaps back);
+    // the failure contract is unchanged: old mic kept, pick not saved
+    if (this.micSwitching) {
       return;
     }
-    let fresh: MediaStream;
+    this.micSwitching = true;
     try {
-      fresh = await navigator.mediaDevices.getUserMedia({
-        audio: micAudio(deviceId, true),
-      });
-    } catch (e) {
-      console.warn("mic switch failed", e);
-      return;
+      const ourStream = window.watchparty.ourStream;
+      const oldTrack = ourStream?.getAudioTracks()[0];
+      if (!ourStream || !oldTrack) {
+        this.saveMic(deviceId);
+        return;
+      }
+      let fresh: MediaStream;
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({
+          audio: micAudio(deviceId, true),
+        });
+      } catch (e) {
+        console.warn("mic switch failed", e);
+        return;
+      }
+      const newTrack = fresh.getAudioTracks()[0];
+      // Mic turned off / left / switched again while the device opened
+      if (
+        window.watchparty.ourStream !== ourStream ||
+        ourStream.getAudioTracks()[0] !== oldTrack
+      ) {
+        fresh.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      // A muted mic stays muted
+      newTrack.enabled = oldTrack.enabled;
+      await Promise.all(
+        Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
+          if (id === getOrCreateClientId() || pc.connectionState === "closed") {
+            return undefined;
+          }
+          // A PC that dies mid-swap is replaced by the roster logic anyway
+          return pc
+            .getSenders()
+            .find((s) => s.track === oldTrack)
+            ?.replaceTrack(newTrack)
+            .catch(() => {});
+        }),
+      );
+      // The swap's await let mic off / leave / a mute toggle land between
+      // the check above and the mutation below: re-check, else a just-opened
+      // live mic would be re-added to a stream the user already muted or
+      // left, and the enabled state copied earlier would be stale
+      if (
+        window.watchparty.ourStream !== ourStream ||
+        ourStream.getAudioTracks()[0] !== oldTrack
+      ) {
+        fresh.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      newTrack.enabled = oldTrack.enabled;
+      ourStream.removeTrack(oldTrack);
+      ourStream.addTrack(newTrack);
+      oldTrack.stop();
+      newTrack.addEventListener("ended", () => this.micOff());
+      this.saveMic(deviceId);
+      this.refreshMics();
+    } finally {
+      this.micSwitching = false;
     }
-    const newTrack = fresh.getAudioTracks()[0];
-    // Mic turned off / left / switched again while the device opened
-    if (
-      window.watchparty.ourStream !== ourStream ||
-      ourStream.getAudioTracks()[0] !== oldTrack
-    ) {
-      fresh.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    // A muted mic stays muted
-    newTrack.enabled = oldTrack.enabled;
-    await Promise.all(
-      Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
-        if (id === getOrCreateClientId() || pc.connectionState === "closed") {
-          return undefined;
-        }
-        // A PC that dies mid-swap is replaced by the roster logic anyway
-        return pc
-          .getSenders()
-          .find((s) => s.track === oldTrack)
-          ?.replaceTrack(newTrack)
-          .catch(() => {});
-      }),
-    );
-    ourStream.removeTrack(oldTrack);
-    ourStream.addTrack(newTrack);
-    oldTrack.stop();
-    newTrack.addEventListener("ended", () => this.micOff());
-    this.saveMic(deviceId);
-    this.refreshMics();
   };
 
   componentDidMount() {
