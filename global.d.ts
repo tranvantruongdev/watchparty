@@ -14,17 +14,6 @@ interface User {
   isMuted?: boolean;
   isScreenShare?: boolean;
   buffering?: boolean;
-  pos?: Position;
-}
-
-// A pixel character on the theater floor: x/y are 0..1 of the floor area,
-// ch is the chosen preset id (server-validated allow-list)
-interface Position {
-  x: number;
-  y: number;
-  dir: "l" | "r" | "u" | "d";
-  sit: boolean;
-  ch?: string;
 }
 
 interface Reaction {
@@ -32,14 +21,6 @@ interface Reaction {
   value: string;
   msgId: string;
   msgTimestamp: string;
-}
-
-// A ticket stub on the memory wall: pinned when a video actually ended,
-// stored per room in this device's localStorage (see App.addTicketStub)
-interface TicketStub {
-  url: string;
-  title: string;
-  at: number;
 }
 
 type ChatPayload = {

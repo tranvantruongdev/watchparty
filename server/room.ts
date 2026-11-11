@@ -42,29 +42,6 @@ const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 // reconnects within seconds of the link returning and re-announces
 const SHARER_GRACE_MS = 10_000;
 
-// The only emojis accepted for CMD:emote (pixel bubbles on the theater floor),
-// anything else is dropped
-const EMOTES = ["❤️", "😂", "😢", "😮", "👏", "🍿"];
-
-// The only character presets accepted on CMD:move (the ch field, drawn on the
-// theater floor); must mirror PixelFloor.tsx's CHARS ids
-const CHARS = [
-  "mai",
-  "trung",
-  "hoa",
-  "lan",
-  "nam",
-  "bi",
-  "tho",
-  "meo",
-  "cao",
-  "ma",
-  "miu",
-  "oc",
-  "chim",
-  "suoi",
-];
-
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -81,9 +58,6 @@ export class Room {
   public subtitle = "";
   public playbackRate = 1;
   public paused = false;
-  // Watched-together time shown on the pixel floor; in memory only, so it
-  // resets when the server restarts (rooms aren't saved without a database)
-  private togetherSeconds = 0;
   public loop = false;
   private chat: ChatMessage[] = [];
   private nameMap: StringDict = {};
@@ -105,22 +79,12 @@ export class Room {
   private sessionMap: StringDict = {};
   // clientId -> timestamps of the float reactions they sent in the last second
   private floatReactionTimes: { [clientId: string]: number[] } = {};
-  // clientId -> timestamps of the emotes they sent in the last second
-  private emoteTimes: { [clientId: string]: number[] } = {};
   // clientId -> true while that viewer reports being stuck buffering
   private bufferingMap: BooleanDict = {};
   // clientId -> timestamps of accepted buffering changes in the last second
   private bufferingChangeTimes: { [clientId: string]: number[] } = {};
-  // clientId -> where their pixel character stands on the theater floor
-  private positionMap: { [clientId: string]: Position } = {};
-  // clientId -> timestamps of accepted moves in the last second
-  private moveTimes: { [clientId: string]: number[] } = {};
-  // clientId -> timestamps of popcorn grabs in the last second
-  private popcornTimes: { [clientId: string]: number[] } = {};
-  // Scoops left in the shared popcorn bucket, so a late joiner sees the same heap
-  private popcornScoops = 12;
   // The active intermission ("BRB"): who started it and when it ends
-  // (until null = no end time). In-memory only, like togetherSeconds
+  // (until null = no end time). In-memory only
   public intermission: { by: string; until: number | null } | null = null;
   // clientId -> timestamps of accepted intermission changes in the last second
   private intermissionTimes: { [clientId: string]: number[] } = {};
@@ -238,11 +202,6 @@ export class Room {
       if (this.video) {
         this.lastTsMap = Date.now();
         io.of(roomId).emit("REC:tsMap", this.tsMap);
-        // Seconds of playback with at least two people in the room
-        if (!this.paused && this.roster.length >= 2) {
-          this.togetherSeconds += 1;
-        }
-        io.of(roomId).emit("REC:together", this.togetherSeconds);
       }
     }, 1000);
 
@@ -411,7 +370,6 @@ export class Room {
       socket.emit("REC:lock", this.lock);
       socket.emit("REC:intermission", this.intermission);
       socket.emit("REC:sleep", this.sleepTimer);
-      socket.emit("REC:popcorn", { scoops: this.popcornScoops });
       socket.emit("chatinit", this.chat);
       socket.emit("playlist", this.playlist);
       this.getRoomState(socket);
@@ -540,9 +498,6 @@ export class Room {
       on("CMD:floatReaction", (data: unknown) =>
         this.floatReaction(socket, data),
       );
-      on("CMD:move", (data: unknown) => this.move(socket, data));
-      on("CMD:emote", (data: unknown) => this.emote(socket, data));
-      on("CMD:popcorn", () => this.popcorn(socket));
       // Pauses the room like CMD:pause, so it needs the lock like CMD:pause
       on(
         "CMD:intermission",
@@ -765,7 +720,6 @@ export class Room {
         ...p,
         isScreenShare: p.id === this.getSharerId(),
         buffering: this.bufferingMap[p.id],
-        pos: this.positionMap[p.id],
       };
     });
   };
@@ -1325,86 +1279,9 @@ export class Room {
     });
   };
 
-  // Pixel character walking on the theater floor: x/y are 0..1 of the floor,
-  // dir is the facing, ch is the chosen character preset. Stored so late
-  // joiners get it via the roster, relayed to everyone else, capped at 20/s
-  // per socket (clients send ~10/s)
-  private move = (socket: Socket, raw: unknown) => {
-    const data = raw as Position;
-    if (
-      !data ||
-      typeof data.x !== "number" ||
-      typeof data.y !== "number" ||
-      !(data.x >= 0 && data.x <= 1 && data.y >= 0 && data.y <= 1) ||
-      !["l", "r", "u", "d"].includes(data.dir as string) ||
-      typeof data.sit !== "boolean" ||
-      typeof data.ch !== "string" ||
-      !CHARS.includes(data.ch)
-    ) {
-      return;
-    }
-    const now = Date.now();
-    const times = (this.moveTimes[socket.clientId] || []).filter(
-      (t) => now - t < 1000,
-    );
-    if (times.length >= 20) {
-      return;
-    }
-    times.push(now);
-    this.moveTimes[socket.clientId] = times;
-    const pos = {
-      x: data.x,
-      y: data.y,
-      dir: data.dir,
-      sit: data.sit,
-      ch: data.ch,
-    };
-    this.positionMap[socket.clientId] = pos;
-    socket.broadcast.emit("REC:move", { id: socket.clientId, ...pos });
-  };
-
-  // Pixel speech bubble over your character on the theater floor: allowed
-  // emojis only, relayed to everyone else (the sender draws its own right
-  // away), capped at 5/s per socket like floatReaction; not stored anywhere,
-  // the bubble just fades out on the client
-  private emote = (socket: Socket, raw: unknown) => {
-    if (typeof raw !== "string" || !EMOTES.includes(raw)) {
-      return;
-    }
-    const now = Date.now();
-    const times = (this.emoteTimes[socket.clientId] || []).filter(
-      (t) => now - t < 1000,
-    );
-    if (times.length >= 5) {
-      return;
-    }
-    times.push(now);
-    this.emoteTimes[socket.clientId] = times;
-    socket.broadcast.emit("REC:emote", { id: socket.clientId, value: raw });
-  };
-
-  // Shared popcorn bucket beside the front row: the server counts the scoops
-  // (an empty bucket refills on the next grab) and tells everyone, sender
-  // included. No payload to validate; capped at 5/s per socket like emote
-  private popcorn = (socket: Socket) => {
-    const now = Date.now();
-    const times = (this.popcornTimes[socket.clientId] || []).filter(
-      (t) => now - t < 1000,
-    );
-    if (times.length >= 5) {
-      return;
-    }
-    times.push(now);
-    this.popcornTimes[socket.clientId] = times;
-    this.popcornScoops = this.popcornScoops <= 0 ? 12 : this.popcornScoops - 1;
-    this.io
-      .of(this.roomId)
-      .emit("REC:popcorn", { id: socket.clientId, scoops: this.popcornScoops });
-  };
-
   // Intermission: one of us steps out, the whole room pauses and shows a
   // countdown until someone presses play (playVideo and cmdHost clear it).
-  // minutes 0 = no end time ("back whenever"). Unlike move/emote this is
+  // minutes 0 = no end time ("back whenever"). This is
   // relayed to everyone including the sender (like the buffer auto-pause),
   // so every player pauses together; capped at 2/s per socket (one click
   // per break, re-clicking just changes the duration)
@@ -2173,15 +2050,11 @@ export class Room {
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.floatReactionTimes[clientId];
-      delete this.emoteTimes[clientId];
-      delete this.popcornTimes[clientId];
       delete this.intermissionTimes[clientId];
       delete this.sleepTimes[clientId];
       delete this.relayTimes[clientId];
       delete this.pictureTimes[clientId];
       delete this.signalTimes[clientId];
-      delete this.positionMap[clientId];
-      delete this.moveTimes[clientId];
       // Prune name/picture entries nobody renders anymore. Chat history is
       // the only reason to keep a departed visitor's name/picture (the same
       // rule serialize() uses), and the roster keeps live seats labeled.

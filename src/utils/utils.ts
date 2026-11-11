@@ -430,57 +430,6 @@ export function getSavedPasswords(): Record<string, string> {
   return {};
 }
 
-// Ticket stubs of the memory wall, one list per room. The stored value may
-// be corrupt (hand-edited, older shape): validate it so callers never see a
-// non-object (App.init indexes into it) or stubs missing fields (PixelFloor
-// draws url/title/at every animation frame)
-export function getSavedStubs(): Record<string, TicketStub[]> {
-  try {
-    const savedStubsString =
-      window.localStorage.getItem("watchparty-stubs") ?? "{}";
-    const parsed = JSON.parse(savedStubsString);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return {};
-    }
-    const clean: Record<string, TicketStub[]> = {};
-    for (const [roomId, stubs] of Object.entries(parsed)) {
-      if (!Array.isArray(stubs)) continue;
-      const valid = stubs.filter(
-        (s) =>
-          !!s &&
-          typeof s.url === "string" &&
-          typeof s.title === "string" &&
-          typeof s.at === "number" &&
-          Number.isFinite(s.at),
-      );
-      if (valid.length) {
-        clean[roomId] = valid;
-      }
-    }
-    return clean;
-  } catch (e) {
-    console.warn("[ALERT] Could not parse saved ticket stubs");
-  }
-  return {};
-}
-
-export function saveStubs(roomId: string, stubs: TicketStub[]) {
-  // Called from onVideoEnded before the playlist advances: a blocked or full
-  // storage must not throw there
-  try {
-    window.localStorage.setItem(
-      "watchparty-stubs",
-      JSON.stringify({ ...getSavedStubs(), [roomId]: stubs }),
-    );
-  } catch (e) {
-    console.warn("[ALERT] Could not save ticket stubs");
-  }
-}
-
 // Where this device last watched in each room, so a room that lost its place
 // (free-tier deploy waking up empty) can offer "continue from where we left
 // off". Per device on purpose: rooms reset without a database, same as the

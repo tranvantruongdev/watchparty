@@ -31,8 +31,6 @@ import {
   VIDEO_MAX_HEIGHT_CSS,
   softWhite,
   getSavedPasswords,
-  getSavedStubs,
-  saveStubs,
   getSavedResume,
   saveResume,
   type SavedResume,
@@ -247,7 +245,7 @@ interface AppState {
   settingsModalOpen: boolean;
   convertProgress: number | undefined;
   convertEnabled: boolean;
-  // Cinema look for the watch page (curtains, house lights, seats)
+  // Cinema look for the watch page (curtains, house lights)
   theaterMode: boolean;
   // Audio tracks of the file being converted on this device, and which one is playing
   audioTracks: AudioTrackInfo[] | undefined;
@@ -256,8 +254,6 @@ interface AppState {
   // Fullscreen chat overlay (F4): whether the mini input is open and what's in it
   chatOverlayTyping: boolean;
   chatOverlayMsg: string;
-  // Memory wall: ticket stubs of the videos that reached the end in this room
-  ticketStubs: TicketStub[];
   // Catch-up chip (round 62): seconds this viewer is behind the room leader
   // while the chip is showing, null when it is hidden
   catchUpBehind: number | null;
@@ -283,7 +279,6 @@ export class App extends React.Component<AppProps, AppState> {
     floatReactions: [],
     chatOverlayTyping: false,
     chatOverlayMsg: "",
-    ticketStubs: [],
     catchUpBehind: null,
     playlist: [],
     tsMap: {},
@@ -504,9 +499,6 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState(
       {
         roomId,
-        // The memory wall is per device, so it loads with the room and keeps
-        // whatever was pinned on earlier nights
-        ticketStubs: getSavedStubs()[roomId] ?? [],
       },
       () => {
         this.join(roomId);
@@ -3399,45 +3391,10 @@ export class App extends React.Component<AppProps, AppState> {
     return Math.max(...values);
   };
 
-  // Pin the current video to the memory wall. Skips screenshares and the
-  // vbrowser (neither is a "watched this together" keepsake) and a stub for
-  // the same video as the last one (loop/repeat), and caps the wall at 30
-  addTicketStub = () => {
-    const media = this.state.roomMedia;
-    if (
-      !media ||
-      media.startsWith("screenshare://") ||
-      this.playingVBrowser()
-    ) {
-      return;
-    }
-    const stubs = this.state.ticketStubs;
-    if (stubs.length && stubs[stubs.length - 1].url === media) {
-      return;
-    }
-    let title =
-      this.Player().getVideoTitle() || this.getMediaDisplayName(media);
-    // A bare URL makes a useless stub: keep the file name without extension
-    if (/^https?:\/\//.test(title)) {
-      const file = title.split(/[?#]/)[0].split("/").pop() || title;
-      try {
-        title = decodeURIComponent(file).replace(/\.[a-z0-9]{2,4}$/i, "");
-      } catch (e) {
-        title = file;
-      }
-    }
-    const next = [
-      ...stubs,
-      { url: media, title: title.slice(0, 60), at: Date.now() },
-    ].slice(-30);
-    saveStubs(this.state.roomId, next);
-    this.setState({ ticketStubs: next });
-  };
-
   onVideoEnded = (url: string) => {
     // Ignore 'ended' that fires while a new source is still loading (source
     // switch, stale event from the previous media) — it would pause the room,
-    // pin a ticket stub, and advance the playlist for a video that never ended
+    // and advance the playlist for a video that never ended
     if (this.state.loading) {
       return;
     }
@@ -3448,11 +3405,6 @@ export class App extends React.Component<AppProps, AppState> {
       this.localPlay();
       return;
     }
-    // A video that actually ran to the end earns its ticket stub on the
-    // memory wall (loop replays never land here). Each device pins its own
-    // copy: rooms reset on server restart, so localStorage is what keeps the
-    // stubs alive across nights
-    this.addTicketStub();
     if (this.state.playlist.length) {
       // Pass the url of the video at the time this video was started
       this.socket.emit("CMD:playlistNext", url);
