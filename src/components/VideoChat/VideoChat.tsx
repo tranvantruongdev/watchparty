@@ -392,6 +392,7 @@ export class VideoChat extends React.Component<
 
   componentDidMount() {
     this.socket.on("signal", this.handleSignal);
+    this.socket.on("connect", this.onSocketConnect);
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshMics);
     this.refreshMics();
     // ~2 polls a second is plenty; Chrome updates audioLevel roughly that fast
@@ -400,6 +401,7 @@ export class VideoChat extends React.Component<
 
   componentWillUnmount() {
     this.socket.off("signal", this.handleSignal);
+    this.socket.off("connect", this.onSocketConnect);
     navigator.mediaDevices?.removeEventListener(
       "devicechange",
       this.refreshMics,
@@ -556,6 +558,16 @@ export class VideoChat extends React.Component<
     this.socket.emit("CMD:userMute", { isMuted: !this.getAudioWebRTC() });
   };
 
+  // A socket reconnect must re-announce our mute flag: App re-emits
+  // CMD:joinVideo on "connect", but a gap outlasting the server's ping window
+  // drops the whole roster entry, so the fresh one has no isMuted and the
+  // room reads a muted mic as open until the user next toggles it
+  onSocketConnect = () => {
+    if (window.watchparty.ourStream) {
+      this.emitUserMute();
+    }
+  };
+
   handleSignal = async (data: any) => {
     // Handle messages received from signaling server
     const msg = data.msg;
@@ -671,13 +683,17 @@ export class VideoChat extends React.Component<
           // opus default even though every applied SDP carries maxaveragebitrate
           // (measured over TURN: answer-then-offer glare + replaceTrack → the
           // peer hears ~33 kbps one-way). Pin the cap on the sender itself; the
-          // SDP munge above still tells the peers what to send us
-          const params = tr.sender.getParameters();
-          if (!params.encodings || !params.encodings.length) {
-            params.encodings = [{}];
+          // SDP munge above still tells the peers what to send us. Audio only:
+          // this branch also carries the camera in the listen-then-mic-on flow,
+          // and 64 kbps there is an unreadable slideshow
+          if (track.kind === "audio") {
+            const params = tr.sender.getParameters();
+            if (!params.encodings || !params.encodings.length) {
+              params.encodings = [{}];
+            }
+            params.encodings[0].maxBitrate = HD_VOICE_BITRATE;
+            tr.sender.setParameters(params).catch(() => {});
           }
-          params.encodings[0].maxBitrate = HD_VOICE_BITRATE;
-          tr.sender.setParameters(params).catch(() => {});
         } else {
           pc.addTrack(track, ourStream);
         }

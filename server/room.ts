@@ -2018,6 +2018,18 @@ export class Room {
       return;
     }
     const fromClientId = socket.clientId;
+    // Voice signaling only flows between voice members: socketIdMap holds
+    // every connected socket, so without this check any guest can relay
+    // frames (up to 100 msgs/s × 100KB) straight into a non-voice peer's
+    // socket by aiming "signal" at them. Screen-share signaling (signalSS)
+    // is exempt — a sharer needn't be in voice
+    if (eventName === "signal") {
+      const sender = this.roster.find((u) => u.id === fromClientId);
+      const target = this.roster.find((u) => u.id === data.to);
+      if (!sender?.isVideoChat || !target?.isVideoChat) {
+        return;
+      }
+    }
     const toId = this.socketIdMap[data.to];
     if (toId) {
       this.io.of(this.roomId).to(toId).emit(eventName, {
