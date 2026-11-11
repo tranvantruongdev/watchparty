@@ -1,6 +1,6 @@
 import React from "react";
 import { createPortal } from "react-dom";
-import { ActionIcon, Button, Slider } from "@mantine/core";
+import { ActionIcon, Button, Select, Slider } from "@mantine/core";
 import { Socket } from "socket.io-client";
 
 import {
@@ -13,6 +13,11 @@ import {
 } from "../../utils/utils";
 import { UserMenu } from "../UserMenu/UserMenu";
 import { MetadataContext } from "../../MetadataContext";
+import {
+  MAX_VOICE_VOLUME,
+  parseStoredVoiceVolume,
+  voicePeerOutput,
+} from "./voiceVolume";
 import {
   IconDotsVertical,
   IconMicrophone,
@@ -46,6 +51,39 @@ const micConstraints = {
   voiceIsolation: true,
 } as MediaTrackConstraints;
 
+// The mic the user picked (a deviceId); asked for as "ideal" so an unplugged
+// device falls back to the default one instead of failing the capture
+const MIC_KEY = "watchparty-mic";
+const SYSTEM_MIC = "__system_default__";
+const readSavedMic = () => {
+  try {
+    return window.localStorage.getItem(MIC_KEY) ?? "";
+  } catch {
+    return "";
+  }
+};
+const micAudio = (deviceId: string, exact = false): MediaTrackConstraints =>
+  deviceId
+    ? {
+        ...micConstraints,
+        deviceId: exact ? { exact: deviceId } : { ideal: deviceId },
+      }
+    : micConstraints;
+
+// Voice volume 0..300%, saved so it survives reloads. window.watchparty is
+// (re)created by App.tsx after this module loads, so seed it on first read
+const VOICE_VOLUME_KEY = "watchparty-voice-volume";
+const getVoiceVolume = () => {
+  if (window.watchparty.voiceVolume == null) {
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem(VOICE_VOLUME_KEY);
+    } catch {}
+    window.watchparty.voiceVolume = parseStoredVoiceVolume(raw);
+  }
+  return window.watchparty.voiceVolume;
+};
+
 // HD voice: Chrome encodes opus at ~32 kbps mono by default. maxaveragebitrate
 // in the fmtp is the encoder cap (RFC 7587 §6.1) — raise it to 64 kbps, the
 // level voice chat apps like Discord ship at; inband FEC is already on, and it
@@ -66,15 +104,21 @@ export class VideoChat extends React.Component<
     voiceVolume: number;
     speaking: string[];
     reconnecting: string[];
+    // Microphones the browser lists (labels stay empty until mic permission)
+    mics: { id: string; label: string }[];
+    // Saved mic deviceId ("" = system default)
+    micId: string;
   }
 > {
   // Voice volume also lives on window.watchparty so it survives element
   // remounts and People-panel collapse (a fresh instance re-seeds from there)
   state = {
     playBlocked: false,
-    voiceVolume: window.watchparty.voiceVolume ?? 1,
+    voiceVolume: getVoiceVolume(),
     speaking: [] as string[],
     reconnecting: [] as string[],
+    mics: [] as { id: string; label: string }[],
+    micId: readSavedMic(),
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -91,6 +135,105 @@ export class VideoChat extends React.Component<
   // Peers whose voice link came up once (so a later non-connected state is a
   // REconnection, not the normal first connect) — see pollSpeaking
   everConnected: { [id: string]: boolean } = {};
+  // Above 100% a peer's voice plays through Web Audio (one shared context, a
+  // source + gain per peer); at or below 100% none of this exists
+  audioCtx: AudioContext | undefined = undefined;
+  voiceNodes: {
+    [id: string]: {
+      track: MediaStreamTrack;
+      source: MediaStreamAudioSourceNode;
+      gain: GainNode;
+    };
+  } = {};
+
+  // The shared AudioContext, made on first need. A context made outside a user
+  // gesture starts suspended: resume now (works inside a click) and on the
+  // next click or key press; until it runs, applyVoiceOutput keeps the voice
+  // on the element so a suspended context can never silence anyone
+  ensureAudioContext = () => {
+    if (!this.audioCtx) {
+      if (typeof AudioContext === "undefined") {
+        return undefined;
+      }
+      this.audioCtx = new AudioContext();
+      this.audioCtx.addEventListener("statechange", this.applyAllVoiceOutputs);
+    }
+    if (this.audioCtx.state !== "running") {
+      this.audioCtx.resume().catch(() => {});
+      document.addEventListener("pointerdown", this.resumeAudio, {
+        once: true,
+      });
+      document.addEventListener("keydown", this.resumeAudio, { once: true });
+    }
+    return this.audioCtx;
+  };
+
+  resumeAudio = () => {
+    this.audioCtx?.resume().catch(() => {});
+  };
+
+  dropVoiceNode = (id: string) => {
+    const node = this.voiceNodes[id];
+    if (node) {
+      node.source.disconnect();
+      node.gain.disconnect();
+      delete this.voiceNodes[id];
+    }
+  };
+
+  dropAllVoiceNodes = () => {
+    Object.keys(this.voiceNodes).forEach(this.dropVoiceNode);
+  };
+
+  // The one place that sets how a seat's voice is played: its element's muted
+  // and volume, and (above 100%) its gain node. Called from attach and from
+  // every render's ref, so they cannot disagree
+  applyVoiceOutput = (id: string) => {
+    const el = window.watchparty.videoRefs[id];
+    if (!el) {
+      return;
+    }
+    const self = id === getOrCreateClientId();
+    const stream = this.remoteStreams[id];
+    const hasAudio = !!stream?.getAudioTracks().length;
+    const volume = getVoiceVolume();
+    const ctx =
+      !self && volume > 1 && hasAudio
+        ? this.ensureAudioContext()
+        : this.audioCtx;
+    // Only use the graph when it can play now; else the element plays at <=100%
+    const canRoute = !self && hasAudio && ctx?.state === "running";
+    const out = voicePeerOutput({
+      self,
+      deaf: this.props.deaf,
+      volume: canRoute ? volume : Math.min(volume, 1),
+    });
+    el.muted = out.muted;
+    if (!self) {
+      el.volume = out.elementVolume;
+    }
+    if (out.useGraph && ctx && stream) {
+      const track = stream.getAudioTracks()[0];
+      // A source follows the one track it was made from: rebuild when it changed
+      if (this.voiceNodes[id] && this.voiceNodes[id].track !== track) {
+        this.dropVoiceNode(id);
+      }
+      if (!this.voiceNodes[id]) {
+        const source = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        this.voiceNodes[id] = { track, source, gain };
+      }
+      this.voiceNodes[id].gain.gain.value = out.gain;
+    } else {
+      this.dropVoiceNode(id);
+    }
+  };
+
+  applyAllVoiceOutputs = () => {
+    Object.keys(window.watchparty.videoRefs).forEach(this.applyVoiceOutput);
+  };
 
   // Show the peer's stream on their element (which can mount after the track
   // arrives, or remount) and play it. Autoplay with sound is refused until
@@ -101,11 +244,12 @@ export class VideoChat extends React.Component<
     if (!el || !stream) {
       return;
     }
+    // The chosen voice volume rides on every (re)mount of the element; set
+    // before the stream so nothing plays unmuted for a moment
+    this.applyVoiceOutput(id);
     if (el.srcObject !== stream) {
       el.srcObject = stream;
     }
-    // The chosen voice volume rides on every (re)mount of the element
-    el.volume = window.watchparty.voiceVolume ?? 1;
     if (el.paused) {
       el.play().catch(() => {
         this.setState({ playBlocked: true });
@@ -129,24 +273,122 @@ export class VideoChat extends React.Component<
   // (re)mount, so the setting outlives element remounts and panel collapse
   setVoiceVolume = (v: number) => {
     window.watchparty.voiceVolume = v;
+    try {
+      window.localStorage.setItem(VOICE_VOLUME_KEY, String(v));
+    } catch {}
     this.setState({ voiceVolume: v });
-    Object.entries(window.watchparty.videoRefs).forEach(([id, el]) => {
-      if (el && id !== getOrCreateClientId()) {
-        el.volume = v;
+    if (v > 1) {
+      // The slider drag is the user gesture that lets the context run
+      this.ensureAudioContext();
+    }
+    this.applyAllVoiceOutputs();
+  };
+
+  // Microphones the browser lists. Labels are empty until mic permission, so
+  // this runs again after each capture and whenever a device is plugged/unplugged
+  refreshMics = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      this.setState({
+        mics: devices
+          .filter((d) => d.kind === "audioinput" && d.deviceId)
+          .map((d) => ({ id: d.deviceId, label: d.label })),
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  saveMic = (deviceId: string) => {
+    try {
+      if (deviceId) {
+        window.localStorage.setItem(MIC_KEY, deviceId);
+      } else {
+        window.localStorage.removeItem(MIC_KEY);
       }
-    });
+    } catch {}
+    this.setState({ micId: deviceId });
+  };
+
+  // Pick a microphone. Not capturing yet (or mic off): only remember it for the
+  // next mic-on. Capturing: open the new device, then swap its track into our
+  // stream and into every connection's audio sender (same sender, so the 64
+  // kbps cap stays). Any failure keeps the old mic and does not save the pick
+  changeMic = async (deviceId: string) => {
+    const ourStream = window.watchparty.ourStream;
+    const oldTrack = ourStream?.getAudioTracks()[0];
+    if (!ourStream || !oldTrack) {
+      this.saveMic(deviceId);
+      return;
+    }
+    let fresh: MediaStream;
+    try {
+      fresh = await navigator.mediaDevices.getUserMedia({
+        audio: micAudio(deviceId, true),
+      });
+    } catch (e) {
+      console.warn("mic switch failed", e);
+      return;
+    }
+    const newTrack = fresh.getAudioTracks()[0];
+    // Mic turned off / left / switched again while the device opened
+    if (
+      window.watchparty.ourStream !== ourStream ||
+      ourStream.getAudioTracks()[0] !== oldTrack
+    ) {
+      fresh.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    // A muted mic stays muted
+    newTrack.enabled = oldTrack.enabled;
+    await Promise.all(
+      Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
+        if (id === getOrCreateClientId() || pc.connectionState === "closed") {
+          return undefined;
+        }
+        // A PC that dies mid-swap is replaced by the roster logic anyway
+        return pc
+          .getSenders()
+          .find((s) => s.track === oldTrack)
+          ?.replaceTrack(newTrack)
+          .catch(() => {});
+      }),
+    );
+    ourStream.removeTrack(oldTrack);
+    ourStream.addTrack(newTrack);
+    oldTrack.stop();
+    newTrack.addEventListener("ended", () => this.micOff());
+    this.saveMic(deviceId);
+    this.refreshMics();
   };
 
   componentDidMount() {
     this.socket.on("signal", this.handleSignal);
+    navigator.mediaDevices?.addEventListener("devicechange", this.refreshMics);
+    this.refreshMics();
     // ~2 polls a second is plenty; Chrome updates audioLevel roughly that fast
     this.speakTimer = setInterval(this.pollSpeaking, 450);
   }
 
   componentWillUnmount() {
     this.socket.off("signal", this.handleSignal);
+    navigator.mediaDevices?.removeEventListener(
+      "devicechange",
+      this.refreshMics,
+    );
     if (this.speakTimer) {
       clearInterval(this.speakTimer);
+    }
+    document.removeEventListener("pointerdown", this.resumeAudio);
+    document.removeEventListener("keydown", this.resumeAudio);
+    this.dropAllVoiceNodes();
+    if (this.audioCtx) {
+      this.audioCtx.removeEventListener(
+        "statechange",
+        this.applyAllVoiceOutputs,
+      );
+      this.audioCtx.close().catch(() => {});
+      this.audioCtx = undefined;
     }
   }
 
@@ -252,6 +494,10 @@ export class VideoChat extends React.Component<
   };
 
   componentDidUpdate(prevProps: VideoChatProps) {
+    if (this.props.deaf !== prevProps.deaf) {
+      // Headphones on/off: element mute and the boosted gain follow
+      this.applyAllVoiceOutputs();
+    }
     if (
       this.props.rosterUpdateTS !== prevProps.rosterUpdateTS ||
       this.props.deaf !== prevProps.deaf
@@ -357,6 +603,11 @@ export class VideoChat extends React.Component<
       this.emitUserMute();
       return;
     }
+    // The mic-on click is a user gesture: a saved boost (>100%) can start its
+    // audio context now (before the awaits), it cannot at page load
+    if (getVoiceVolume() > 1) {
+      this.ensureAudioContext();
+    }
     const stream = await this.getOwnStream();
     const ourStream = window.watchparty.ourStream;
     if (!ourStream) {
@@ -454,7 +705,7 @@ export class VideoChat extends React.Component<
 
     try {
       stream = await navigator?.mediaDevices.getUserMedia({
-        audio: micConstraints,
+        audio: micAudio(this.state.micId),
         video: true,
       });
     } catch (e) {
@@ -462,12 +713,16 @@ export class VideoChat extends React.Component<
       try {
         console.log("attempt audio only stream");
         stream = await navigator?.mediaDevices?.getUserMedia({
-          audio: micConstraints,
+          audio: micAudio(this.state.micId),
           video: false,
         });
       } catch (e) {
         console.warn(e);
       }
+    }
+    // Device labels are only filled in once the browser has given mic access
+    if (stream.getAudioTracks().length) {
+      this.refreshMics();
     }
     // Mic unplugged or revoked by the OS: the track ends and would stream
     // silence forever behind a green mic icon — show the manual mic-off state
@@ -485,6 +740,7 @@ export class VideoChat extends React.Component<
       });
     window.watchparty.ourStream = undefined;
     this.remoteStreams = {};
+    this.dropAllVoiceNodes();
     Object.keys(videoPCs).forEach((key) => {
       videoPCs[key].close();
       delete videoPCs[key];
@@ -545,6 +801,7 @@ export class VideoChat extends React.Component<
         value.close();
         delete videoPCs[key];
         delete this.remoteStreams[key];
+        this.dropVoiceNode(key);
       }
     });
 
@@ -604,6 +861,7 @@ export class VideoChat extends React.Component<
           pc.close();
           delete videoPCs[id];
           delete this.remoteStreams[id];
+          this.dropVoiceNode(id);
           this.updateWebRTC();
           // The peer's PC may have died so quietly that it never renegotiates
           // (frozen tab, killed app): offer ourselves after a beat even though
@@ -709,6 +967,13 @@ export class VideoChat extends React.Component<
     const speakingStyle: React.CSSProperties = {
       boxShadow: "0 0 0 3px #a78bfa",
     };
+    // The select shows the mic actually capturing (the saved pick can have
+    // fallen back to the default); when not capturing, the saved pick
+    const micIds = this.state.mics.map((m) => m.id);
+    const liveMic = ourStream?.getAudioTracks()[0]?.getSettings().deviceId;
+    const micValue =
+      [liveMic, this.state.micId].find((id) => id && micIds.includes(id)) ??
+      SYSTEM_MIC;
     return (
       <div
         style={{
@@ -740,23 +1005,41 @@ export class VideoChat extends React.Component<
           <div
             style={{
               display: "flex",
-              alignItems: "center",
+              flexDirection: "column",
               gap: "6px",
               width: "100%",
               padding: "0 8px",
             }}
           >
-            <IconVolume size={16} style={{ flexShrink: 0 }} />
-            <Slider
-              title="Voice volume (the others, vs the movie's own volume)"
-              value={this.state.voiceVolume}
-              onChange={this.setVoiceVolume}
-              onChangeEnd={this.setVoiceVolume}
-              min={0}
-              max={1}
-              step={0.05}
-              label={(v) => `${Math.round(v * 100)}%`}
-              style={{ flexGrow: 1 }}
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <IconVolume size={16} style={{ flexShrink: 0 }} />
+              <Slider
+                title="Voice volume (the others, vs the movie's own volume)"
+                value={this.state.voiceVolume}
+                onChange={this.setVoiceVolume}
+                onChangeEnd={this.setVoiceVolume}
+                min={0}
+                max={MAX_VOICE_VOLUME}
+                step={0.05}
+                label={(v) => `${Math.round(v * 100)}%`}
+                style={{ flexGrow: 1 }}
+              />
+            </div>
+            <Select
+              size="xs"
+              aria-label="Microphone"
+              title="Microphone"
+              leftSection={<IconMicrophone size={14} />}
+              allowDeselect={false}
+              value={micValue}
+              onChange={(v) => v && this.changeMic(v === SYSTEM_MIC ? "" : v)}
+              data={[
+                { value: SYSTEM_MIC, label: "System default" },
+                ...this.state.mics.map((m, i) => ({
+                  value: m.id,
+                  label: m.label || `Microphone ${i + 1}`,
+                })),
+              ]}
             />
           </div>
         )}
@@ -893,6 +1176,9 @@ export class VideoChat extends React.Component<
                       ref={(el) => {
                         if (el) {
                           videoRefs[p.id] = el;
+                          // muted/volume come from here only (no React muted
+                          // prop to fight it); self is always muted
+                          this.applyVoiceOutput(p.id);
                           if (p.id !== selfId) {
                             this.attach(p.id);
                           }
@@ -906,7 +1192,6 @@ export class VideoChat extends React.Component<
                         transform: `scaleX(${p.id === selfId ? "-1" : "1"})`,
                       }}
                       autoPlay
-                      muted={p.id === selfId || this.props.deaf}
                       data-id={p.id}
                     />
                   ) : (
