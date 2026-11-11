@@ -97,6 +97,34 @@ const hdVoiceSdp = (sdp: string | undefined) =>
     `useinbandfec=1; maxaveragebitrate=${HD_VOICE_BITRATE}`,
   );
 
+// Perfect-negotiation state, keyed per RTCPeerConnection in WeakMaps: closing
+// or rebuilding a PC drops its entry with it, so an old PC's queued candidates
+// can never leak into its replacement and no teardown site has to clean up
+const makingOffer = new WeakMap<RTCPeerConnection, boolean>();
+const pendingIce = new WeakMap<RTCPeerConnection, RTCIceCandidate[]>();
+
+// Candidates that arrive before any remote description (there addIceCandidate
+// rejects outright): hold them and flush right after setRemoteDescription
+// succeeds, else a peer waiting out an offer collision stays dark — with no
+// remote candidates ICE never starts checking, so the rebuild watchdogs
+// (disconnected/failed) never arm either
+const queueIce = (pc: RTCPeerConnection, ice: RTCIceCandidate) => {
+  const queue = pendingIce.get(pc);
+  if (queue) {
+    queue.push(ice);
+  } else {
+    pendingIce.set(pc, [ice]);
+  }
+};
+const flushIce = (pc: RTCPeerConnection) => {
+  const queue = pendingIce.get(pc);
+  if (!queue) {
+    return;
+  }
+  pendingIce.delete(pc);
+  queue.forEach((ice) => pc.addIceCandidate(ice).catch(() => {}));
+};
+
 export class VideoChat extends React.Component<
   VideoChatProps,
   {
@@ -593,8 +621,14 @@ export class VideoChat extends React.Component<
     console.log("recv", from, data);
     if (msg.ice !== undefined) {
       // Candidates can outlive the PC they belong to (rebuild races during a
-      // network blip); dropping them is fine, throwing is not
-      pc.addIceCandidate(new RTCIceCandidate(msg.ice)).catch(() => {});
+      // network blip); dropping them is fine, throwing is not. Before any
+      // remote description addIceCandidate rejects outright: queue until
+      // setRemoteDescription lands instead (see queueIce)
+      if (pc.remoteDescription) {
+        pc.addIceCandidate(new RTCIceCandidate(msg.ice)).catch(() => {});
+      } else {
+        queueIce(pc, new RTCIceCandidate(msg.ice));
+      }
     } else if (msg.sdp && msg.sdp.type === "offer") {
       // If our PC is stale, replace it with a fresh one before handling the offer
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
@@ -606,19 +640,28 @@ export class VideoChat extends React.Component<
           return;
         }
       }
-      // Both peers opened their mic at once and both sent an offer: the peer
-      // with the larger id rolls its own half-made offer back and answers
-      // theirs, the other ignores the colliding offer and waits for the
-      // answer to its own (else setRemoteDescription throws and one mic
-      // never gets negotiated)
+      // Perfect negotiation, polite side fixed by id (larger id): a colliding
+      // offer is rolled back and answered by the polite peer, ignored by the
+      // impolite one, so two offers that cross never wedge the pair. The
+      // collision test also covers our own offer still being built
+      // (makingOffer): signalingState alone still reads "stable" there, and
+      // applying the incoming offer would let our own setLocalDescription
+      // implicitly roll it straight back — both sides then sit in
+      // have-local-offer waiting for an answer nobody will send
       try {
-        if (pc.signalingState === "have-local-offer") {
-          if (selfId < from) {
+        const polite = selfId > from;
+        const collision =
+          makingOffer.get(pc) === true || pc.signalingState !== "stable";
+        if (collision) {
+          if (!polite) {
             return;
           }
-          await pc.setLocalDescription({ type: "rollback" });
+          if (pc.signalingState === "have-local-offer") {
+            await pc.setLocalDescription({ type: "rollback" });
+          }
         }
         await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        flushIce(pc);
         const answer = await pc.createAnswer();
         answer.sdp = hdVoiceSdp(answer.sdp);
         await pc.setLocalDescription(answer);
@@ -630,9 +673,9 @@ export class VideoChat extends React.Component<
         console.warn("stale voice offer dropped", e);
       }
     } else if (msg.sdp && msg.sdp.type === "answer") {
-      pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch((e) =>
-        console.warn("stale voice answer dropped", e),
-      );
+      pc.setRemoteDescription(new RTCSessionDescription(msg.sdp))
+        .then(() => flushIce(pc))
+        .catch((e) => console.warn("stale voice answer dropped", e));
     }
   };
 
@@ -922,16 +965,22 @@ export class VideoChat extends React.Component<
                   (p) => p.id === id && p.isVideoChat,
                 )
               ) {
+                makingOffer.set(fresh, true);
                 fresh
                   .createOffer()
-                  .then((offer) => {
+                  .then(async (offer) => {
                     offer.sdp = hdVoiceSdp(offer.sdp);
-                    return fresh.setLocalDescription(offer);
+                    // Their offer got in while ours was being built (the
+                    // polite side): handleSignal answers it — drop ours
+                    // instead of rolling it back under them
+                    if (fresh.signalingState === "have-remote-offer") {
+                      return;
+                    }
+                    await fresh.setLocalDescription(offer);
+                    this.sendSignal(id, { sdp: fresh.localDescription });
                   })
-                  .then(() =>
-                    this.sendSignal(id, { sdp: fresh.localDescription }),
-                  )
-                  .catch(() => {});
+                  .catch(() => {})
+                  .finally(() => makingOffer.set(fresh, false));
               }
             }, 3000);
           }
@@ -978,11 +1027,28 @@ export class VideoChat extends React.Component<
         };
         pc.onnegotiationneeded = async () => {
           if (!isOfferer && !pc.currentRemoteDescription) return;
-          // Start connection for peer's video
-          const offer = await pc.createOffer();
-          offer.sdp = hdVoiceSdp(offer.sdp);
-          await pc.setLocalDescription(offer);
-          this.sendSignal(id, { sdp: pc.localDescription });
+          // Start connection for peer's video. makingOffer marks the whole
+          // build window so handleSignal sees the collision even while we are
+          // still signaling-stable
+          makingOffer.set(pc, true);
+          try {
+            const offer = await pc.createOffer();
+            offer.sdp = hdVoiceSdp(offer.sdp);
+            // Their offer got in while ours was being built (the polite
+            // side): handleSignal answers it — drop ours instead of rolling
+            // it back under them
+            if (pc.signalingState === "have-remote-offer") {
+              return;
+            }
+            await pc.setLocalDescription(offer);
+            this.sendSignal(id, { sdp: pc.localDescription });
+          } catch (e) {
+            // The PC can be closed out from under this offer (blip rebuild,
+            // roster change): drop it, the replacement PC negotiates on its own
+            console.warn("voice offer aborted", e);
+          } finally {
+            makingOffer.set(pc, false);
+          }
         };
       }
     });
