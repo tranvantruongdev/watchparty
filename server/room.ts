@@ -1506,7 +1506,14 @@ export class Room {
 
   private leaveScreenSharing = (socket: Socket) => {
     const sharer = this.getRosterForApp().find((user) => user.isScreenShare);
-    if (!sharer || sharer?.id !== socket.clientId) {
+    if (!sharer) {
+      // The share is already gone (someone else changed the media while we
+      // were sharing, or the grace timer cleared it): the caller's client
+      // stops its capture on the REC:host that says so and then sends this
+      // as cleanup — an error banner here would blame a correct client
+      return;
+    }
+    if (sharer.id !== socket.clientId) {
       socket.emit("errorMessage", "Not the active sharer");
       return;
     }

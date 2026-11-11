@@ -401,6 +401,9 @@ export class App extends React.Component<AppProps, AppState> {
   // "Local copy" mode: the file this client plays from its own disk
   localCopyFile?: File;
   localCopyObjectUrl?: string;
+  // The blob URL a non-converted file share plays leftVideo from; revoked when
+  // the share ends so the file's handle doesn't stay pinned until tab close
+  fileShareObjectUrl?: string;
   transcoder?: ClientTranscoder;
   publisherConns: PCDict = {};
   consumerConn?: RTCPeerConnection;
@@ -1684,6 +1687,12 @@ export class App extends React.Component<AppProps, AppState> {
     }
     this.stopConvert();
     this.Player().clearState();
+    // A rejected attempt (shareRejected does its own inline cleanup) leaves
+    // the previous share's URL alive; drop it before pinning the new file
+    if (this.fileShareObjectUrl) {
+      URL.revokeObjectURL(this.fileShareObjectUrl);
+      this.fileShareObjectUrl = undefined;
+    }
     if (options?.convert) {
       const transcoder = this.createTranscoder(file, leftVideo, 0, (err) => {
         // Conversion failed mid-share
@@ -1708,7 +1717,8 @@ export class App extends React.Component<AppProps, AppState> {
         return;
       }
     } else {
-      leftVideo.src = URL.createObjectURL(file);
+      this.fileShareObjectUrl = URL.createObjectURL(file);
+      leftVideo.src = this.fileShareObjectUrl;
     }
     const fileShareSrc = leftVideo.src;
     const fileShareTranscoder = options?.convert ? this.transcoder : undefined;
@@ -1780,6 +1790,14 @@ export class App extends React.Component<AppProps, AppState> {
         return;
       }
       this.localStreamToPublish = stream;
+      // Attach the ended handler at capture time: a Stop-bar click during the
+      // CMD:joinScreenShare round trip fires 'ended' before setupRTCConnections
+      // (App.tsx:2318) ever runs, and a handler attached after the event fired
+      // never receives it — the room would stay on a dead capture forever, and
+      // every rebuild re-attaches the same ended track. setupRTCConnections'
+      // !localTrack.onended guard keeps this idempotent once PCs exist
+      stream.getVideoTracks()[0].onended = () =>
+        this.stopPublishingLocalStream();
       this.isLocalStreamAFile = false;
       this.socket.emit("CMD:joinScreenShare", {
         file: false,
@@ -2280,6 +2298,13 @@ export class App extends React.Component<AppProps, AppState> {
         track.stop();
       });
     this.localStreamToPublish = undefined;
+    // Release the file share's blob URL. leftVideo keeps the already-decoded
+    // media and REC:host's clearState wipes its src right after; the revoke
+    // only stops the file's handle from staying pinned until tab close
+    if (this.fileShareObjectUrl) {
+      URL.revokeObjectURL(this.fileShareObjectUrl);
+      this.fileShareObjectUrl = undefined;
+    }
     if (this.consumerConn) {
       this.consumerConn.close();
       this.consumerConn = undefined;
