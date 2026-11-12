@@ -624,6 +624,33 @@ export class VideoChat extends React.Component<
     });
   };
 
+  // An offer whose peer had no PC for it yet is dropped by handleSignal and
+  // never re-sent: our PC then waits for an answer with no timeout while the
+  // peer (the polite side — never the offerer by design) offers nothing on its
+  // own, so the pair sits silent for good. Measured round 77: an answerer whose
+  // roster commit lagged the offer ~1.5 s built its PC ~1.4 s after the offer's
+  // 300+1000 ms wait expired, the offer was dropped, and the pair stayed silent
+  // past 25 s. Re-send the same offer every 3 s while no answer has landed:
+  // nothing changed on our side (no answer, no rollback), so the identical SDP
+  // is still valid, and the peer applies it the moment its PC exists. A late
+  // re-send during the peer's own offer is safe — glare handling decides. The
+  // candidates we sent before the peer had a PC stay dropped: after the answer,
+  // our checks carry our address to the peer (RFC 8445 triggered checks), and
+  // round 76 measured the pair connecting with 26/28 of our candidates dropped.
+  // Stops when the answer lands, the PC is replaced, or the peer leaves voice
+  armAnswerResend = (id: string, pc: RTCPeerConnection) => {
+    window.setTimeout(() => {
+      if (
+        window.watchparty.videoPCs[id] === pc &&
+        pc.signalingState === "have-local-offer" &&
+        this.props.participants.some((p) => p.id === id && p.isVideoChat)
+      ) {
+        this.sendSignal(id, { sdp: pc.localDescription });
+        this.armAnswerResend(id, pc);
+      }
+    }, 3000);
+  };
+
   handleSignal = async (data: any) => {
     // Handle messages received from signaling server
     const msg = data.msg;
@@ -1035,6 +1062,7 @@ export class VideoChat extends React.Component<
                     }
                     await fresh.setLocalDescription(offer);
                     this.sendSignal(id, { sdp: fresh.localDescription });
+                    this.armAnswerResend(id, fresh);
                   })
                   .catch(() => {})
                   .finally(() => makingOffer.set(fresh, false));
@@ -1103,6 +1131,7 @@ export class VideoChat extends React.Component<
             }
             await pc.setLocalDescription(offer);
             this.sendSignal(id, { sdp: pc.localDescription });
+            this.armAnswerResend(id, pc);
           } catch (e) {
             // The PC can be closed out from under this offer (blip rebuild,
             // roster change): drop it, the replacement PC negotiates on its own
