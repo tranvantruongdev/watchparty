@@ -420,6 +420,7 @@ export class VideoChat extends React.Component<
 
   componentDidMount() {
     this.socket.on("signal", this.handleSignal);
+    this.socket.on("roster", this.onRoster);
     this.socket.on("connect", this.onSocketConnect);
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshMics);
     this.refreshMics();
@@ -429,6 +430,7 @@ export class VideoChat extends React.Component<
 
   componentWillUnmount() {
     this.socket.off("signal", this.handleSignal);
+    this.socket.off("roster", this.onRoster);
     this.socket.off("connect", this.onSocketConnect);
     navigator.mediaDevices?.removeEventListener(
       "devicechange",
@@ -596,6 +598,32 @@ export class VideoChat extends React.Component<
     }
   };
 
+  // The server lists us out of voice although we hold a stream: our socket
+  // dropped and reconnected, our roster entry was removed and every peer
+  // pruned its PC for us, so all of ours are orphans. Drop them the moment
+  // that roster arrives instead of letting the old links die on the ICE
+  // timers (an offerer with a healthy-looking old PC stayed silent ~15 s,
+  // measured round 75); updateWebRTC builds fresh ones once the roster lists
+  // us again (App re-sends CMD:joinVideo on connect). Handled on the raw
+  // event: App batches rosters into props, and this one can be merged with
+  // the next (us back in voice) before VideoChat ever renders it
+  onRoster = (roster: User[]) => {
+    const selfId = getOrCreateClientId();
+    if (
+      !window.watchparty.ourStream ||
+      roster.some((u) => u.id === selfId && u.isVideoChat)
+    ) {
+      return;
+    }
+    const videoPCs = window.watchparty.videoPCs;
+    Object.keys(videoPCs).forEach((key) => {
+      videoPCs[key].close();
+      delete videoPCs[key];
+      delete this.remoteStreams[key];
+      this.dropVoiceNode(key);
+    });
+  };
+
   handleSignal = async (data: any) => {
     // Handle messages received from signaling server
     const msg = data.msg;
@@ -660,7 +688,29 @@ export class VideoChat extends React.Component<
             await pc.setLocalDescription({ type: "rollback" });
           }
         }
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        } catch (e) {
+          // InvalidAccessError: this offer cannot be applied to the PC we
+          // keep for them. A peer whose roster dropped us (socket blip)
+          // pruned its PC and offers from a fresh one (2 m-lines) while our
+          // old one went from listening to talking and grew to 4: Chrome
+          // refuses a subsequent offer whose m-lines do not match, and the
+          // pair stays silent for good (the offerer waits for an answer, and
+          // as the impolite side ignores our own offers). Replace our PC
+          // with a fresh one and answer from that
+          if ((e as DOMException).name !== "InvalidAccessError") {
+            throw e;
+          }
+          pc.close();
+          delete window.watchparty.videoPCs[from];
+          this.updateWebRTC();
+          pc = window.watchparty.videoPCs[from];
+          if (!pc) {
+            return;
+          }
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        }
         flushIce(pc);
         const answer = await pc.createAnswer();
         answer.sdp = hdVoiceSdp(answer.sdp);
@@ -891,6 +941,13 @@ export class VideoChat extends React.Component<
         this.dropVoiceNode(key);
       }
     });
+    // Not listed in voice yet (first join, or our entry was dropped by a
+    // reconnect and CMD:joinVideo is on its way): the server drops the
+    // signals of a sender it does not list, so an offer made now is lost.
+    // Wait for the roster that lists us
+    if (!clientIds.has(selfId)) {
+      return;
+    }
 
     this.props.participants.forEach((user) => {
       const id = user.id;
