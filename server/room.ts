@@ -221,6 +221,18 @@ export class Room {
           next(new Error("roomKey"));
           return;
         }
+        // The engine connection's query is fixed when the transport opens: a
+        // socket.io client that multiplexes a second room namespace over an
+        // existing engine arrives here with handshake.query still naming the
+        // FIRST room, so registering the query clientId below (measured round
+        // 79) would hand the second client the first user's identity — roster,
+        // voice and share actions under their id — with no session proof. The
+        // client always sends a roomId matching the namespace it connects to;
+        // reject anything else
+        if (socket.handshake.query?.roomId !== this.roomId.slice(1)) {
+          next(new Error("roomId does not match the namespace"));
+          return;
+        }
         if (postgres) {
           const result = await postgres.query(
             `SELECT password, owner, "isSubRoom" FROM room where "roomId" = $1`,
