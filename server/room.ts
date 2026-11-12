@@ -1450,6 +1450,10 @@ export class Room {
     const match = this.roster.find((user) => user.id === socket.clientId);
     if (match) {
       match.isVideoChat = false;
+      // The mute flag belongs to the voice session that just ended: kept, the
+      // next join's first roster would carry it until that join's CMD:userMute
+      // lands (a live mic shown muted, red icon rendered)
+      delete match.isMuted;
     }
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
