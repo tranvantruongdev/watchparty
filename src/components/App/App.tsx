@@ -713,6 +713,29 @@ export class App extends React.Component<AppProps, AppState> {
       ) {
         this.stopPublishingLocalStream();
       }
+      // A replaced sharer: the room's share belongs to someone else now (ours
+      // was cleared by the dead-sharer grace while our socket was gone and
+      // another member started their own, or our resumeShare lost that race).
+      // The capture is a zombie: it feeds no connection and the roster no
+      // longer says we are the sharer. Stop it here and fall through — the
+      // setState below switches us to their share and setupRTCConnections
+      // builds a consumer like any viewer's
+      const selfId = getOrCreateClientId();
+      const ownShare =
+        currentMedia === "screenshare://" + selfId ||
+        currentMedia === "fileshare://" + selfId ||
+        currentMedia.startsWith("screenshare://" + selfId + "@") ||
+        currentMedia.startsWith("fileshare://" + selfId + "@");
+      if (
+        this.localStreamToPublish &&
+        (isScreenShare(currentMedia) || isFileShare(currentMedia)) &&
+        !ownShare
+      ) {
+        // Silent: "share again" would be rejected while theirs is live (also
+        // covers a share attempt that lost the start race and never became ours)
+        this.shareStopSilent = true;
+        this.stopPublishingLocalStream();
+      }
       if (this.playingVBrowser() && !isVBrowser(currentMedia)) {
         this.stopVBrowser();
       }
@@ -2453,9 +2476,12 @@ export class App extends React.Component<AppProps, AppState> {
           // ICE hangs at "disconnected" and Chrome only escalates to "failed"
           // ~25-30 s later (measured round 52) — a black share that whole time.
           // A short blip self-heals in ~1-2 s (measured round 58, freeze test),
-          // so 10 s of dead air is a rebind: restart ICE now instead of waiting
-          // for the failed rebuild. The sharer is the offerer and drives it; the
-          // viewer's half restarts from the offer it receives.
+          // so 6 s of dead air is a rebind: restart ICE now instead of waiting
+          // for the failed escalation (6 s, not the round-52-era 10 s: Chrome
+          // escalates "disconnected"→"failed" just 8-10 s later, and the 10 s
+          // watchdog lost that race half the time — measured round 74 on the
+          // voice twin of this watchdog). The sharer is the offerer and drives
+          // it; the viewer's half restarts from the offer it receives.
           let shareDiscTimer = 0;
           pc.oniceconnectionstatechange = () => {
             if (pc.iceConnectionState === "failed") {
@@ -2472,7 +2498,7 @@ export class App extends React.Component<AppProps, AppState> {
                   // fires negotiationneeded: the handler below sends the offer
                   pc.restartIce();
                 }
-              }, 10000);
+              }, 6000);
             } else {
               window.clearTimeout(shareDiscTimer);
             }

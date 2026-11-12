@@ -997,13 +997,17 @@ export class VideoChat extends React.Component<
             // but ICE hangs at "disconnected" and Chrome only escalates to
             // "failed" ~25-30 s later (measured round 52) — one-way silence
             // that whole time. A short blip self-heals in ~1-2 s (measured
-            // round 58, freeze test), so 10 s of dead air is a rebind: restart
+            // round 58, freeze test), so 6 s of dead air is a rebind: restart
             // ICE now instead of waiting for the failed rebuild. Either half
             // drives it (measured round 63: with the watchdog answerer-side an
             // offerer death recovers in ~18 s; without, the answerer waits for
-            // the failed escalation — ~23 s). The guards below keep a PC that
-            // never connected from restarting: nothing to restart, the failed
-            // rebuild owns that case.
+            // the failed escalation — ~23 s). 6 s, not 10: Chrome escalates
+            // "disconnected" to "failed" just 8-10 s later (measured round 74,
+            // voicedead trace) and the 10 s watchdog lost that race half the
+            // time — recovery then took the failed rebuild's extra 3 s wait and
+            // landed at 20-25 s. The guards below keep a PC that never
+            // connected from restarting: nothing to restart, the failed rebuild
+            // owns that case.
             window.clearTimeout(voiceDiscTimer);
             voiceDiscTimer = window.setTimeout(() => {
               if (
@@ -1015,7 +1019,7 @@ export class VideoChat extends React.Component<
                 // fires negotiationneeded: the handler below sends the offer
                 pc.restartIce();
               }
-            }, 10000);
+            }, 6000);
           } else {
             window.clearTimeout(voiceDiscTimer);
           }

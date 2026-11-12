@@ -1514,7 +1514,11 @@ export class Room {
       return;
     }
     if (sharer.id !== socket.clientId) {
-      socket.emit("errorMessage", "Not the active sharer");
+      // The caller's client believed it was the sharer and stopped its
+      // capture: someone else owns the share now (the dead-sharer grace
+      // cleared ours and they took over). The client learns the same fact
+      // from REC:host and drops the capture on its side — a banner here would
+      // blame a correct client
       return;
     }
     this.cmdHost(socket, "");
