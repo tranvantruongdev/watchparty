@@ -97,6 +97,39 @@ const hdVoiceSdp = (sdp: string | undefined) =>
     `useinbandfec=1; maxaveragebitrate=${HD_VOICE_BITRATE}`,
   );
 
+// Prefer Opus RED (RFC 2198 RTP-level redundancy) on the voice audio
+// transceivers: the sender wraps each packet with the previous frame, so a
+// receiver hides isolated losses from its redundant copy instead of
+// concealing (inband FEC repairs individual frames only; RED keeps whole
+// packets). Prefs keep every other codec after RED, so a peer without RED
+// still negotiates plain opus from the same offer. Applied at PC creation
+// (and the rare addTrack fallback in setupWebRTC) so both offers and answers
+// carry it. Audio only — screen-share audio is multiopus, untouched.
+const preferRedVoice = (pc: RTCPeerConnection) => {
+  const caps = RTCRtpSender.getCapabilities("audio");
+  if (!caps) {
+    return;
+  }
+  const red = caps.codecs.filter(
+    (c) => c.mimeType.toLowerCase() === "audio/red",
+  );
+  if (!red.length) {
+    return;
+  }
+  const rest = caps.codecs.filter(
+    (c) => c.mimeType.toLowerCase() !== "audio/red",
+  );
+  pc.getTransceivers().forEach((tr) => {
+    if (tr.receiver.track.kind === "audio") {
+      try {
+        tr.setCodecPreferences([...red, ...rest]);
+      } catch {
+        // A codec list the browser rejects must never break voice setup
+      }
+    }
+  });
+};
+
 // Perfect-negotiation state, keyed per RTCPeerConnection in WeakMaps: closing
 // or rebuilding a PC drops its entry with it, so an old PC's queued candidates
 // can never leak into its replacement and no teardown site has to clean up
@@ -816,6 +849,7 @@ export class VideoChat extends React.Component<
           }
         } else {
           pc.addTrack(track, ourStream);
+          preferRedVoice(pc);
         }
       });
     });
@@ -1000,6 +1034,7 @@ export class VideoChat extends React.Component<
           pc.addTransceiver("audio", { direction: "recvonly" });
           pc.addTransceiver("video", { direction: "recvonly" });
         }
+        preferRedVoice(pc);
         pc.onicecandidate = (event) => {
           // We generated an ICE candidate, send it to peer
           if (event.candidate) {
