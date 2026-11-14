@@ -208,6 +208,8 @@ export class VideoChat extends React.Component<
   } = {};
   // A mic switch is in flight (serialize changeMic — see the guard there)
   micSwitching = false;
+  // A camera reopen is in flight (serialize reopenCamera — see the guard there)
+  cameraReopening = false;
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
@@ -926,6 +928,12 @@ export class VideoChat extends React.Component<
     // silence forever behind a green mic icon — show the manual mic-off state
     // instead (keep listening if someone else is in voice, else leave)
     stream.getAudioTracks()[0]?.addEventListener("ended", () => this.micOff());
+    // Same for the camera: unplugging ends the track and the button would keep
+    // showing a live camera over a frozen frame for everyone — show the manual
+    // camera-off state instead (audio untouched)
+    stream
+      .getVideoTracks()[0]
+      ?.addEventListener("ended", () => this.cameraEnded());
     return stream;
   };
 
@@ -946,13 +954,78 @@ export class VideoChat extends React.Component<
     this.socket.emit("CMD:leaveVideo");
   };
 
+  // The camera died on its own: drop to the camera-off state through the same
+  // toggle the button uses. The ended track cannot be revived, so the next
+  // camera-on click goes through reopenCamera instead of an enabled flip
+  cameraEnded = () => {
+    if (this.getVideoWebRTC()) this.toggleVideoWebRTC();
+  };
+
   toggleVideoWebRTC = () => {
     const ourStream = window.watchparty.ourStream;
-    if (ourStream && ourStream.getVideoTracks()[0]) {
-      ourStream.getVideoTracks()[0].enabled =
-        !ourStream.getVideoTracks()[0]?.enabled;
+    const track = ourStream?.getVideoTracks()[0];
+    if (ourStream && track) {
+      // An enabled flip cannot revive an ended track (device unplugged): this
+      // click is the user asking for the camera back, so open it again
+      if (!track.enabled && track.readyState === "ended") {
+        this.reopenCamera();
+        return;
+      }
+      track.enabled = !track.enabled;
     }
     this.forceUpdate();
+  };
+
+  // One reopen at a time: two clicks share the same dead track, so the stale
+  // check below cannot tell them apart and ourStream would end with two
+  // captures (the double-mic bug changeMic serializes)
+  reopenCamera = async () => {
+    if (this.cameraReopening) {
+      return;
+    }
+    this.cameraReopening = true;
+    try {
+      const ourStream = window.watchparty.ourStream;
+      const dead = ourStream?.getVideoTracks()[0];
+      if (!ourStream || !dead || dead.readyState !== "ended") {
+        return;
+      }
+      let fresh: MediaStream;
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch (e) {
+        console.warn("camera reopen failed", e);
+        return;
+      }
+      // Left / a teardown mutated the stream while the device opened
+      if (
+        window.watchparty.ourStream !== ourStream ||
+        ourStream.getVideoTracks()[0] !== dead
+      ) {
+        fresh.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const newTrack = fresh.getVideoTracks()[0];
+      ourStream.removeTrack(dead);
+      ourStream.addTrack(newTrack);
+      await Promise.all(
+        Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
+          if (id === getOrCreateClientId() || pc.connectionState === "closed") {
+            return undefined;
+          }
+          // A PC that dies mid-swap is replaced by the roster logic anyway
+          return pc
+            .getSenders()
+            .find((s) => s.track === dead)
+            ?.replaceTrack(newTrack)
+            .catch(() => {});
+        }),
+      );
+      newTrack.addEventListener("ended", () => this.cameraEnded());
+      this.forceUpdate();
+    } finally {
+      this.cameraReopening = false;
+    }
   };
 
   getVideoWebRTC = () => {
