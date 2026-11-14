@@ -1221,8 +1221,9 @@ export class Room {
     if (!data || !data.value || !data.msgId || !data.msgTimestamp) {
       return;
     }
-    // Emojis can be multiple bytes
-    if (data.value.length > 8) {
+    // Emojis can be multiple bytes; value must be a string or its coerced
+    // key ("[object Object]", "123") would be stored and broadcast room-wide
+    if (typeof data.value !== "string" || data.value.length > 8) {
       return;
     }
     const msg = this.chat.find(
@@ -1252,8 +1253,8 @@ export class Room {
     if (!data || !data.value || !data.msgId || !data.msgTimestamp) {
       return;
     }
-    // Emojis can be multiple bytes
-    if (data.value.length > 8) {
+    // Emojis can be multiple bytes; value must be a string (same rule as addReaction)
+    if (typeof data.value !== "string" || data.value.length > 8) {
       return;
     }
     const msg = this.chat.find(
@@ -1548,7 +1549,7 @@ export class Room {
   // on (someone else hosts now) refuses, and the client stops its capture
   private resumeSharing = (socket: Socket, raw: unknown) => {
     const data = raw as { media?: string };
-    if (!data?.media) {
+    if (typeof data?.media !== "string" || !data.media) {
       return;
     }
     // Only their own share value, exact (no mediasoup suffix) or with one
