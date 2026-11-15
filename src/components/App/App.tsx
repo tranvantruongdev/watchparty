@@ -37,6 +37,8 @@ import {
 } from "../../utils/utils";
 import { generateName } from "../../utils/generateName";
 import { Chat, type SeekCommand } from "../Chat/Chat";
+import { chatStore } from "./chatStore";
+import { ChatOverlay } from "./ChatOverlay";
 import { TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
@@ -200,7 +202,6 @@ interface AppState {
   voiceDeaf: boolean;
   participants: User[];
   rosterUpdateTS: Number;
-  chat: ChatMessage[];
   playlist: PlaylistVideo[];
   tsMap: NumberDict;
   nameMap: StringDict;
@@ -208,8 +209,6 @@ interface AppState {
   myName: string;
   myPicture: string;
   loading: boolean;
-  scrollTimestamp: number;
-  unreadCount: number;
   fullScreen: boolean;
   controlsTimestamp: number;
   watchOptions: SearchResult[];
@@ -310,7 +309,6 @@ export class App extends React.Component<AppProps, AppState> {
     voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
     rosterUpdateTS: Date.now(),
-    chat: [],
     floatReactions: [],
     chatOverlayTyping: false,
     chatOverlayMsg: "",
@@ -322,8 +320,6 @@ export class App extends React.Component<AppProps, AppState> {
     myName: window.localStorage.getItem("watchparty-username") ?? "",
     myPicture: "",
     loading: true,
-    scrollTimestamp: 0,
-    unreadCount: 0,
     fullScreen: false,
     controlsTimestamp: 0,
     watchOptions: [],
@@ -488,6 +484,9 @@ export class App extends React.Component<AppProps, AppState> {
     document.onfullscreenchange = this.onFullScreenChange;
     document.onkeydown = this.onKeydown;
     this.setupCaptureHandle();
+    // chatStore is module-global: a remounted App (another room without a page
+    // load) must not show the previous room's messages until chatinit arrives
+    chatStore.setHistory([]);
 
     // Send heartbeat to the server
     this.heartbeat = window.setInterval(
@@ -1172,54 +1171,37 @@ export class App extends React.Component<AppProps, AppState> {
         }
         this.chatAudio.play();
       }
-      this.state.chat.push(data);
-      if (this.state.chat.length > 100) {
-        this.state.chat.shift();
-      }
-      this.setState({
-        chat: this.state.chat,
-        scrollTimestamp: Date.now(),
-        unreadCount:
-          this.state.currentTab === "chat"
-            ? this.state.unreadCount
-            : this.state.unreadCount + 1,
-      });
+      // chatStore (round 130): the message must not commit the whole App;
+      // Chat and the fullscreen overlay subscribe to the store themselves
+      chatStore.push(data);
     });
     socket.on("REC:addReaction", (data: Reaction) => {
-      const { chat } = this.state;
-      const msgIndex = chat.findIndex(
-        (m) => m.id === data.msgId && m.timestamp === data.msgTimestamp,
-      );
-      if (msgIndex === -1) {
+      const hit = chatStore.mutate(data.msgId, data.msgTimestamp, (msg) => {
+        msg.reactions = msg.reactions || {};
+        msg.reactions[data.value] = msg.reactions[data.value] || [];
+        msg.reactions[data.value].push(data.user);
+      });
+      if (!hit) {
         return;
       }
-      const msg = chat[msgIndex];
-      msg.reactions = msg.reactions || {};
-      msg.reactions[data.value] = msg.reactions[data.value] || [];
-      msg.reactions[data.value].push(data.user);
-      this.setState({ chat }, () => {
-        // if we add a reaction to the last message we need to scroll down
-        // or else the reaction icon might be hidden
-        if (
-          msgIndex === chat.length - 1 &&
-          this.chatRef.current?.state.isNearBottom
-        ) {
-          this.chatRef.current?.scrollToBottom();
-        }
-      });
+      // if we add a reaction to the last message we need to scroll down
+      // or else the reaction icon might be hidden
+      if (
+        hit.index === chatStore.getSnapshot().messages.length - 1 &&
+        this.chatRef.current?.state.isNearBottom
+      ) {
+        this.chatRef.current?.scrollToBottom();
+      }
     });
     socket.on("REC:removeReaction", (data: Reaction) => {
-      const { chat } = this.state;
-      const msg = chat.find(
-        (m) => m.id === data.msgId && m.timestamp === data.msgTimestamp,
-      );
-      if (!msg || !msg.reactions?.[data.value]) {
-        return;
-      }
-      msg.reactions[data.value] = msg.reactions[data.value].filter(
-        (id) => id !== data.user,
-      );
-      this.setState({ chat });
+      chatStore.mutate(data.msgId, data.msgTimestamp, (msg) => {
+        if (!msg.reactions?.[data.value]) {
+          return;
+        }
+        msg.reactions[data.value] = msg.reactions[data.value].filter(
+          (id) => id !== data.user,
+        );
+      });
     });
     socket.on("REC:floatReaction", (data: FloatReaction) => {
       const float: FloatReaction = {
@@ -1321,7 +1303,7 @@ export class App extends React.Component<AppProps, AppState> {
       });
     });
     socket.on("chatinit", (data: ChatMessage[]) => {
-      this.setState({ chat: data, scrollTimestamp: Date.now() });
+      chatStore.setHistory(data);
     });
     socket.on("playlist", (data: PlaylistVideo[]) => {
       this.setState({ playlist: data });
@@ -3360,16 +3342,12 @@ export class App extends React.Component<AppProps, AppState> {
   // /help: a hint pushed straight into this client's chat; never emitted, so
   // nobody else sees it
   localHelpHint = () => {
-    this.state.chat.push({
+    chatStore.push({
       id: "",
       cmd: "help",
       system: true,
       timestamp: new Date().toISOString(),
     });
-    if (this.state.chat.length > 100) {
-      this.state.chat.shift();
-    }
-    this.setState({ chat: this.state.chat, scrollTimestamp: Date.now() });
   };
 
   getRoomTSToSet = (time: number) => {
@@ -4741,60 +4719,34 @@ export class App extends React.Component<AppProps, AppState> {
                         </div>
                       ))}
                     </div>
-                    {/* Fullscreen chat overlay: newest messages over the player,
-                        each fading out ~8s after it arrived (CSS animation) */}
+                    {/* Fullscreen chat overlay (round 130): its own subscriber
+                        to chatStore so a message only re-renders the overlay */}
                     {this.state.fullScreen &&
                       document.fullscreenElement !== document.body && (
-                        <div className={styles.chatOverlay}>
-                          {this.state.chat
-                            .filter((m) => !m.system && !m.cmd && m.msg)
-                            .slice(-5)
-                            .map((msg) => (
-                              <div
-                                key={msg.timestamp + msg.id}
-                                className={styles.chatOverlayItem}
-                              >
-                                <span className={styles.chatOverlayName}>
-                                  {this.state.nameMap[msg.id] || msg.id}
-                                </span>
-                                <span>{msg.msg}</span>
-                              </div>
-                            ))}
-                          {this.state.chatOverlayTyping && (
-                            <input
-                              autoFocus
-                              className={styles.chatOverlayInput}
-                              placeholder="Enter to send, Esc to close"
-                              value={this.state.chatOverlayMsg}
-                              onChange={(e) =>
-                                this.setState({
-                                  chatOverlayMsg: e.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                this.setState({ chatOverlayTyping: false })
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Escape") {
-                                  this.setState({
-                                    chatOverlayTyping: false,
-                                    chatOverlayMsg: "",
-                                  });
-                                } else if (
-                                  e.key === "Enter" &&
-                                  this.state.chatOverlayMsg &&
-                                  this.state.chatOverlayMsg.length <= 10000
-                                ) {
-                                  this.socket.emit(
-                                    "CMD:chat",
-                                    this.state.chatOverlayMsg,
-                                  );
-                                  this.setState({ chatOverlayMsg: "" });
-                                }
-                              }}
-                            />
-                          )}
-                        </div>
+                        <ChatOverlay
+                          nameMap={this.state.nameMap}
+                          typing={this.state.chatOverlayTyping}
+                          overlayMsg={this.state.chatOverlayMsg}
+                          onOverlayMsg={(v) =>
+                            this.setState({ chatOverlayMsg: v })
+                          }
+                          onOverlayClose={() =>
+                            this.setState({
+                              chatOverlayTyping: false,
+                              chatOverlayMsg: "",
+                            })
+                          }
+                          onOverlayBlur={() =>
+                            this.setState({ chatOverlayTyping: false })
+                          }
+                          onOverlaySend={() => {
+                            this.socket.emit(
+                              "CMD:chat",
+                              this.state.chatOverlayMsg,
+                            );
+                            this.setState({ chatOverlayMsg: "" });
+                          }}
+                        />
                       )}
                   </div>
                 </div>
@@ -4951,11 +4903,9 @@ export class App extends React.Component<AppProps, AppState> {
                 </div>
               )}
               <Chat
-                chat={this.state.chat}
                 nameMap={this.state.nameMap}
                 pictureMap={this.state.pictureMap}
                 socket={this.socket}
-                scrollTimestamp={this.state.scrollTimestamp}
                 getMediaDisplayName={this.getMediaDisplayName}
                 isChatDisabled={this.state.isChatDisabled}
                 owner={this.state.owner}

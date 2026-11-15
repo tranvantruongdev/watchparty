@@ -29,6 +29,7 @@ import {
   TransitionGroup,
 } from "react-transition-group";
 import { MetadataContext } from "../../MetadataContext";
+import { chatStore } from "../App/chatStore";
 
 const clientId = getOrCreateClientId();
 // The server silently drops anything longer (server/room.ts isValidChatMessage)
@@ -88,11 +89,9 @@ export const parseSeekCommand = (text: string): SeekCommand | undefined => {
 };
 
 interface ChatProps {
-  chat: ChatMessage[];
   nameMap: StringDict;
   pictureMap: StringDict;
   socket: Socket;
-  scrollTimestamp: number;
   className?: string;
   getMediaDisplayName: (input?: string) => string;
   hide?: boolean;
@@ -131,13 +130,22 @@ export class Chat extends React.Component<ChatProps> {
   async componentDidMount() {
     this.scrollToBottom();
     this.messagesRef.current?.addEventListener("scroll", this.onScroll);
+    // Messages live in chatStore (round 130) so an incoming message re-renders
+    // only Chat, not the whole App; memo'd ChatMessages bail via the comparator
+    this.unsubChatStore = chatStore.subscribe(() => this.forceUpdate());
+  }
+
+  componentWillUnmount() {
+    this.unsubChatStore?.();
   }
 
   componentDidUpdate(prevProps: ChatProps) {
-    if (this.props.scrollTimestamp !== prevProps.scrollTimestamp) {
-      if (prevProps.scrollTimestamp === 0 || this.state.isNearBottom) {
+    const { messages, scrollTimestamp } = chatStore.getSnapshot();
+    if (scrollTimestamp !== this.lastScrollTS) {
+      if (this.lastScrollTS === 0 || this.state.isNearBottom) {
         this.scrollToBottom();
       }
+      this.lastScrollTS = scrollTimestamp;
     }
     if (this.props.hide !== prevProps.hide) {
       this.scrollToBottom();
@@ -146,7 +154,7 @@ export class Chat extends React.Component<ChatProps> {
     // to near-bottom in onScroll. Keyed on the LAST message, not the length:
     // with a full history the server keeps the array at 100 (push+shift), so
     // the length never grows even as messages arrive
-    const last = this.props.chat[this.props.chat.length - 1];
+    const last = messages[messages.length - 1];
     const lastKey = last ? last.timestamp + last.id : "";
     if (lastKey !== this.lastChatKey) {
       if (!this.state.isNearBottom) {
@@ -158,6 +166,9 @@ export class Chat extends React.Component<ChatProps> {
 
   // timestamp+id of the last message seen by componentDidUpdate above
   lastChatKey = "";
+  // last scrollTimestamp seen by componentDidUpdate above
+  lastScrollTS = 0;
+  unsubChatStore?: () => void;
 
   setReactionMenu = (
     isOpen: boolean,
@@ -184,9 +195,9 @@ export class Chat extends React.Component<ChatProps> {
     const msgId = id || this.state.reactionMenu.selectedMsgId;
     const msgTimestamp =
       timestamp || this.state.reactionMenu.selectedMsgTimestamp;
-    const msg = this.props.chat.find(
-      (m) => m.id === msgId && m.timestamp === msgTimestamp,
-    );
+    const msg = chatStore
+      .getSnapshot()
+      .messages.find((m) => m.id === msgId && m.timestamp === msgTimestamp);
     const data = { value, msgId, msgTimestamp };
     // The ?. after [value]: a message can have reactions but not this value
     if (msg?.reactions?.[value]?.includes(clientId)) {
@@ -408,10 +419,11 @@ export class Chat extends React.Component<ChatProps> {
             aria-label="Chat messages"
             style={{ display: "flex", flexDirection: "column", gap: "8px" }}
           >
-            {this.props.chat.map((msg, i) => {
+            {chatStore.getSnapshot().messages.map((msg, i) => {
               // Hide avatar+name on a continuation line: same sender, both
               // plain messages (system/replies stay ungrouped), within a minute
-              const prev = i > 0 ? this.props.chat[i - 1] : undefined;
+              const prev =
+                i > 0 ? chatStore.getSnapshot().messages[i - 1] : undefined;
               const groupWithPrev = Boolean(
                 prev &&
                 msg.id &&
@@ -468,7 +480,7 @@ export class Chat extends React.Component<ChatProps> {
           )}
         </div>
         {this.state.isPickerOpen && (
-          <div style={{ position: "absolute", bottom: "60px" }}>
+          <div className={styles.pickerDock}>
             <React.Suspense fallback={null}>
               <EmojiPicker
                 theme="dark"
@@ -560,73 +572,78 @@ export class Chat extends React.Component<ChatProps> {
             </Button>
           </div>
         )}
-        {!this.props.isChatDisabled && (
-          <div className={styles.floatReactions}>
-            {["😂", "❤️", "😮", "😢", "👏", "🔥"].map((emoji) => (
-              <ActionIcon
-                key={emoji}
-                onClick={() => this.sendFloatReaction(emoji)}
-                aria-label={`React ${emoji}`}
-              >
-                <span role="img" aria-hidden>
-                  {emoji}
-                </span>
-              </ActionIcon>
-            ))}
-          </div>
-        )}
-        <TextInput
-          ref={this.chatInputRef}
-          style={{ marginTop: "10px" }}
-          aria-label="Chat message"
-          maxLength={MAX_CHAT_LENGTH}
-          // isComposing: Enter that commits an IME composition (CJK input,
-          // some Vietnamese keyboards) must not send the half-typed message
-          onKeyDown={(e: any) =>
-            e.key === "Enter" &&
-            !e.nativeEvent.isComposing &&
-            this.sendChatMsg()
-          }
-          onChange={this.updateChatMsg}
-          value={this.state.chatMsg}
-          error={this.chatTooLong()}
-          disabled={this.props.isChatDisabled}
-          placeholder={
-            this.props.isChatDisabled
-              ? "The chat was disabled by the room owner."
-              : "Enter a message..."
-          }
-          rightSectionWidth={this.props.voiceButton ? 92 : undefined}
-          rightSection={
-            <div style={{ display: "flex", gap: 4 }}>
-              {this.props.voiceButton}
-              <ActionIcon
-                className={styles.emojiToggle}
-                aria-label="Open emoji picker"
-                onPointerEnter={loadEmojiPicker}
-                onFocus={loadEmojiPicker}
-                onClick={() => {
-                  // Add a delay to prevent the click from triggering onClickOutside
-                  const curr = this.state.isPickerOpen;
-                  setTimeout(() => this.setState({ isPickerOpen: !curr }), 100);
-                }}
-                disabled={this.props.isChatDisabled}
-              >
-                <span role="img" aria-label="Emoji">
-                  😀
-                </span>
-              </ActionIcon>
+        <div className={styles.inputDock}>
+          {!this.props.isChatDisabled && (
+            <div className={styles.floatReactions}>
+              {["😂", "❤️", "😮", "😢", "👏", "🔥"].map((emoji) => (
+                <ActionIcon
+                  key={emoji}
+                  onClick={() => this.sendFloatReaction(emoji)}
+                  aria-label={`React ${emoji}`}
+                >
+                  <span role="img" aria-hidden>
+                    {emoji}
+                  </span>
+                </ActionIcon>
+              ))}
             </div>
-          }
-        >
-          {/* <Icon onClick={this.sendChatMsg} name="send" inverted circular link /> */}
-        </TextInput>
-        {MAX_CHAT_LENGTH - this.state.chatMsg.length <=
-          CHAT_LENGTH_COUNTER_WINDOW && (
-          <Text size="xs" c="dimmed" ta="right" style={{ marginTop: 4 }}>
-            {this.state.chatMsg.length}/{MAX_CHAT_LENGTH}
-          </Text>
-        )}
+          )}
+          <TextInput
+            ref={this.chatInputRef}
+            style={{ marginTop: "10px" }}
+            aria-label="Chat message"
+            maxLength={MAX_CHAT_LENGTH}
+            // isComposing: Enter that commits an IME composition (CJK input,
+            // some Vietnamese keyboards) must not send the half-typed message
+            onKeyDown={(e: any) =>
+              e.key === "Enter" &&
+              !e.nativeEvent.isComposing &&
+              this.sendChatMsg()
+            }
+            onChange={this.updateChatMsg}
+            value={this.state.chatMsg}
+            error={this.chatTooLong()}
+            disabled={this.props.isChatDisabled}
+            placeholder={
+              this.props.isChatDisabled
+                ? "The chat was disabled by the room owner."
+                : "Enter a message..."
+            }
+            rightSectionWidth={this.props.voiceButton ? 92 : undefined}
+            rightSection={
+              <div style={{ display: "flex", gap: 4 }}>
+                {this.props.voiceButton}
+                <ActionIcon
+                  className={styles.emojiToggle}
+                  aria-label="Open emoji picker"
+                  onPointerEnter={loadEmojiPicker}
+                  onFocus={loadEmojiPicker}
+                  onClick={() => {
+                    // Add a delay to prevent the click from triggering onClickOutside
+                    const curr = this.state.isPickerOpen;
+                    setTimeout(
+                      () => this.setState({ isPickerOpen: !curr }),
+                      100,
+                    );
+                  }}
+                  disabled={this.props.isChatDisabled}
+                >
+                  <span role="img" aria-label="Emoji">
+                    😀
+                  </span>
+                </ActionIcon>
+              </div>
+            }
+          >
+            {/* <Icon onClick={this.sendChatMsg} name="send" inverted circular link /> */}
+          </TextInput>
+          {MAX_CHAT_LENGTH - this.state.chatMsg.length <=
+            CHAT_LENGTH_COUNTER_WINDOW && (
+            <Text size="xs" c="dimmed" ta="right" style={{ marginTop: 4 }}>
+              {this.state.chatMsg.length}/{MAX_CHAT_LENGTH}
+            </Text>
+          )}
+        </div>
       </div>
     );
   }

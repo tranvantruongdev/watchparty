@@ -97,10 +97,49 @@
 /* 28px default ActionIcons are under the ~36px tap-target floor on touch
    screens; with a mouse the compact size stays */
 @media (pointer: coarse) {
+  .floatReactions {
+    gap: 8px;
+  }
+
   .floatReactions :global(.mantine-ActionIcon-root),
   .emojiToggle {
     width: 36px;
     height: 36px;
+  }
+}
+
+/* Sticky input dock (round 132): on a phone the input row + quick reactions
+   stay pinned to the bottom of the visual viewport while the chat column is
+   on screen, so an on-screen keyboard cannot cover them without the page
+   scrolling them away. No-op on desktop: the column already fits the
+   viewport there, so sticky never engages. */
+.inputDock {
+  position: sticky;
+  bottom: 0;
+  margin: 0 -8px -8px;
+  padding: 2px 8px 8px;
+  background: rgba(24, 14, 46, 0.95);
+  border-radius: 0 0 18px 18px;
+}
+
+/* Emoji picker dock: at 360px the default ~352px picker started at the
+   column's left edge and its right 9px were clipped by the column's
+   overflow:hidden (round 132 measured right edge 369 vs viewport 360). Fill
+   the column width on phones; desktop keeps the natural picker width. */
+.pickerDock {
+  position: absolute;
+  bottom: 60px;
+  right: 0;
+}
+
+@media only screen and (max-width: 600px) {
+  .pickerDock {
+    width: 100%;
+  }
+
+  .pickerDock :global(em-emoji-picker) {
+    width: 100%;
+    max-width: 100%;
   }
 }
 
@@ -155,6 +194,16 @@
   .comment .commentMenu {
     opacity: 1;
     pointer-events: auto;
+    /* Always visible on touch, it covered the name/timestamp row (and the
+       first line of grouped messages) when it overlaid the bubble's corner
+       (round 132 measured 828px^2 of bubble covered): in flow instead,
+       right-aligned under the text. */
+    position: static;
+    top: auto;
+    right: auto;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 2px 0 0 !important;
   }
 }
 

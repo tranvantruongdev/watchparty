@@ -34,6 +34,8 @@
      whole page out. Stacked layout for everything narrower than a tablet. */
   @media only screen and (max-width: 900px) {
     flex-direction: column;
+    /* Touch minimum spacing between sibling targets (round 132: 4px measured) */
+    gap: 8px;
     /* No width: the element's margin already insets it; an explicit width here
        double-counted the margin and pushed the page 8px off-screen. */
   }
@@ -111,6 +113,11 @@
   background: rgba(24, 14, 46, 0.55);
   border: 1px solid rgba(190, 150, 255, 0.14);
   backdrop-filter: blur(10px);
+  /* Touch minimum spacing between sibling targets (round 132: 4px visual gap
+     measured at 390 — gap 6 + the 1px borders reach 8). Desktop keeps 2. */
+  @media only screen and (max-width: 900px) {
+    gap: 6px;
+  }
 }
 
 /* Theater mode (watch page cinema look) */
@@ -616,6 +623,28 @@
    fold); chat stays below, collapsible via its chevron, which renders there
    because landscape screen width > 600. */
 @media only screen and (max-width: 600px) {
+  /* The 48vh player box left ~50% of the screen empty above/below a 16:9
+     video (round 132 measured box 405 vs video 202 at 390x844). The in-flow
+     video now sets the box height; 160px keeps VBrowser (which sizes itself
+     from the hidden video) and tiny videos usable. */
+  @media (orientation: portrait) {
+    .playerContainer {
+      min-height: 160px;
+    }
+
+    /* The YouTube iframe is position:absolute (.videoContent) and would
+       collapse a box with no min-height; in-flow 16:9 keeps it sized like the
+       video it stands in for. (#loader stays absolute: the default-size
+       #leftVideo is also an in-flow flex child in the empty state, and both
+       in one row squashed the empty-room card.) */
+    .playerContainer > iframe.videoContent {
+      position: static;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 16 / 9;
+    }
+  }
+
   :global(#playerColumn) > div:has(> [class*="playerContainer"]) {
     order: -2;
   }
