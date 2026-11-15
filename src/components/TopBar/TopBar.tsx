@@ -129,6 +129,7 @@ export class SignInButton extends React.Component<SignInButtonProps> {
         >
           <Avatar
             src={this.state.userImage}
+            alt="Profile"
             onClick={() => this.setState({ isProfileOpen: true })}
           />
           {this.state.isProfileOpen && this.context.user && (
