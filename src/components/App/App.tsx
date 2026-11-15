@@ -41,12 +41,9 @@ import { TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
 import { getCurrentSettings } from "../Settings/LocalSettings";
-import { MultiStreamModal } from "../Modal/MultiStreamModal";
 import { ComboBox } from "../ComboBox/ComboBox";
 import { SearchComponent } from "../SearchComponent/SearchComponent";
 import { Controls } from "../Controls/Controls";
-import { VBrowserModal } from "../Modal/VBrowserModal";
-import { SettingsModal } from "../Settings/SettingsModal";
 import { ErrorModal } from "../Modal/ErrorModal";
 import { PasswordModal } from "../Modal/PasswordModal";
 import {
@@ -54,14 +51,7 @@ import {
   getShareMbps,
   getShareCapMbps,
 } from "../Modal/ScreenShareModal";
-import { FileShareModal } from "../Modal/FileShareModal";
-import {
-  ClientTranscoder,
-  isClientTranscodeSupported,
-  type AudioTrackInfo,
-} from "../../utils/clientTranscode";
 import type firebase from "firebase/compat/app";
-import { SubtitleModal } from "../Modal/SubtitleModal";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
 import styles from "./App.module.css";
@@ -106,6 +96,38 @@ import type WebTorrent from "webtorrent";
 import type Hls from "hls.js";
 import { type MediaPlayerClass } from "dashjs";
 import { type Torrent } from "webtorrent";
+import { shareStatsStore } from "./shareStatsStore";
+import { ShareStatsPills } from "./ShareStatsPills";
+import { ConvertToggle } from "./ConvertToggle";
+
+// Room-usability rule (round 123): none of these modals is needed to join and
+// watch, so each loads on demand at its render point. ScreenShareModal stays
+// static: App needs its getShareMbps/getShareCapMbps helpers synchronously.
+const MultiStreamModal = React.lazy(() =>
+  import("../Modal/MultiStreamModal").then((m) => ({
+    default: m.MultiStreamModal,
+  })),
+);
+const VBrowserModal = React.lazy(() =>
+  import("../Modal/VBrowserModal").then((m) => ({ default: m.VBrowserModal })),
+);
+const SettingsModal = React.lazy(() =>
+  import("../Settings/SettingsModal").then((m) => ({
+    default: m.SettingsModal,
+  })),
+);
+const FileShareModal = React.lazy(() =>
+  import("../Modal/FileShareModal").then((m) => ({
+    default: m.FileShareModal,
+  })),
+);
+const SubtitleModal = React.lazy(() =>
+  import("../Modal/SubtitleModal").then((m) => ({ default: m.SubtitleModal })),
+);
+import type {
+  AudioTrackInfo,
+  ClientTranscoder,
+} from "../../utils/clientTranscode";
 
 declare global {
   interface Window {
@@ -162,11 +184,9 @@ interface AppState {
   roomLoop: boolean;
   roomIntermission: RoomIntermission | null;
   roomSleepTimer: RoomSleepTimer | null;
-  // What the incoming screen share really gets: path, size, fps, bitrate
-  shareStats: string;
-  // What the sharer's own encoder is doing: size, fps, and why quality is limited
-  shareSendStats: string;
-  // No new frame while ICE is unhappy: the share is frozen (round 95)
+  // No new frame while ICE is unhappy: the share is frozen (round 95). The
+  // stats badge text itself lives in shareStatsStore (round 123): it changes
+  // almost every 2 s poll and must not re-render the whole App for a string
   shareStalled: boolean;
   // The sharer hid their own-screen preview (round 115): leftVideo stops
   // mirroring the capture and a short note takes its place
@@ -277,8 +297,6 @@ export class App extends React.Component<AppProps, AppState> {
     roomLoop: false,
     roomIntermission: null,
     roomSleepTimer: null,
-    shareStats: "",
-    shareSendStats: "",
     // No new frame for ~4 s while the transport is unhappy: the share is
     // frozen and the badge must say so instead of reading as a live stream
     shareStalled: false,
@@ -1042,12 +1060,16 @@ export class App extends React.Component<AppProps, AppState> {
           //   player.load();
           //   player.play();
           // }
-          else if (
-            this.state.convertEnabled &&
-            isClientTranscodeSupported() &&
-            isDirectVideoUrl(src)
-          ) {
-            await this.convertAndPlay(src, time);
+          else if (this.state.convertEnabled && isDirectVideoUrl(src)) {
+            // clientTranscode (mediabunny glue) is only downloaded when a
+            // conversion actually starts (round 123)
+            const { isClientTranscodeSupported } =
+              await import("../../utils/clientTranscode");
+            if (isClientTranscodeSupported()) {
+              await this.convertAndPlay(src, time);
+            } else {
+              await this.Player().setSrcAndTime(src, time);
+            }
           } else {
             await this.Player().setSrcAndTime(src, time);
           }
@@ -1652,12 +1674,14 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
-  createTranscoder = (
+  createTranscoder = async (
     source: File | string,
     video: HTMLMediaElement,
     startTime: number,
     onError: (err: Error) => void,
   ) => {
+    // Downloaded on demand: the module is only needed once a conversion runs
+    const { ClientTranscoder } = await import("../../utils/clientTranscode");
     const transcoder = new ClientTranscoder({
       source,
       video,
@@ -1683,7 +1707,7 @@ export class App extends React.Component<AppProps, AppState> {
   // browser can't play natively. Only affects this client: the room's media URL is unchanged.
   convertAndPlay = async (src: string, time: number) => {
     const video = this.HTMLInterface.getVideoEl();
-    const transcoder = this.createTranscoder(src, video, time, (err) => {
+    const transcoder = await this.createTranscoder(src, video, time, (err) => {
       // Conversion failed while playing. Carry on without it.
       this.showError(
         `Conversion failed: ${err.message}. Playing without conversion.`,
@@ -1717,9 +1741,15 @@ export class App extends React.Component<AppProps, AppState> {
       return;
     }
     const file = files[0];
-    if (options?.convert && !isClientTranscodeSupported()) {
-      this.showError("Your browser doesn't support converting videos");
-      return;
+    if (options?.convert) {
+      // Downloaded on demand (round 123): only a conversion actually starting
+      // needs the module
+      const { isClientTranscodeSupported } =
+        await import("../../utils/clientTranscode");
+      if (!isClientTranscodeSupported()) {
+        this.showError("Your browser doesn't support converting videos");
+        return;
+      }
     }
     const leftVideo = this.HTMLInterface.getVideoEl();
     if (leftVideo) {
@@ -1751,12 +1781,17 @@ export class App extends React.Component<AppProps, AppState> {
       this.fileShareObjectUrl = undefined;
     }
     if (options?.convert) {
-      const transcoder = this.createTranscoder(file, leftVideo, 0, (err) => {
-        // Conversion failed mid-share
-        this.showError(`Conversion failed: ${err.message}`);
-        this.shareStopSilent = true;
-        this.stopPublishingLocalStream();
-      });
+      const transcoder = await this.createTranscoder(
+        file,
+        leftVideo,
+        0,
+        (err) => {
+          // Conversion failed mid-share
+          this.showError(`Conversion failed: ${err.message}`);
+          this.shareStopSilent = true;
+          this.stopPublishingLocalStream();
+        },
+      );
       try {
         await transcoder.start();
       } catch (err) {
@@ -2397,7 +2432,9 @@ export class App extends React.Component<AppProps, AppState> {
     this.shareSendFps = [];
     this.shareStallTicks = 0;
     this.shareLastFrames = undefined;
-    this.setState({ shareStats: "", shareSendStats: "", shareStalled: false });
+    shareStatsStore.setStats("");
+    shareStatsStore.setSend("");
+    this.setState({ shareStalled: false });
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2720,9 +2757,7 @@ export class App extends React.Component<AppProps, AppState> {
       ((video.bytesReceived - last.bytes) * 8) / (now - last.ts) / 1000;
     const codec = stats.get(video.codecId)?.mimeType?.split("/")[1] ?? "";
     const shareStats = `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`;
-    if (shareStats !== this.state.shareStats) {
-      this.setState({ shareStats });
-    }
+    shareStatsStore.setStats(shareStats);
   };
 
   // The sharer's own badge: what the encode actually does, which is what every
@@ -2768,9 +2803,7 @@ export class App extends React.Component<AppProps, AppState> {
           ? " · encoder limited by CPU"
           : ` · encoder limited by ${lim}`;
     const shareSendStats = ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${avgFps}fps${limit}`;
-    if (shareSendStats !== this.state.shareSendStats) {
-      this.setState({ shareSendStats });
-    }
+    shareStatsStore.setSend(shareSendStats);
   };
 
   startVBrowser = async (options: { size: string }) => {
@@ -3760,17 +3793,21 @@ export class App extends React.Component<AppProps, AppState> {
           />
         )}
         {this.state.isMultiSelectModalOpen && (
-          <MultiStreamModal
-            streams={this.state.fileSelection}
-            setMedia={this.roomSetMedia}
-            resetMultiSelect={this.resetMultiSelect}
-          />
+          <React.Suspense fallback={null}>
+            <MultiStreamModal
+              streams={this.state.fileSelection}
+              setMedia={this.roomSetMedia}
+              resetMultiSelect={this.resetMultiSelect}
+            />
+          </React.Suspense>
         )}
         {this.state.isVBrowserModalOpen && (
-          <VBrowserModal
-            closeModal={() => this.setState({ isVBrowserModalOpen: false })}
-            startVBrowser={this.startVBrowser}
-          />
+          <React.Suspense fallback={null}>
+            <VBrowserModal
+              closeModal={() => this.setState({ isVBrowserModalOpen: false })}
+              startVBrowser={this.startVBrowser}
+            />
+          </React.Suspense>
         )}
         {this.state.isScreenShareModalOpen && (
           <ScreenShareModal
@@ -3779,23 +3816,27 @@ export class App extends React.Component<AppProps, AppState> {
           />
         )}
         {this.state.isFileShareModalOpen && (
-          <FileShareModal
-            closeModal={() => this.setState({ isFileShareModalOpen: false })}
-            startFileShare={this.startFileShare}
-          />
+          <React.Suspense fallback={null}>
+            <FileShareModal
+              closeModal={() => this.setState({ isFileShareModalOpen: false })}
+              startFileShare={this.startFileShare}
+            />
+          </React.Suspense>
         )}
         {this.state.isSubtitleModalOpen && (
-          <SubtitleModal
-            closeModal={() => this.setState({ isSubtitleModalOpen: false })}
-            socket={this.socket}
-            roomSubtitle={this.state.roomSubtitle}
-            roomMedia={this.state.roomMedia}
-            haveLock={this.haveLock}
-            getMediaDisplayName={this.getMediaDisplayName}
-            setSubtitleMode={this.Player().setSubtitleMode}
-            getSubtitleMode={this.Player().getSubtitleMode}
-            loadLocalSubtitle={this.HTMLInterface.loadLocalSubtitle}
-          />
+          <React.Suspense fallback={null}>
+            <SubtitleModal
+              closeModal={() => this.setState({ isSubtitleModalOpen: false })}
+              socket={this.socket}
+              roomSubtitle={this.state.roomSubtitle}
+              roomMedia={this.state.roomMedia}
+              haveLock={this.haveLock}
+              getMediaDisplayName={this.getMediaDisplayName}
+              setSubtitleMode={this.Player().setSubtitleMode}
+              getSubtitleMode={this.Player().getSubtitleMode}
+              loadLocalSubtitle={this.HTMLInterface.loadLocalSubtitle}
+            />
+          </React.Suspense>
         )}
         {this.state.state === "starting" && (
           <Overlay className={styles.flexCenter}>
@@ -3804,32 +3845,36 @@ export class App extends React.Component<AppProps, AppState> {
         )}
         {this.state.overlayMsg && <ErrorModal error={this.state.overlayMsg} />}
         {this.state.isErrorAuth && <PasswordModal roomId={this.state.roomId} />}
-        <SettingsModal
-          modalOpen={this.state.settingsModalOpen}
-          setModalOpen={this.setSettingsModalOpen}
-          roomLock={this.state.roomLock}
-          setRoomLock={this.setRoomLock}
-          socket={this.socket}
-          roomId={this.state.roomId}
-          isChatDisabled={this.state.isChatDisabled}
-          setIsChatDisabled={this.setIsChatDisabled}
-          owner={this.state.owner}
-          setOwner={this.setOwner}
-          vanity={this.state.vanity}
-          setVanity={this.setVanity}
-          inviteLink={this.state.inviteLink}
-          password={this.state.password}
-          setPassword={this.setPassword}
-          clearChat={this.clearChat}
-          roomTitle={this.state.roomTitle}
-          setRoomTitle={this.setRoomTitle}
-          roomDescription={this.state.roomDescription}
-          setRoomDescription={this.setRoomDescription}
-          roomTitleColor={this.state.roomTitleColor}
-          setRoomTitleColor={this.setRoomTitleColor}
-          mediaPath={this.state.mediaPath}
-          setMediaPath={this.setMediaPath}
-        />
+        {this.state.settingsModalOpen && (
+          <React.Suspense fallback={null}>
+            <SettingsModal
+              modalOpen={this.state.settingsModalOpen}
+              setModalOpen={this.setSettingsModalOpen}
+              roomLock={this.state.roomLock}
+              setRoomLock={this.setRoomLock}
+              socket={this.socket}
+              roomId={this.state.roomId}
+              isChatDisabled={this.state.isChatDisabled}
+              setIsChatDisabled={this.setIsChatDisabled}
+              owner={this.state.owner}
+              setOwner={this.setOwner}
+              vanity={this.state.vanity}
+              setVanity={this.setVanity}
+              inviteLink={this.state.inviteLink}
+              password={this.state.password}
+              setPassword={this.setPassword}
+              clearChat={this.clearChat}
+              roomTitle={this.state.roomTitle}
+              setRoomTitle={this.setRoomTitle}
+              roomDescription={this.state.roomDescription}
+              setRoomDescription={this.setRoomDescription}
+              roomTitleColor={this.state.roomTitleColor}
+              setRoomTitleColor={this.setRoomTitleColor}
+              mediaPath={this.state.mediaPath}
+              setMediaPath={this.setMediaPath}
+            />
+          </React.Suspense>
+        )}
         {this.state.errorMessage && (
           <Alert
             title="Error"
@@ -4237,23 +4282,10 @@ export class App extends React.Component<AppProps, AppState> {
                           )}
                         </Menu.Dropdown>
                       </Menu>
-                      {isClientTranscodeSupported() && (
-                        <Tooltip
-                          multiline
-                          w={280}
-                          refProp="rootRef"
-                          label="Use CPU/GPU to convert content before playback (only with links, use if video or audio doesn't play, or to choose between audio tracks)"
-                        >
-                          <Switch
-                            label="Convert"
-                            checked={this.state.convertEnabled}
-                            onChange={(e) =>
-                              this.setConvertEnabled(e.currentTarget.checked)
-                            }
-                            style={{ flexShrink: 0, alignSelf: "center" }}
-                          />
-                        </Tooltip>
-                      )}
+                      <ConvertToggle
+                        checked={this.state.convertEnabled}
+                        onChange={(v) => this.setConvertEnabled(v)}
+                      />
                       <Tooltip
                         multiline
                         w={280}
@@ -4303,21 +4335,13 @@ export class App extends React.Component<AppProps, AppState> {
                             " is sharing their screen"}
                         </span>
                       )}
-                    {this.isSharingScreen() && (
-                      <div className={styles.shareStats}>
-                        You're sharing your screen (
-                        {getShareCapMbps(this.state.participants.length - 1)}{" "}
-                        Mbps max)
-                        {this.state.shareSendStats}
-                      </div>
-                    )}
-                    {this.state.shareStats && (
-                      <div className={styles.shareStats}>
-                        {this.state.shareStalled
-                          ? "reconnecting…"
-                          : this.state.shareStats}
-                      </div>
-                    )}
+                    <ShareStatsPills
+                      sharing={this.isSharingScreen()}
+                      capMbps={getShareCapMbps(
+                        this.state.participants.length - 1,
+                      )}
+                      stalled={this.state.shareStalled}
+                    />
                     {this.state.shareStalled && (
                       <div className={styles.shareStalled}>Reconnecting…</div>
                     )}
