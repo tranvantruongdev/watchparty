@@ -50,8 +50,20 @@
   cursor: pointer;
 }
 
-/* The role=button icons: show keyboard focus like the real buttons get */
-.controls svg[role="button"]:focus-visible {
+/* The icon buttons: reset the <button> chrome so the icon keeps its exact
+   previous box (flex item of the same size), colour comes from the button */
+.actBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.controls .actBtn:focus-visible {
   outline: 2px solid #845ef7;
   outline-offset: 2px;
   border-radius: 4px;

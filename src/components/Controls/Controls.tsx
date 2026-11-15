@@ -21,26 +21,30 @@ import {
   type IconProps,
 } from "@tabler/icons-react";
 
-/** The control-bar icons are bare SVGs: mouse-only with no name. Wrap the
- *  interactive ones in a button role so keyboard users can reach them. */
+/** The control-bar icons: a real <button> around the SVG so keyboard users
+ *  get a tab stop, a name and Enter/Space activation like every other button. */
 const ActIcon = ({
   icon: Icon,
   label,
   onClick,
   disabled,
+  className,
+  color,
   ...rest
 }: {
   icon: React.ComponentType<IconProps>;
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  className?: string;
 } & IconProps) => (
-  <Icon
-    role="button"
-    tabIndex={0}
+  <button
+    type="button"
+    className={`${styles.actBtn} ${className ?? ""}`}
     aria-label={label}
     title={label}
     aria-disabled={disabled || undefined}
+    style={color ? { color } : undefined}
     onClick={() => {
       if (!disabled) {
         onClick();
@@ -52,8 +56,9 @@ const ActIcon = ({
         onClick();
       }
     }}
-    {...rest}
-  />
+  >
+    <Icon {...rest} />
+  </button>
 );
 
 interface ControlsProps {
@@ -306,7 +311,7 @@ export const Controls = (props: ControlsProps) => {
       <Progress.Root
         radius="0px"
         role="slider"
-        tabIndex={0}
+        tabIndex={hasFiniteDuration ? 0 : -1}
         aria-label="Seek"
         aria-valuemin={getStart()}
         aria-valuemax={hasFiniteDuration ? getEnd() : 0}
@@ -400,17 +405,22 @@ export const Controls = (props: ControlsProps) => {
       {
         <Menu disabled={disabled}>
           <Menu.Target>
-            <div
-              className={`${styles.text} ${styles.action}`}
+            <button
+              type="button"
+              className={`${styles.actBtn} ${styles.action}`}
               style={{
                 backgroundColor: "rgba(100,100,100, 0.6)",
                 fontSize: 10,
                 borderRadius: "4px",
                 padding: "2px",
+                fontWeight: 700,
+                color: "inherit",
+                fontFamily: "inherit",
               }}
+              aria-label="Playback speed"
             >
               {props.playbackRate?.toFixed(2)}x
-            </div>
+            </button>
           </Menu.Target>
           <Menu.Dropdown>
             {[
@@ -449,12 +459,13 @@ export const Controls = (props: ControlsProps) => {
       {props.isYouTube ? (
         <Menu>
           <Menu.Target>
-            <IconBadgeCc
-              className={styles.action}
-              role="button"
-              tabIndex={0}
+            <button
+              type="button"
+              className={`${styles.actBtn} ${styles.action}`}
               aria-label="Captions"
-            />
+            >
+              <IconBadgeCc />
+            </button>
           </Menu.Target>
           <Menu.Dropdown>
             {[
@@ -489,13 +500,14 @@ export const Controls = (props: ControlsProps) => {
         // Local to this device, so unlike the room controls it isn't affected by the lock
         <Menu>
           <Menu.Target>
-            <IconHeadphones
-              className={styles.action}
-              role="button"
-              tabIndex={0}
+            <button
+              type="button"
+              className={`${styles.actBtn} ${styles.action}`}
               aria-label="Audio track"
-              color={softWhite}
-            />
+              style={{ color: softWhite }}
+            >
+              <IconHeadphones />
+            </button>
           </Menu.Target>
           <Menu.Dropdown>
             <Menu.Label>Audio track</Menu.Label>
