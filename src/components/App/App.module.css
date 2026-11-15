@@ -268,7 +268,7 @@
   /* Media controls dim, except the Theater switch itself: it has to stay
      findable while playing so it can put the lights back on. */
   .theaterDimControls > :not(.theaterSwitch) {
-    opacity: 0.25;
+    opacity: 0.5;
     transition: opacity 0.4s;
   }
 
