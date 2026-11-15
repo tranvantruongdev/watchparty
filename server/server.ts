@@ -1,6 +1,10 @@
 import config from "./config.ts";
 import fs from "node:fs";
-import express, { type Response } from "express";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import bodyParser from "body-parser";
 import compression from "compression";
 import cors from "cors";
@@ -149,6 +153,73 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.raw({ type: "text/plain", limit: 1000000 }));
 
+// Per-IP fixed-window rate limit shared by the expensive routes. Express's
+// `trust proxy` is NOT enabled, so req.ip is the direct peer address: behind
+// the tunnel / Render router every visitor shares one bucket, but a spoofable
+// X-Forwarded-For must never become the limiter key. Buckets are per-route so
+// one route's traffic can't eat another's allowance.
+const rateBuckets = new Map<
+  string,
+  { n: number; start: number; windowMs: number }
+>();
+function tooManyRequests(
+  req: Request,
+  name: string,
+  max: number,
+  windowMs: number,
+): boolean {
+  const key = `${name}:${req.ip ?? "?"}`;
+  const now = Date.now();
+  let bucket = rateBuckets.get(key);
+  if (!bucket || now - bucket.start > bucket.windowMs) {
+    bucket = { n: 0, start: now, windowMs };
+    rateBuckets.set(key, bucket);
+  }
+  bucket.n += 1;
+  if (rateBuckets.size > 10000) {
+    // ponytail: blunt prune — drop expired windows, wipe all if still huge
+    for (const [k, b] of rateBuckets) {
+      if (now - b.start > b.windowMs) {
+        rateBuckets.delete(k);
+      }
+    }
+    if (rateBuckets.size > 10000) {
+      rateBuckets.clear();
+    }
+  }
+  return bucket.n > max;
+}
+
+// Constant-time secret comparison; hashing first keeps both sides equal-length
+// so timingSafeEqual never throws and the key length never leaks.
+export function safeSecretEqual(a: string, b: string): boolean {
+  return crypto.timingSafeEqual(
+    crypto.createHash("sha256").update(a).digest(),
+    crypto.createHash("sha256").update(b).digest(),
+  );
+}
+
+// The origin this server is reached through (mirrors the x-forwarded-proto
+// handling the checkout code already used)
+function requestOrigin(req: Request): string {
+  const proto = (req.get("x-forwarded-proto") ?? req.protocol)
+    .split(",")[0]
+    .trim();
+  return `${proto === "https" ? "https" : "http"}://${req.get("host")}`;
+}
+
+// Only same-origin return URLs are accepted: both Stripe and /subSuccess send
+// the user's browser to them, so anything else would be an open redirect.
+// Relative input ("//evil") fails to parse, "javascript:"-URLs have origin
+// "null", and other hosts don't match — all rejected.
+export function isSameOriginUrl(url: string, origin: string): boolean {
+  try {
+    return new URL(url).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 app.get("/ping", (_req, res) => {
   res.json("pong");
 });
@@ -177,6 +248,13 @@ app.get("/subtitle/:hash", async (req, res) => {
 app.use(compression());
 
 app.post("/subtitle", async (req, res) => {
+  // The client doesn't send the room key on this route yet (SubtitleModal.tsx
+  // posts bare text/plain), so key-gating here would break uploads; cap the
+  // 1 MB / 24 h redis storage per IP until the client sends x-room-key.
+  if (tooManyRequests(req, "subtitle", 20, 60 * 60 * 1000)) {
+    res.status(429).json({ error: "too many subtitle uploads" });
+    return;
+  }
   if (!redis) {
     res.status(503).json({ error: "subtitle storage is not available" });
     return;
@@ -289,7 +367,11 @@ app.get("/searchSubtitles", async (req, res) => {
 });
 
 app.get("/stats", async (req, res) => {
-  if (req.query.key && req.query.key === config.STATS_KEY) {
+  if (
+    config.STATS_KEY &&
+    typeof req.query.key === "string" &&
+    safeSecretEqual(req.query.key, config.STATS_KEY)
+  ) {
     const stats = await getStats();
     res.json(stats);
   } else {
@@ -306,7 +388,12 @@ app.get("/health/:metric", async (req, res) => {
 });
 
 app.get("/timeSeries", async (req, res) => {
-  if (req.query.key && req.query.key === config.STATS_KEY && redis) {
+  if (
+    config.STATS_KEY &&
+    typeof req.query.key === "string" &&
+    safeSecretEqual(req.query.key, config.STATS_KEY) &&
+    redis
+  ) {
     const timeSeriesData = await redis.lrange("timeSeries", 0, -1);
     const timeSeries = timeSeriesData.map((entry) => JSON.parse(entry));
     res.json(timeSeries);
@@ -353,6 +440,10 @@ app.get("/youtubePlaylist/:playlistId", async (req, res) => {
 // has more than a couple of viewers
 let turnCache: { at: number; iceServers: unknown } | undefined;
 app.post("/iceServers", async (req, res) => {
+  if (tooManyRequests(req, "iceServers", 30, 60 * 1000)) {
+    res.status(429).json({ error: "too many requests" });
+    return;
+  }
   if (!hasRoomKey(req.body?.roomKey)) {
     res.status(403).json({ error: "roomKey" });
     return;
@@ -411,6 +502,12 @@ app.post("/iceServers", async (req, res) => {
 app.post("/createRoom", async (req, res) => {
   if (!hasRoomKey(req.body?.roomKey)) {
     res.status(403).json({ error: "roomKey" });
+    return;
+  }
+  // Tens per hour per IP: plenty for a household behind one NAT, still keeps
+  // one holder from filling the 1000-room shard cap alone
+  if (tooManyRequests(req, "createRoom", 30, 60 * 60 * 1000)) {
+    res.status(429).json({ error: "too many rooms created" });
     return;
   }
   // ponytail: cap rooms on this shard — each one keeps a namespace and a 1s
@@ -514,18 +611,13 @@ app.post("/checkoutSub", async (req, res) => {
     }
   }
   const returnUrl = req.body?.return_url;
-  if (!returnUrl) {
+  const serverUrl = requestOrigin(req);
+  if (typeof returnUrl !== "string" || !isSameOriginUrl(returnUrl, serverUrl)) {
     res.status(400).json({ error: "invalid return_url" });
     return;
   }
   // Stripe redirects to success_url on our server first, so we can record the subscription
   // before sending the user back to their room
-  const proto = (req.get("x-forwarded-proto") ?? req.protocol)
-    .split(",")[0]
-    .trim();
-  const serverUrl = `${proto === "https" ? "https" : "http"}://${req.get("host")}`;
-  // Reuse the existing customer for this user, or create one tagged with their UID
-  // so we can find it later even if their email changes
   const customer =
     (await getCustomerByUid(decoded.uid)) ??
     (await stripe.customers.create({
@@ -563,9 +655,15 @@ app.get("/subSuccess", async (req, res) => {
   let returnUrl: string | undefined = undefined;
   const result = await recordCheckoutSession(sessionId);
   returnUrl = result.returnUrl;
-  // Only ever redirect to the URL we validated and stored when creating the session
-  // (never to something from this request's query string). If we couldn't read it, go home.
-  res.redirect(returnUrl || "/");
+  // Only ever redirect to the URL we validated and stored when creating the
+  // session (never to something from this request's query string), and only
+  // if it still points at this origin. If we couldn't read it, go home.
+  res.redirect(
+    typeof returnUrl === "string" &&
+      isSameOriginUrl(returnUrl, requestOrigin(req))
+      ? returnUrl
+      : "/",
+  );
 });
 
 app.post("/manageSub", async (req, res) => {
@@ -657,17 +755,6 @@ app.get("/resolveRoom/:vanity", async (req, res) => {
   // console.log(vanity, result.rows);
   // We also use this for checking name availability, so just return null if it doesn't exist (http 200)
   res.json(result?.rows[0] ?? null);
-});
-
-app.get("/roomData/:roomId", async (req, res) => {
-  // Returns the room data given a room ID
-  // Only return data if the room doesn't have a password
-  // If it does, we could accept it as a URL parameter but for now just don't support
-  const result = await postgres?.query(
-    `SELECT data from room WHERE "roomId" = $1 and password IS NULL`,
-    ["/" + req.params.roomId],
-  );
-  res.json(result?.rows[0]?.data);
 });
 
 app.get("/resolveShard/:roomId", async (req, res) => {
@@ -812,6 +899,12 @@ app.get("/proxy/*splat", async (req, res) => {
     res.status(404).end();
     return;
   }
+  // Behind the tunnel every viewer shares one IP, and each viewer of a proxied
+  // HLS stream fetches a segment every few seconds: keep the cap well above that
+  if (tooManyRequests(req, "proxy", 600, 60 * 1000)) {
+    res.status(429).end();
+    return;
+  }
   redisCount("proxyReqs");
   try {
     const parsed = new URL("http://localhost" + req.url);
@@ -902,6 +995,15 @@ app.use("/*splat", (_req, res) => {
       import.meta.dirname + `/../${config.BUILD_DIRECTORY}/index.html`,
     ),
   );
+});
+
+// Unhandled errors from async handlers land here instead of Express's default
+// handler, which prints err.stack unless NODE_ENV=production
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("[error]", err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: "internal error" });
+  }
 });
 
 async function saveRooms() {
