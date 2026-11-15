@@ -1271,7 +1271,16 @@ export class Room {
     }
     msg.reactions[data.value] = msg.reactions[data.value] || [];
 
-    if (!msg.reactions[data.value].includes(socket.clientId)) {
+    // Bound reactors per value like the 20-value cap above: the ids outlive
+    // their members (a departed member's reaction stays visible on purpose —
+    // the UI counts these ids), so a message that sits in history in a
+    // high-traffic room would otherwise grow one id per visitor forever.
+    // Joining/removing an existing id is still allowed
+    const joined = msg.reactions[data.value].includes(socket.clientId);
+    if (!joined && msg.reactions[data.value].length >= 50) {
+      return;
+    }
+    if (!joined) {
       msg.reactions[data.value].push(socket.clientId);
       // Named fields only, sender last: spreading the client payload in let a
       // "user" field forge who the reaction belongs to (every client applies
