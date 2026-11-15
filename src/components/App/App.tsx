@@ -91,6 +91,8 @@ import {
   IconHeadphonesOff,
   IconMicrophone,
   IconCoffee,
+  IconEye,
+  IconEyeOff,
   IconScreenShare,
   IconSettings,
   IconUser,
@@ -166,6 +168,9 @@ interface AppState {
   shareSendStats: string;
   // No new frame while ICE is unhappy: the share is frozen (round 95)
   shareStalled: boolean;
+  // The sharer hid their own-screen preview (round 115): leftVideo stops
+  // mirroring the capture and a short note takes its place
+  sharePreviewHidden: boolean;
   voiceDeaf: boolean;
   participants: User[];
   rosterUpdateTS: Number;
@@ -277,6 +282,7 @@ export class App extends React.Component<AppProps, AppState> {
     // No new frame for ~4 s while the transport is unhappy: the share is
     // frozen and the badge must say so instead of reading as a live stream
     shareStalled: false,
+    sharePreviewHidden: false,
     voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
     rosterUpdateTS: Date.now(),
@@ -1841,6 +1847,14 @@ export class App extends React.Component<AppProps, AppState> {
         return;
       }
       this.localStreamToPublish = stream;
+      // Resolve the preview before the first mirror attach (round 115): the
+      // stored choice, or the capture surface (a monitor captures the whole
+      // screen, where the preview would show inside itself)
+      this.setState({
+        sharePreviewHidden: this.resolveSharePreviewHidden(
+          stream.getVideoTracks()[0],
+        ),
+      });
       // Attach the ended handler at capture time: a Stop-bar click during the
       // CMD:joinScreenShare round trip fires 'ended' before setupRTCConnections
       // (App.tsx:2318) ever runs, and a handler attached after the event fired
@@ -2437,9 +2451,17 @@ export class App extends React.Component<AppProps, AppState> {
         ) {
           this.sharePreviewWasMuted = leftVideo.muted;
         }
-        leftVideo.srcObject = this.localStreamToPublish;
-        leftVideo.muted = true;
-        this.localPlay();
+        // Hidden preview (round 115): the element stays reserved by the share
+        // (muted state kept for the restore) but renders nothing — the note
+        // takes its place. Re-setups (REC:host clearState, late joiners) must
+        // not turn a hidden preview back on
+        if (this.state.sharePreviewHidden) {
+          leftVideo.srcObject = null;
+        } else {
+          leftVideo.srcObject = this.localStreamToPublish;
+          leftVideo.muted = true;
+          this.localPlay();
+        }
       }
     }
     if (this.state.roomMedia.includes("@")) {
@@ -3378,6 +3400,44 @@ export class App extends React.Component<AppProps, AppState> {
     this.localSetMute(!this.Player().isMuted());
   };
 
+  // Round 115: the own-screen preview mirrors the live capture on leftVideo,
+  // so a whole-monitor capture shows the preview inside itself (mirror in
+  // mirror) for everyone. The sharer can hide it; one stored choice wins,
+  // otherwise whole-monitor captures start hidden and window/tab shares
+  // start visible. Reads/writes are wrapped: blocked storage must not kill
+  // the share
+  resolveSharePreviewHidden = (track: MediaStreamTrack) => {
+    try {
+      const stored = localStorage.getItem("watchparty-sharePreviewHidden");
+      if (stored === "true" || stored === "false") {
+        return stored === "true";
+      }
+    } catch {
+      // storage blocked (private mode): fall through to the surface default
+    }
+    return track.getSettings().displaySurface === "monitor";
+  };
+
+  toggleSharePreview = () => {
+    const hidden = !this.state.sharePreviewHidden;
+    try {
+      localStorage.setItem("watchparty-sharePreviewHidden", String(hidden));
+    } catch {
+      // storage blocked: the choice just doesn't persist
+    }
+    const leftVideo = this.HTMLInterface.getVideoEl();
+    if (hidden) {
+      if (leftVideo) {
+        leftVideo.srcObject = null;
+      }
+    } else if (leftVideo && this.localStreamToPublish) {
+      leftVideo.srcObject = this.localStreamToPublish;
+      leftVideo.muted = true;
+      this.localPlay();
+    }
+    this.setState({ sharePreviewHidden: hidden });
+  };
+
   togglePictureInPicture = async () => {
     const video = this.HTMLInterface.getVideoEl() as HTMLVideoElement;
     try {
@@ -3889,6 +3949,22 @@ export class App extends React.Component<AppProps, AppState> {
                           Stop Share
                         </Button>
                       )}
+                      {this.isSharingScreen() && (
+                        <Button
+                          onClick={this.toggleSharePreview}
+                          leftSection={
+                            this.state.sharePreviewHidden ? (
+                              <IconEye />
+                            ) : (
+                              <IconEyeOff />
+                            )
+                          }
+                        >
+                          {this.state.sharePreviewHidden
+                            ? "Show preview"
+                            : "Hide preview"}
+                        </Button>
+                      )}
                       {this.state.shareEndedPrompt &&
                         !this.localStreamToPublish && (
                           <Button
@@ -4245,6 +4321,12 @@ export class App extends React.Component<AppProps, AppState> {
                     {this.state.shareStalled && (
                       <div className={styles.shareStalled}>Reconnecting…</div>
                     )}
+                    {this.isSharingScreen() &&
+                      this.state.sharePreviewHidden && (
+                        <div className={styles.sharePreviewPlaceholder}>
+                          You are sharing your screen
+                        </div>
+                      )}
                     {this.state.roomIntermission && (
                       <div className={styles.intermissionOverlay}>
                         <div className={styles.intermissionCard}>

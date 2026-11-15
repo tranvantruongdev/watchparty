@@ -562,6 +562,22 @@
   }
 }
 
+/* Hidden own-screen preview (round 115): the player element is reserved by
+   the share, so cover it with a note instead of an unexplained black box */
+.sharePreviewPlaceholder {
+  position: absolute;
+  inset: 0;
+  z-index: 201;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  color: #eee;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
 /* Screen-reader-only text (who is sharing the screen) */
 .visuallyHidden {
   position: absolute;
