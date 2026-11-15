@@ -4,7 +4,13 @@ import { IconHome, IconRefresh } from "@tabler/icons-react";
 
 export const ErrorModal = ({ error }: { error: string }) => {
   return (
-    <Modal opened onClose={() => {}} title={error} centered>
+    <Modal
+      opened
+      onClose={() => {}}
+      title={error}
+      centered
+      closeButtonProps={{ "aria-label": "Close" }}
+    >
       <div
         style={{
           display: "flex",

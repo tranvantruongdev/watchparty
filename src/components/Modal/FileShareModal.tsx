@@ -18,6 +18,7 @@ export const FileShareModal = (props: {
   const subscribeButton = <SubscribeButton />;
   return (
     <Modal
+      closeButtonProps={{ "aria-label": "Close" }}
       opened
       onClose={closeModal}
       title="Share a file"

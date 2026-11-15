@@ -42,6 +42,7 @@ export const ScreenShareModal = ({
   const [mbps, setMbps] = useState(String(getShareMbps()));
   return (
     <Modal
+      closeButtonProps={{ "aria-label": "Close" }}
       opened={true}
       onClose={closeModal}
       title="Share your screen"

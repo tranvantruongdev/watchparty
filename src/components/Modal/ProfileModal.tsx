@@ -122,8 +122,14 @@ export class ProfileModal extends React.Component<{
   render() {
     const { close, userImage } = this.props;
     return (
-      <Modal opened onClose={close} centered>
+      <Modal
+        opened
+        onClose={close}
+        centered
+        closeButtonProps={{ "aria-label": "Close" }}
+      >
         <Modal
+          closeButtonProps={{ "aria-label": "Close" }}
           opened={this.state.deleteConfirmOpen}
           onClose={() => {
             this.setState({ deleteConfirmOpen: false });

@@ -85,6 +85,7 @@ export class VBrowserModal extends React.Component<{
     const canLaunch = this.context.user || !config.VITE_FIREBASE_CONFIG;
     return (
       <Modal
+        closeButtonProps={{ "aria-label": "Close" }}
         opened
         onClose={closeModal}
         title="Launch a VBrowser"

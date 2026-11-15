@@ -248,9 +248,11 @@ app.get("/subtitle/:hash", async (req, res) => {
 app.use(compression());
 
 app.post("/subtitle", async (req, res) => {
-  // The client doesn't send the room key on this route yet (SubtitleModal.tsx
-  // posts bare text/plain), so key-gating here would break uploads; cap the
-  // 1 MB / 24 h redis storage per IP until the client sends x-room-key.
+  // Uploads burn 1 MB / 24 h of redis storage per file, so only roomKey holders
+  if (!hasRoomKey(req.get("x-room-key"))) {
+    res.status(403).json({ error: "roomKey" });
+    return;
+  }
   if (tooManyRequests(req, "subtitle", 20, 60 * 60 * 1000)) {
     res.status(429).json({ error: "too many subtitle uploads" });
     return;

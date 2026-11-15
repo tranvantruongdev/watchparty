@@ -42,6 +42,7 @@ export class SubscribeModal extends React.Component<{
     const { closeSubscribe } = this.props;
     return (
       <Modal
+        closeButtonProps={{ "aria-label": "Close" }}
         opened
         onClose={closeSubscribe}
         centered

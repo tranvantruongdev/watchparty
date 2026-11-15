@@ -83,7 +83,14 @@ export class LoginModal extends React.Component<{
         {this.state.showReset && (
           <ResetModal closeModal={() => this.setState({ showReset: false })} />
         )}
-        <Modal opened onClose={closeModal} title="Login" size="auto" centered>
+        <Modal
+          opened
+          onClose={closeModal}
+          title="Login"
+          size="auto"
+          centered
+          closeButtonProps={{ "aria-label": "Close" }}
+        >
           <div>
             <div style={{ display: "flex", gap: "4px" }}>
               {enabledOptions.includes("facebook") && (
@@ -191,6 +198,7 @@ export class CreateModal extends React.Component<{
     const { closeModal } = this.props;
     return (
       <Modal
+        closeButtonProps={{ "aria-label": "Close" }}
         opened
         onClose={closeModal}
         title="Create an account"
@@ -247,7 +255,13 @@ export class ResetModal extends React.Component<{
   render() {
     const { closeModal } = this.props;
     return (
-      <Modal opened onClose={closeModal} title="Reset password" centered>
+      <Modal
+        opened
+        onClose={closeModal}
+        title="Reset password"
+        centered
+        closeButtonProps={{ "aria-label": "Close" }}
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();

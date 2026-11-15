@@ -82,7 +82,7 @@ export class SubtitleModal extends React.Component<{
         const resp = await fetch(serverPath + "/subtitle", {
           method: "POST",
           body: subData,
-          headers: { "Content-Type": "text/plain" },
+          headers: { "Content-Type": "text/plain", "X-Room-Key": getRoomKey() },
         });
         if (!resp.ok) {
           // Deployments without subtitle storage reject uploads; the local
@@ -119,6 +119,7 @@ export class SubtitleModal extends React.Component<{
     const { closeModal } = this.props;
     return (
       <Modal
+        closeButtonProps={{ "aria-label": "Close" }}
         opened
         onClose={closeModal}
         centered

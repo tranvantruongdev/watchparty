@@ -18,6 +18,7 @@ export const InviteModal = ({
 
   return (
     <Modal
+      closeButtonProps={{ "aria-label": "Close" }}
       opened
       centered
       onClose={closeInviteModal}

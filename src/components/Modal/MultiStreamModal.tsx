@@ -12,7 +12,13 @@ export const MultiStreamModal = ({
   resetMultiSelect: () => void;
 }) => {
   return (
-    <Modal opened onClose={resetMultiSelect} centered title="Select a file">
+    <Modal
+      opened
+      onClose={resetMultiSelect}
+      centered
+      title="Select a file"
+      closeButtonProps={{ "aria-label": "Close" }}
+    >
       {streams.length === 0 ? (
         <Loader />
       ) : (

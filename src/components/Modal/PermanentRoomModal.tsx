@@ -5,7 +5,12 @@ import { IconCheck } from "@tabler/icons-react";
 export const PermanentRoomModal = (props: { closeModal: () => void }) => {
   const { closeModal } = props;
   return (
-    <Modal opened onClose={closeModal} title="Permanent Rooms">
+    <Modal
+      opened
+      onClose={closeModal}
+      title="Permanent Rooms"
+      closeButtonProps={{ "aria-label": "Close" }}
+    >
       <div>
         Registered users have the ability to make their rooms permanent.
         Subscribed users can create multiple permanent rooms.
