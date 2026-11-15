@@ -4816,6 +4816,8 @@ export class App extends React.Component<AppProps, AppState> {
                   rightSection={
                     <Button
                       size="compact-xs"
+                      // 22px is too small to tap on a phone (round 133)
+                      style={{ height: isMobile() ? 24 : undefined }}
                       onClick={async () =>
                         this.updateName(await generateName())
                       }
