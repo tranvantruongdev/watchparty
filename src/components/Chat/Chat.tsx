@@ -4,6 +4,7 @@ import {
   Avatar,
   Button,
   HoverCard,
+  Text,
   TextInput,
 } from "@mantine/core";
 // import onClickOutside from 'react-onclickoutside';
@@ -29,6 +30,9 @@ import {
 import { MetadataContext } from "../../MetadataContext";
 
 const clientId = getOrCreateClientId();
+// The server silently drops anything longer (server/room.ts isValidChatMessage)
+const MAX_CHAT_LENGTH = 2000;
+const CHAT_LENGTH_COUNTER_WINDOW = 100;
 // The picker is ~150 kB and is useless until someone opens it, so it lives in
 // its own chunk; hovering the emoji button starts the download early so the
 // first click still opens it right away
@@ -244,7 +248,7 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   chatTooLong = () => {
-    return Boolean(this.state.chatMsg?.length > 10000);
+    return Boolean(this.state.chatMsg?.length > MAX_CHAT_LENGTH);
   };
 
   onScroll = () => {
@@ -336,7 +340,11 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   addEmoji = (emoji: any) => {
-    this.setState({ chatMsg: this.state.chatMsg + emoji.native });
+    const next = this.state.chatMsg + emoji.native;
+    // Buttons are not clipped by the input's maxLength, so the limit holds here
+    if (next.length <= MAX_CHAT_LENGTH) {
+      this.setState({ chatMsg: next });
+    }
   };
 
   // Floating reaction over the video: the server relays it to everyone,
@@ -366,7 +374,13 @@ export class Chat extends React.Component<ChatProps> {
           ref={this.messagesRef}
           style={{ position: "relative" }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+            aria-label="Chat messages"
+            style={{ display: "flex", flexDirection: "column", gap: "8px" }}
+          >
             {this.props.chat.map((msg) => (
               <ChatMessage
                 key={msg.timestamp + msg.id}
@@ -524,6 +538,8 @@ export class Chat extends React.Component<ChatProps> {
         <TextInput
           ref={this.chatInputRef}
           style={{ marginTop: "10px" }}
+          aria-label="Chat message"
+          maxLength={MAX_CHAT_LENGTH}
           // isComposing: Enter that commits an IME composition (CJK input,
           // some Vietnamese keyboards) must not send the half-typed message
           onKeyDown={(e: any) =>
@@ -546,6 +562,7 @@ export class Chat extends React.Component<ChatProps> {
               {this.props.voiceButton}
               <ActionIcon
                 className={styles.emojiToggle}
+                aria-label="Open emoji picker"
                 onPointerEnter={loadEmojiPicker}
                 onFocus={loadEmojiPicker}
                 onClick={() => {
@@ -564,6 +581,12 @@ export class Chat extends React.Component<ChatProps> {
         >
           {/* <Icon onClick={this.sendChatMsg} name="send" inverted circular link /> */}
         </TextInput>
+        {MAX_CHAT_LENGTH - this.state.chatMsg.length <=
+          CHAT_LENGTH_COUNTER_WINDOW && (
+          <Text size="xs" c="dimmed" ta="right" style={{ marginTop: 4 }}>
+            {this.state.chatMsg.length}/{MAX_CHAT_LENGTH}
+          </Text>
+        )}
       </div>
     );
   }
