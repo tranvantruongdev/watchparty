@@ -47,6 +47,9 @@
 .chatContainer {
   flex-grow: 1;
   overflow: auto;
+  /* Let the flex row shrink below its content width so long unbroken
+     strings wrap instead of stretching the column */
+  min-width: 0;
 }
 
 /* Soft glass bubble around each message body (name + time + text) */
@@ -70,8 +73,9 @@
   font-size: 24px;
 }
 
+/* gray (#808080) measured 4.42:1 on the glass bubble — below WCAG AA */
 .dark {
-  color: gray;
+  color: rgb(156, 156, 168);
 }
 
 .small {
@@ -106,8 +110,12 @@
   letter-spacing: 1px;
 }
 
+/* Hidden from the mouse but kept focusable: opacity (not display:none) lets
+   Tab reach the reply/react buttons, and :focus-within reveals them */
 .comment .commentMenu {
-  display: none;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
   justify-content: center;
   position: absolute;
   right: 5px;
@@ -134,8 +142,10 @@
 }
 
 .comment:hover .commentMenu,
-.comment.selected .commentMenu {
-  display: flex;
+.comment.selected .commentMenu,
+.comment:focus-within .commentMenu {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Touch has no hover: without this the per-message reply/react buttons are
@@ -143,7 +153,8 @@
    reactions to a message) */
 @media (pointer: coarse) {
   .comment .commentMenu {
-    display: flex;
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 

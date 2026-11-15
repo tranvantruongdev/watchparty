@@ -114,6 +114,8 @@ export class Chat extends React.Component<ChatProps> {
     replyTo: undefined as
       { id: string; timestamp: string; msg?: string } | undefined,
     isNearBottom: true,
+    // Messages that arrived while scrolled up; shown on the jump button
+    unread: 0,
     isPickerOpen: false,
     reactionMenu: {
       isOpen: false,
@@ -140,7 +142,22 @@ export class Chat extends React.Component<ChatProps> {
     if (this.props.hide !== prevProps.hide) {
       this.scrollToBottom();
     }
+    // Count messages that arrived while scrolled up; reset on the flip back
+    // to near-bottom in onScroll. Keyed on the LAST message, not the length:
+    // with a full history the server keeps the array at 100 (push+shift), so
+    // the length never grows even as messages arrive
+    const last = this.props.chat[this.props.chat.length - 1];
+    const lastKey = last ? last.timestamp + last.id : "";
+    if (lastKey !== this.lastChatKey) {
+      if (!this.state.isNearBottom) {
+        this.setState({ unread: this.state.unread + 1 });
+      }
+      this.lastChatKey = lastKey;
+    }
   }
+
+  // timestamp+id of the last message seen by componentDidUpdate above
+  lastChatKey = "";
 
   setReactionMenu = (
     isOpen: boolean,
@@ -258,7 +275,10 @@ export class Chat extends React.Component<ChatProps> {
   onScroll = () => {
     const isNearBottom = Boolean(this.isChatNearBottom());
     if (isNearBottom !== this.state.isNearBottom) {
-      this.setState({ isNearBottom });
+      this.setState({
+        isNearBottom,
+        unread: isNearBottom ? 0 : this.state.unread,
+      });
     }
   };
 
@@ -276,6 +296,9 @@ export class Chat extends React.Component<ChatProps> {
     if (this.messagesRef.current) {
       this.messagesRef.current.scrollTop =
         this.messagesRef.current.scrollHeight;
+    }
+    if (this.state.unread !== 0) {
+      this.setState({ unread: 0 });
     }
   };
 
@@ -385,26 +408,47 @@ export class Chat extends React.Component<ChatProps> {
             aria-label="Chat messages"
             style={{ display: "flex", flexDirection: "column", gap: "8px" }}
           >
-            {this.props.chat.map((msg) => (
-              <ChatMessage
-                key={msg.timestamp + msg.id}
-                isSelected={
-                  msg.id === this.state.reactionMenu.selectedMsgId &&
-                  msg.timestamp === this.state.reactionMenu.selectedMsgTimestamp
-                }
-                reactionsSignature={reactionSignature(msg.reactions)}
-                message={msg}
-                pictureMap={this.props.pictureMap}
-                nameMap={this.props.nameMap}
-                formatMessage={this.formatMessage}
-                owner={this.props.owner}
-                socket={this.props.socket}
-                isChatDisabled={this.props.isChatDisabled}
-                setReactionMenu={this.setReactionMenu}
-                handleReactionClick={this.handleReactionClick}
-                onReply={this.setReplyTo}
-              />
-            ))}
+            {this.props.chat.map((msg, i) => {
+              // Hide avatar+name on a continuation line: same sender, both
+              // plain messages (system/replies stay ungrouped), within a minute
+              const prev = i > 0 ? this.props.chat[i - 1] : undefined;
+              const groupWithPrev = Boolean(
+                prev &&
+                msg.id &&
+                !msg.cmd &&
+                !msg.system &&
+                !msg.replyToUserId &&
+                !prev.replyToUserId &&
+                !prev.cmd &&
+                !prev.system &&
+                msg.id === prev.id &&
+                new Date(msg.timestamp).getTime() -
+                  new Date(prev.timestamp).getTime() <
+                  60000,
+              );
+              return (
+                <ChatMessage
+                  key={msg.timestamp + msg.id}
+                  isSelected={
+                    msg.id === this.state.reactionMenu.selectedMsgId &&
+                    msg.timestamp ===
+                      this.state.reactionMenu.selectedMsgTimestamp
+                  }
+                  reactionsSignature={reactionSignature(msg.reactions)}
+                  message={msg}
+                  groupWithPrev={groupWithPrev}
+                  pictureMap={this.props.pictureMap}
+                  nameMap={this.props.nameMap}
+                  formatMessage={this.formatMessage}
+                  owner={this.props.owner}
+                  socket={this.props.socket}
+                  isChatDisabled={this.props.isChatDisabled}
+                  setReactionMenu={this.setReactionMenu}
+                  handleReactionClick={this.handleReactionClick}
+                  onReply={this.setReplyTo}
+                />
+              );
+            })}
             {/* <div ref={this.messagesEndRef} /> */}
           </div>
           {!this.state.isNearBottom && (
@@ -419,6 +463,7 @@ export class Chat extends React.Component<ChatProps> {
               }}
             >
               Jump to bottom
+              {this.state.unread > 0 ? ` · ${this.state.unread} new` : ""}
             </Button>
           )}
         </div>
@@ -602,6 +647,8 @@ const reactionSignature = (reactions: ChatMessage["reactions"]) => {
 type ChatMessageProps = {
   message: ChatMessage;
   reactionsSignature: string;
+  // True on a continuation line of the same sender within a minute
+  groupWithPrev: boolean;
   nameMap: StringDict;
   pictureMap: StringDict;
   formatMessage: (cmd: string, msg?: string) => React.ReactNode;
@@ -634,6 +681,7 @@ const chatMessagePropsEqual = (
   !usesRoomState(next.message) &&
   prev.message === next.message &&
   prev.reactionsSignature === next.reactionsSignature &&
+  prev.groupWithPrev === next.groupWithPrev &&
   prev.nameMap === next.nameMap &&
   prev.pictureMap === next.pictureMap &&
   prev.formatMessage === next.formatMessage &&
@@ -647,6 +695,7 @@ const chatMessagePropsEqual = (
 
 const ChatMessage = React.memo(function ChatMessage({
   message,
+  groupWithPrev,
   nameMap,
   pictureMap,
   formatMessage,
@@ -677,48 +726,57 @@ const ChatMessage = React.memo(function ChatMessage({
       }`}
     >
       {id ? (
+        // The avatar cell stays in place on continuation lines (invisible) so
+        // the text keeps its left edge; name+time are hidden, the timestamp
+        // moves onto the row title
         <Avatar
           src={
             pictureMap[id] ||
             getDefaultPicture(nameMap[id], getColorForStringHex(id))
           }
+          style={groupWithPrev ? { visibility: "hidden" } : undefined}
         />
       ) : null}
-      <div className={styles.bubble}>
-        <div
-          style={{
-            display: "flex",
-            gap: "8px",
-            alignItems: "flex-end",
-            fontSize: 14,
-          }}
-        >
-          <UserMenu
-            displayName={nameMap[id] || id}
-            timestamp={timestamp}
-            socket={socket}
-            userToManage={id}
-            isChatMessage
-            disabled={!Boolean(owner && owner === user?.uid)}
-            trigger={
-              <div
-                style={{ cursor: "pointer", fontWeight: 700 }}
-                title={isSub ? "WatchParty Plus subscriber" : ""}
-                className={`${isSub ? styles.subscriber : styles.light} ${styles.hoverEffect}`}
-              >
-                {Boolean(system) && "System"}
-                {nameMap[id] || id}
+      <div
+        className={styles.bubble}
+        title={groupWithPrev ? new Date(timestamp).toLocaleString() : undefined}
+      >
+        {!groupWithPrev && (
+          <div
+            style={{
+              display: "flex",
+              gap: "8px",
+              alignItems: "flex-end",
+              fontSize: 14,
+            }}
+          >
+            <UserMenu
+              displayName={nameMap[id] || id}
+              timestamp={timestamp}
+              socket={socket}
+              userToManage={id}
+              isChatMessage
+              disabled={!Boolean(owner && owner === user?.uid)}
+              trigger={
+                <div
+                  style={{ cursor: "pointer", fontWeight: 700 }}
+                  title={isSub ? "WatchParty Plus subscriber" : ""}
+                  className={`${isSub ? styles.subscriber : styles.light} ${styles.hoverEffect}`}
+                >
+                  {Boolean(system) && "System"}
+                  {nameMap[id] || id}
+                </div>
+              }
+            />
+            <div className={styles.small + " " + styles.dark}>
+              <div title={new Date(timestamp).toLocaleDateString()}>
+                {new Date(timestamp).toLocaleTimeString()}
+                {Boolean(videoTS) && " @ "}
+                {formatTimestamp(videoTS)}
               </div>
-            }
-          />
-          <div className={styles.small + " " + styles.dark}>
-            <div title={new Date(timestamp).toLocaleDateString()}>
-              {new Date(timestamp).toLocaleTimeString()}
-              {Boolean(videoTS) && " @ "}
-              {formatTimestamp(videoTS)}
             </div>
           </div>
-        </div>
+        )}
         <div className={styles.light + " " + styles.system}>
           {cmd && formatMessage(cmd, msg)}
         </div>
