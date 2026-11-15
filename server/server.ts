@@ -879,7 +879,22 @@ app.get("/proxy/*splat", async (req, res) => {
   }
 });
 
-app.use(express.static(config.BUILD_DIRECTORY));
+// Vite emits content-hashed filenames under /assets/, so those are safe to cache
+// for a year: a new deploy changes the hashes (and index.html, which always
+// revalidates) so nothing can ever be served stale. Everything else (index.html,
+// favicon, robots.txt) must revalidate on every use.
+app.use(
+  express.static(config.BUILD_DIRECTORY, {
+    setHeaders(res, filePath) {
+      res.setHeader(
+        "Cache-Control",
+        filePath.includes(`${path.sep}assets${path.sep}`)
+          ? "public, max-age=31536000, immutable"
+          : "no-cache",
+      );
+    },
+  }),
+);
 // Send index.html for all other requests (SPA)
 app.use("/*splat", (_req, res) => {
   res.sendFile(

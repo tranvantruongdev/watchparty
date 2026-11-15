@@ -12,10 +12,21 @@
     <meta name="company" content="Gravitech LLC" />
     <meta property="og:image" content="/screenshot4.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Non-blocking: only declares @font-face (app CSS is bundled locally), so
+         first paint no longer waits on this cross-origin request -->
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700&display=swap"
+      media="print"
+      onload="this.media = 'all'"
     />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700&display=swap"
+      />
+    </noscript>
     <title>WatchParty</title>
     <script type="module" src="./src/index.tsx"></script>
   </head>
