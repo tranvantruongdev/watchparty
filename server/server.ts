@@ -91,34 +91,48 @@ const io = new Server(server, {
   transports: ["websocket"],
   maxHttpBufferSize: 256 * 1024,
 });
-io.engine.use(async (req: any, res: Response, next: () => void) => {
-  const roomId = req._query.roomId;
-  if (!roomId) {
-    return next();
+const rooms = new Map<string, Room>();
+
+// Dynamic-namespace gate: socket.io consults this predicate on every namespace
+// CONNECT (_checkNamespace), before the namespace's own middlewares in room.ts.
+// Unlike the engine middleware it would need, it sees handshake.auth — so the
+// roomKey is checked BEFORE any room lookup or creation: a keyless connection
+// to an unknown room costs nothing but this check, and can't force storage
+// lookups or load persisted rooms into memory.
+io.of((name, auth, next) => {
+  // "/" always exists, and a live room's namespace enforces the key itself
+  // (room.ts) exactly as before, so allow those through untouched
+  if (name === "/" || rooms.has(name)) {
+    next(null, true);
+    return;
   }
-  try {
-    // Attempt to ensure the room being connected to is loaded in memory
-    // If it doesn't exist, we may fail later with "invalid namespace"
+  if (!hasRoomKey(auth?.roomKey)) {
+    next(null, false);
+    return;
+  }
+  // Keyed client: attempt to ensure the room being connected to is loaded in
+  // memory. If it doesn't exist, the client gets "Invalid namespace" as before
+  (async () => {
+    const roomId = name.slice(1);
     const shard = resolveShard(roomId);
-    const key = "/" + roomId;
     // Check to make sure this shard should load this room
     const isCorrectShard = !config.SHARD || shard === Number(config.SHARD);
-    if (isCorrectShard && !rooms.has(key)) {
+    if (isCorrectShard && !rooms.has(name)) {
       // Get the room data from postgres
       const persistedRoom = (
         await postgres?.query<PersistentRoom>(
           `SELECT * from room where "roomId" = $1`,
-          [key],
+          [name],
         )
       )?.rows?.[0];
       // Re-check after the await in case a concurrent request already loaded the room
-      if (!rooms.has(key)) {
+      if (!rooms.has(name)) {
         const data = persistedRoom?.data
           ? JSON.stringify(persistedRoom.data)
           : undefined;
         if (data) {
-          const room = new Room(io, key, data);
-          rooms.set(key, room);
+          const room = new Room(io, name, data);
+          rooms.set(name, room);
           console.log(
             "loading room %s into memory on shard %s",
             roomId,
@@ -127,14 +141,13 @@ io.engine.use(async (req: any, res: Response, next: () => void) => {
         }
       }
     }
-  } catch (e) {
-    // Fall through, the connection will fail later with "invalid namespace" if the room isn't loaded
-    console.warn("failed to load room %s:", roomId, e);
-  }
-  next();
+    next(null, rooms.has(name));
+  })().catch((e) => {
+    // Fall through, the connection will fail with "Invalid namespace" if the room isn't loaded
+    console.warn("failed to load room %s:", name, e);
+    next(null, false);
+  });
 });
-
-const rooms = new Map<string, Room>();
 // Following functions iterate over in-memory rooms
 safeInterval("minuteMetrics", minuteMetrics, 60 * 1000);
 safeInterval("release", release, releaseInterval);
@@ -669,6 +682,16 @@ app.get("/subSuccess", async (req, res) => {
 });
 
 app.post("/manageSub", async (req, res) => {
+  // Stripe sends the user's browser back to this URL after the billing portal,
+  // so a foreign URL would be an open redirect — same guard as /checkoutSub
+  const returnUrl = req.body?.return_url;
+  if (
+    typeof returnUrl !== "string" ||
+    !isSameOriginUrl(returnUrl, requestOrigin(req))
+  ) {
+    res.status(400).json({ error: "invalid return_url" });
+    return;
+  }
   const decoded = await validateUserToken(
     String(req.body?.uid),
     String(req.body?.token),
@@ -682,10 +705,7 @@ app.post("/manageSub", async (req, res) => {
     res.status(400).json({ error: "customer not found" });
     return;
   }
-  const session = await createSelfServicePortal(
-    customer.id,
-    req.body?.return_url,
-  );
+  const session = await createSelfServicePortal(customer.id, returnUrl);
   res.json(session);
 });
 
