@@ -6,9 +6,6 @@ import {
   HoverCard,
   TextInput,
 } from "@mantine/core";
-// import data from '@emoji-mart/data';
-import Picker from "@emoji-mart/react";
-import { init } from "emoji-mart";
 // import onClickOutside from 'react-onclickoutside';
 //@ts-expect-error
 import Linkify from "react-linkify";
@@ -32,6 +29,11 @@ import {
 import { MetadataContext } from "../../MetadataContext";
 
 const clientId = getOrCreateClientId();
+// The picker is ~150 kB and is useless until someone opens it, so it lives in
+// its own chunk; hovering the emoji button starts the download early so the
+// first click still opens it right away
+const loadEmojiPicker = () => import("./EmojiPicker");
+const EmojiPicker = React.lazy(loadEmojiPicker);
 const truncateReply = (input?: string, max = 30) =>
   input && input.length > max ? `${input.slice(0, max)}...` : input || "";
 
@@ -122,7 +124,6 @@ export class Chat extends React.Component<ChatProps> {
   async componentDidMount() {
     this.scrollToBottom();
     this.messagesRef.current?.addEventListener("scroll", this.onScroll);
-    init({});
   }
 
   componentDidUpdate(prevProps: ChatProps) {
@@ -247,7 +248,10 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   onScroll = () => {
-    this.setState({ isNearBottom: this.isChatNearBottom() });
+    const isNearBottom = Boolean(this.isChatNearBottom());
+    if (isNearBottom !== this.state.isNearBottom) {
+      this.setState({ isNearBottom });
+    }
   };
 
   isChatNearBottom = () => {
@@ -366,12 +370,11 @@ export class Chat extends React.Component<ChatProps> {
             {this.props.chat.map((msg) => (
               <ChatMessage
                 key={msg.timestamp + msg.id}
-                className={
+                isSelected={
                   msg.id === this.state.reactionMenu.selectedMsgId &&
                   msg.timestamp === this.state.reactionMenu.selectedMsgTimestamp
-                    ? styles.selected
-                    : ""
                 }
+                reactionsSignature={reactionSignature(msg.reactions)}
                 message={msg}
                 pictureMap={this.props.pictureMap}
                 nameMap={this.props.nameMap}
@@ -403,13 +406,15 @@ export class Chat extends React.Component<ChatProps> {
         </div>
         {this.state.isPickerOpen && (
           <div style={{ position: "absolute", bottom: "60px" }}>
-            <Picker
-              theme="dark"
-              previewPosition="none"
-              maxFrequentRows={1}
-              onEmojiSelect={this.addEmoji}
-              onClickOutside={() => this.setState({ isPickerOpen: false })}
-            />
+            <React.Suspense fallback={null}>
+              <EmojiPicker
+                theme="dark"
+                previewPosition="none"
+                maxFrequentRows={1}
+                onEmojiSelect={this.addEmoji}
+                onClickOutside={() => this.setState({ isPickerOpen: false })}
+              />
+            </React.Suspense>
           </div>
         )}
         <CSSTransition
@@ -445,17 +450,19 @@ export class Chat extends React.Component<ChatProps> {
               maxWidth: "calc(100vw - 16px)",
             }}
           >
-            <Picker
-              theme="dark"
-              previewPosition="none"
-              maxFrequentRows={1}
-              perLine={6}
-              onClickOutside={() => this.setReactionMenu(false)}
-              onEmojiSelect={(emoji: any) => {
-                this.handleReactionClick(emoji.native);
-                this.setReactionMenu(false);
-              }}
-            />
+            <React.Suspense fallback={null}>
+              <EmojiPicker
+                theme="dark"
+                previewPosition="none"
+                maxFrequentRows={1}
+                perLine={6}
+                onClickOutside={() => this.setReactionMenu(false)}
+                onEmojiSelect={(emoji: any) => {
+                  this.handleReactionClick(emoji.native);
+                  this.setReactionMenu(false);
+                }}
+              />
+            </React.Suspense>
           </div>
           {/* <ReactionMenu
             handleReactionClick={this.handleReactionClick}
@@ -539,6 +546,8 @@ export class Chat extends React.Component<ChatProps> {
               {this.props.voiceButton}
               <ActionIcon
                 className={styles.emojiToggle}
+                onPointerEnter={loadEmojiPicker}
+                onFocus={loadEmojiPicker}
                 onClick={() => {
                   // Add a delay to prevent the click from triggering onClickOutside
                   const curr = this.state.isPickerOpen;
@@ -560,20 +569,21 @@ export class Chat extends React.Component<ChatProps> {
   }
 }
 
-const ChatMessage = ({
-  message,
-  nameMap,
-  pictureMap,
-  formatMessage,
-  socket,
-  owner,
-  isChatDisabled,
-  setReactionMenu,
-  handleReactionClick,
-  onReply,
-  className,
-}: {
+// REC:addReaction / REC:removeReaction mutate the reactions object in place, so
+// a message keeps its identity while its reactions change: the list passes
+// this cheap string instead, and a changed reaction still reaches the memo
+const reactionSignature = (reactions: ChatMessage["reactions"]) => {
+  if (!reactions) {
+    return "";
+  }
+  return Object.keys(reactions)
+    .map((key) => `${key}:${reactions[key].join(",")}`)
+    .join("|");
+};
+
+type ChatMessageProps = {
   message: ChatMessage;
+  reactionsSignature: string;
   nameMap: StringDict;
   pictureMap: StringDict;
   formatMessage: (cmd: string, msg?: string) => React.ReactNode;
@@ -589,8 +599,47 @@ const ChatMessage = ({
   ) => void;
   handleReactionClick: (value: string, id?: string, timestamp?: string) => void;
   onReply: (id: string, timestamp: string, msg?: string) => void;
-  className: string;
-}) => {
+  isSelected: boolean;
+};
+
+// "host" and "playlistAdd" render a media name taken from current room state
+// rather than from the message itself, so they are left out of the memo
+const usesRoomState = (message: ChatMessage) =>
+  message.cmd === "host" || message.cmd === "playlistAdd";
+
+// Every callback below is a class field, so a message only re-renders when its
+// own content, its reactions, its selection or one of the shared maps changes
+const chatMessagePropsEqual = (
+  prev: ChatMessageProps,
+  next: ChatMessageProps,
+) =>
+  !usesRoomState(next.message) &&
+  prev.message === next.message &&
+  prev.reactionsSignature === next.reactionsSignature &&
+  prev.nameMap === next.nameMap &&
+  prev.pictureMap === next.pictureMap &&
+  prev.formatMessage === next.formatMessage &&
+  prev.socket === next.socket &&
+  prev.owner === next.owner &&
+  prev.isChatDisabled === next.isChatDisabled &&
+  prev.setReactionMenu === next.setReactionMenu &&
+  prev.handleReactionClick === next.handleReactionClick &&
+  prev.onReply === next.onReply &&
+  prev.isSelected === next.isSelected;
+
+const ChatMessage = React.memo(function ChatMessage({
+  message,
+  nameMap,
+  pictureMap,
+  formatMessage,
+  socket,
+  owner,
+  isChatDisabled,
+  setReactionMenu,
+  handleReactionClick,
+  onReply,
+  isSelected,
+}: ChatMessageProps) {
   const { user } = useContext(MetadataContext);
   const { id, timestamp, cmd, msg, system, isSub, reactions, videoTS } =
     message;
@@ -605,7 +654,7 @@ const ChatMessage = ({
         position: "relative",
         overflowWrap: "anywhere",
       }}
-      className={`${styles.comment} ${className} ${
+      className={`${styles.comment} ${isSelected ? styles.selected : ""} ${
         message.replyToUserId === clientId ? styles.replyMessage : ""
       }`}
     >
@@ -831,7 +880,7 @@ const ChatMessage = ({
       </div>
     </div>
   );
-};
+});
 
 export const renderImageString = (
   input: string | undefined,
