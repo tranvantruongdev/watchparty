@@ -162,6 +162,12 @@ const glassCardStyle: React.CSSProperties = {
 
 const clientId = getOrCreateClientId();
 
+// Round 122: every Watchparty tab exposes this non-identifying Capture Handle
+// at startup, so a sharer capturing a monitor that shows a Watchparty tab can
+// detect it (see checkSelfCapture). Not a secret and not an identity — any
+// tab can set the same string
+const CAPTURE_HANDLE = "watchparty";
+
 // One emoji floating up over the video (REC:floatReaction)
 interface FloatReaction {
   user: string;
@@ -435,6 +441,10 @@ export class App extends React.Component<AppProps, AppState> {
   chatAudio?: HTMLAudioElement;
   // The player's mute state before the sharer preview forced it muted
   sharePreviewWasMuted?: boolean;
+  // True once the "sharing a Watchparty tab" notice fired for this share:
+  // capturehandlechange can re-fire mid-share (tab navigation, config change)
+  // and the notice must stay a one-shot per share
+  selfCaptureNoticed?: boolean;
   // The blob URL a non-converted file share plays leftVideo from; revoked when
   // the share ends so the file's handle doesn't stay pinned until tab close
   fileShareObjectUrl?: string;
@@ -477,6 +487,7 @@ export class App extends React.Component<AppProps, AppState> {
   async componentDidMount() {
     document.onfullscreenchange = this.onFullScreenChange;
     document.onkeydown = this.onKeydown;
+    this.setupCaptureHandle();
 
     // Send heartbeat to the server
     this.heartbeat = window.setInterval(
@@ -1858,46 +1869,81 @@ export class App extends React.Component<AppProps, AppState> {
     // Screen share doesn't touch leftVideo, so there's nothing to restore
     this.preShareVideoState = undefined;
     if (navigator.mediaDevices.getDisplayMedia) {
+      // The pre-round-122 constraints; the picker-hint attempt below spreads
+      // them so the TypeError fallback can retry with exactly these
+      const baseOptions = () => ({
+        // Full HD when the screen has it; the direct share sends up to 16 Mbps
+        video: { height: { ideal: 1080 }, logicalSurface: true },
+        audio: {
+          autoGainControl: false,
+          channelCount: 2,
+          echoCancellation: false,
+          noiseSuppression: false,
+          sampleRate: 48000,
+          sampleSize: 16,
+        },
+      });
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
-          //@ts-expect-error
-          // Full HD when the screen has it; the direct share sends up to 16 Mbps
-          video: { height: { ideal: 1080 }, logicalSurface: true },
-          audio: {
-            autoGainControl: false,
-            channelCount: 2,
-            echoCancellation: false,
-            noiseSuppression: false,
-            sampleRate: 48000,
-            sampleSize: 16,
-          },
-        });
+          ...baseOptions(),
+          // Round 122 picker hints: keep this tab out of the picker (the owner
+          // shares the whole monitor, so the watchparty tab used to be offered
+          // as its own capture source), keep Chrome's "Share this tab instead"
+          // switch, keep whole screens offered. Unknown dictionary members are
+          // ignored per WebIDL; a TypeError from an unknown enum value (older
+          // browser) falls back to baseOptions below. Cast: this TS lib.dom
+          // predates these members, which are the ones older browsers ignore
+          selfBrowserSurface: "exclude",
+          surfaceSwitching: "include",
+          monitorTypeSurfaces: "include",
+        } as DisplayMediaStreamOptions);
       } catch (err) {
-        // Closing the picker (NotAllowedError) is a normal cancel; a real
-        // failure must not die as an unhandled rejection nobody sees
-        if ((err as DOMException)?.name !== "NotAllowedError") {
-          this.showError("Could not start screen share");
+        // An old browser rejecting the new members (TypeError) must still
+        // share — retry once without them. Closing the picker
+        // (NotAllowedError) is a normal cancel; a real failure must not die
+        // as an unhandled rejection nobody sees
+        if ((err as DOMException)?.name === "TypeError") {
+          try {
+            stream =
+              await navigator.mediaDevices.getDisplayMedia(baseOptions());
+          } catch (retryErr) {
+            if ((retryErr as DOMException)?.name !== "NotAllowedError") {
+              this.showError("Could not start screen share");
+            }
+            return;
+          }
+        } else {
+          if ((err as DOMException)?.name !== "NotAllowedError") {
+            this.showError("Could not start screen share");
+          }
+          return;
         }
-        return;
       }
+      const captureTrack = stream.getVideoTracks()[0];
       this.localStreamToPublish = stream;
       // Resolve the preview before the first mirror attach (round 115): the
       // stored choice, or the capture surface (a monitor captures the whole
       // screen, where the preview would show inside itself)
       this.setState({
-        sharePreviewHidden: this.resolveSharePreviewHidden(
-          stream.getVideoTracks()[0],
-        ),
+        sharePreviewHidden: this.resolveSharePreviewHidden(captureTrack),
       });
+      // Round 122: the captured surface may be (or contain) a Watchparty tab;
+      // if Capture Handle says so, hide the preview for this share and warn
+      // once. Re-checked on capturehandlechange (the captured tab can
+      // navigate or set its handle mid-share)
+      this.selfCaptureNoticed = false;
+      this.checkSelfCapture(captureTrack);
+      captureTrack.addEventListener("capturehandlechange", () =>
+        this.checkSelfCapture(captureTrack),
+      );
       // Attach the ended handler at capture time: a Stop-bar click during the
       // CMD:joinScreenShare round trip fires 'ended' before setupRTCConnections
       // (App.tsx:2318) ever runs, and a handler attached after the event fired
       // never receives it — the room would stay on a dead capture forever, and
       // every rebuild re-attaches the same ended track. setupRTCConnections'
       // !localTrack.onended guard keeps this idempotent once PCs exist
-      stream.getVideoTracks()[0].onended = () =>
-        this.stopPublishingLocalStream();
+      captureTrack.onended = () => this.stopPublishingLocalStream();
       this.isLocalStreamAFile = false;
       this.socket.emit("CMD:joinScreenShare", {
         file: false,
@@ -3449,6 +3495,58 @@ export class App extends React.Component<AppProps, AppState> {
       // storage blocked (private mode): fall through to the surface default
     }
     return track.getSettings().displaySurface === "monitor";
+  };
+
+  // Round 122: every Watchparty tab announces itself via Capture Handle at
+  // startup (setupCaptureHandle, componentDidMount). Chromium 102+ in a
+  // secure context only — everywhere else the API members simply don't
+  // exist, the optional calls below are skipped and nothing changes. The
+  // handle is same-origin: only a page on this origin may read it
+  setupCaptureHandle = () => {
+    try {
+      (
+        navigator.mediaDevices as MediaDevices & {
+          setCaptureHandleConfig?: (config: {
+            handle: string;
+            exposeOrigin: boolean;
+            permittedOrigins: string[];
+          }) => void;
+        }
+      ).setCaptureHandleConfig?.({
+        handle: CAPTURE_HANDLE,
+        exposeOrigin: false,
+        permittedOrigins: [window.location.origin],
+      });
+    } catch {
+      // Insecure context or restricted frame: no handle, detection stays off
+    }
+  };
+
+  // If the captured surface is a Watchparty tab (this one, or another room's
+  // on the same monitor), the sharer is sharing the page back into the room.
+  // Force the preview hidden for this share WITHOUT writing the stored
+  // round-115 choice, and show the warning once per share
+  checkSelfCapture = (track: MediaStreamTrack) => {
+    const handle = (
+      track as MediaStreamTrack & {
+        getCaptureHandle?: () => {
+          handle: string;
+          origin?: string;
+        } | null;
+      }
+    ).getCaptureHandle?.();
+    if (handle?.handle !== CAPTURE_HANDLE) {
+      return;
+    }
+    if (!this.state.sharePreviewHidden) {
+      this.setState({ sharePreviewHidden: true });
+    }
+    if (!this.selfCaptureNoticed) {
+      this.selfCaptureNoticed = true;
+      this.showError(
+        "You are sharing a Watchparty tab — viewers will see this page",
+      );
+    }
   };
 
   toggleSharePreview = () => {
