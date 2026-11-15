@@ -1517,13 +1517,21 @@ export class VideoChat extends React.Component<
                         style={{
                           position: "absolute",
                           top: "32px",
-                          left: 0,
-                          width: "100%",
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          width: "max-content",
+                          whiteSpace: "nowrap",
+                          padding: "2px 8px",
+                          borderRadius: "4px",
+                          // Semi-opaque pill instead of a text shadow: a shadow
+                          // vanishes over bright video, 80% black keeps #ff8787
+                          // >= 4.5:1 against anything behind it (white worst case
+                          // measured 5.4:1; round 113)
+                          backgroundColor: "rgba(0,0,0,0.8)",
                           textAlign: "center",
-                          fontSize: "10px",
+                          fontSize: "12px",
                           fontWeight: 700,
                           color: "#ff8787",
-                          textShadow: "0 1px 2px #000",
                           zIndex: 1,
                           pointerEvents: "none",
                         }}
@@ -1564,7 +1572,7 @@ export class VideoChat extends React.Component<
                       backgroundColor: "rgba(0,0,0,0)",
                       color: softWhite,
                       borderRadius: "4px",
-                      fontSize: "10px",
+                      fontSize: "12px",
                       fontWeight: 700,
                       display: "flex",
                       zIndex: 1,
@@ -1573,11 +1581,17 @@ export class VideoChat extends React.Component<
                     <div
                       title={nameMap[p.id] || p.id}
                       style={{
-                        backdropFilter: "brightness(80%)",
+                        // Dark pill instead of backdropFilter brightness(): the
+                        // filter only darkens by 20/40%, so whitesmoke on white
+                        // video measured 1.5:1 / 2.6:1 (round 113); 70% black
+                        // holds >= 7.8:1 over anything
+                        backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "4px",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
                         overflow: "hidden",
+                        // Long names must ellipsize, not squeeze the timestamp
+                        maxWidth: "65%",
                         display: "inline-block",
                       }}
                     >
@@ -1585,7 +1599,7 @@ export class VideoChat extends React.Component<
                     </div>
                     <div
                       style={{
-                        backdropFilter: "brightness(60%)",
+                        backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "4px",
                         flexGrow: 1,
                         display: "flex",
@@ -1660,7 +1674,7 @@ export class VideoChat extends React.Component<
                           transform: "translateX(-50%)",
                           backgroundColor: "rgba(20,12,40,0.75)",
                           color: "#fbbf24",
-                          fontSize: "10px",
+                          fontSize: "12px",
                           fontWeight: 700,
                           padding: "2px 8px",
                           borderRadius: "4px",
