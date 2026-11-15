@@ -348,12 +348,16 @@ export class Room {
         const superseded = this.socketIdMap[clientId]
           ? io.of(roomId).sockets.get(this.socketIdMap[clientId])
           : undefined;
+        // Assign the map FIRST (r92): .disconnect() runs the old socket's
+        // onDisconnect synchronously, and that handler only skips cleanup when
+        // its socket is no longer the one in socketIdMap — disconnecting
+        // before the reassign would delete the roster entry (voice/mute flags
+        // with it) instead of leaving it to the reconnecting socket
+        this.socketIdMap[clientId] = socket.id;
         if (superseded) {
           superseded.emit("kicked");
           superseded.disconnect();
         }
-        // Keep track of the current socketID associated with this client (only used for signaling and kicking)
-        this.socketIdMap[clientId] = socket.id;
         if (!this.roster.find((user) => user.id === clientId)) {
           this.roster.push({ id: clientId });
         }
@@ -455,6 +459,11 @@ export class Room {
           this.changeUserPicture(socket, String(data)),
       );
       on("CMD:uid", async (raw: unknown) => {
+        // A login happens once per session; uncapped, each call costs a
+        // Firebase token verification (and, with postgres, a subscriber query)
+        if (!allowRelay()) {
+          return;
+        }
         let data = raw as { uid: string; token: string };
         // Called when the user logs in, sets the socket's auth state
         if (!data || !data.uid || !data.token) {
@@ -560,7 +569,7 @@ export class Room {
       on("CMD:askHost", () => {
         socket.emit("REC:host", this.getHostState());
       });
-      on("CMD:getRoomState", () => this.getRoomState(socket));
+      on("CMD:getRoomState", () => allowRelay() && this.getRoomState(socket));
       on("CMD:setRoomState", async (data: unknown) => {
         (await validateOwner()) && this.setRoomState(socket, data);
       });
@@ -589,7 +598,11 @@ export class Room {
       });
 
       // Signaling is unicast to one peer and bursts during connection setup
-      // (ICE trickling), so it gets its own higher budget
+      // (ICE trickling), so it gets its own higher budget. Real frames are
+      // small (an SDP offer ~5KB, an ICE candidate ~200B); at the old 100/s ×
+      // 100KB budget a member measured 6.1 MB/s unicast into one victim's
+      // socket, so the size cap is cut to 20KB (4× the largest real frame). The
+      // rate stays 100/s: a sharer signals every viewer from this one budget
       on(
         "signal",
         (data: unknown) =>
@@ -1157,7 +1170,12 @@ export class Room {
   };
 
   private isValidChatMessage = (msg: string | undefined) => {
-    return Boolean(msg && msg.length <= 10000);
+    // linkify-it 2.2.0 (the client's chat renderer) has quadratic worst-case
+    // behavior (GHSA-22p9-wv53-3rq4, e.g. "a@b.com\n" repeated): measured
+    // 10,000 chars = 68ms per message on one receiver thread, and CMD:chat
+    // allows 25/s — enough to freeze every tab in the room. 2,000 chars costs
+    // ~3ms and still leaves room for any normal message
+    return Boolean(msg && msg.length <= 2000);
   };
 
   private sendChatMessage = (socket: Socket, raw: unknown) => {
@@ -1226,6 +1244,12 @@ export class Room {
     if (typeof data.value !== "string" || data.value.length > 8) {
       return;
     }
+    // The reactions map is a plain object keyed by this string: "toString" or
+    // "valueOf" would resolve on its prototype and turn the stored value (and
+    // the handler's .includes call) into a TypeError
+    if (data.value in Object.prototype) {
+      return;
+    }
     const msg = this.chat.find(
       (m) => m.id === data.msgId && m.timestamp === data.msgTimestamp,
     );
@@ -1242,7 +1266,15 @@ export class Room {
 
     if (!msg.reactions[data.value].includes(socket.clientId)) {
       msg.reactions[data.value].push(socket.clientId);
-      const reaction: Reaction = { user: socket.clientId, ...data };
+      // Named fields only, sender last: spreading the client payload in let a
+      // "user" field forge who the reaction belongs to (every client applies
+      // data.user verbatim) and smuggle arbitrary extra keys into the room
+      const reaction: Reaction = {
+        msgId: data.msgId,
+        msgTimestamp: data.msgTimestamp,
+        value: data.value,
+        user: socket.clientId,
+      };
       redisCount("addReaction");
       this.io.of(this.roomId).emit("REC:addReaction", reaction);
     }
@@ -1253,8 +1285,12 @@ export class Room {
     if (!data || !data.value || !data.msgId || !data.msgTimestamp) {
       return;
     }
-    // Emojis can be multiple bytes; value must be a string (same rule as addReaction)
+    // Emojis can be multiple bytes; value must be a string (same rule as
+    // addReaction, including the inherited-key refusal)
     if (typeof data.value !== "string" || data.value.length > 8) {
+      return;
+    }
+    if (data.value in Object.prototype) {
       return;
     }
     const msg = this.chat.find(
@@ -1266,7 +1302,13 @@ export class Room {
     msg.reactions[data.value] = msg.reactions[data.value].filter(
       (id) => id !== socket.clientId,
     );
-    const reaction: Reaction = { user: socket.clientId, ...data };
+    // Same named-fields rule as addReaction
+    const reaction: Reaction = {
+      msgId: data.msgId,
+      msgTimestamp: data.msgTimestamp,
+      value: data.value,
+      user: socket.clientId,
+    };
     this.io.of(this.roomId).emit("REC:removeReaction", reaction);
   };
 
@@ -2035,28 +2077,39 @@ export class Room {
     const data = raw as { to: string; msg: unknown; sharer?: boolean };
     // msg is the SDP/ICE object the peers exchange; cap the relay size
     // (real payloads sit far below this)
-    if (!data || data.msg == null || JSON.stringify(data.msg).length > 100000) {
+    if (!data || data.msg == null || JSON.stringify(data.msg).length > 20000) {
       return;
     }
     const fromClientId = socket.clientId;
+    let sharerFlag = data.sharer;
     // Voice signaling only flows between voice members: socketIdMap holds
     // every connected socket, so without this check any guest can relay
-    // frames (up to 100 msgs/s × 100KB) straight into a non-voice peer's
+    // frames (up to 100 msgs/s × 20KB) straight into a non-voice peer's
     // socket by aiming "signal" at them. Screen-share signaling (signalSS)
-    // is exempt — a sharer needn't be in voice
+    // is exempt — a sharer needn't be in voice — but it must stay between
+    // the sharer and their viewers, and which side of the PC map the
+    // receiver installs a frame into is decided here: a forged `sharer`
+    // flag (client-controlled before) let a member pose as the sharer and
+    // overwrite a viewer's share PC with their own SDP
     if (eventName === "signal") {
       const sender = this.roster.find((u) => u.id === fromClientId);
       const target = this.roster.find((u) => u.id === data.to);
       if (!sender?.isVideoChat || !target?.isVideoChat) {
         return;
       }
+    } else {
+      const sharerId = this.getSharerId();
+      if (!sharerId || (fromClientId !== sharerId && data.to !== sharerId)) {
+        return;
+      }
+      sharerFlag = fromClientId === sharerId;
     }
     const toId = this.socketIdMap[data.to];
     if (toId) {
       this.io.of(this.roomId).to(toId).emit(eventName, {
         from: fromClientId,
         msg: data.msg,
-        sharer: data.sharer,
+        sharer: sharerFlag,
       });
     }
   };
