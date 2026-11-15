@@ -5,11 +5,7 @@ import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route } from "react-router-dom";
 
-import { App } from "./components/App/App";
-import { Home } from "./components/Home/Home";
-import { Privacy, Terms, FAQ } from "./components/Pages/Pages";
 import { TopBar } from "./components/TopBar/TopBar";
-import { Footer } from "./components/Footer/Footer";
 import type firebase from "firebase/compat/app";
 import {
   getRoomKey,
@@ -17,8 +13,34 @@ import {
   serverPath,
   softWhite,
 } from "./utils/utils";
-import { Create } from "./components/Create/Create";
-import { Discord } from "./components/Discord/Discord";
+
+// Route components load on demand: the room page no longer downloads Home /
+// Create / Pages / Discord code and vice versa. TopBar stays eager (it is on
+// the room page too, via App).
+const App = lazy(() =>
+  import("./components/App/App").then((m) => ({ default: m.App })),
+);
+const Home = lazy(() =>
+  import("./components/Home/Home").then((m) => ({ default: m.Home })),
+);
+const Create = lazy(() =>
+  import("./components/Create/Create").then((m) => ({ default: m.Create })),
+);
+const Discord = lazy(() =>
+  import("./components/Discord/Discord").then((m) => ({ default: m.Discord })),
+);
+const Terms = lazy(() =>
+  import("./components/Pages/Pages").then((m) => ({ default: m.Terms })),
+);
+const Privacy = lazy(() =>
+  import("./components/Pages/Pages").then((m) => ({ default: m.Privacy })),
+);
+const FAQ = lazy(() =>
+  import("./components/Pages/Pages").then((m) => ({ default: m.FAQ })),
+);
+const Footer = lazy(() =>
+  import("./components/Footer/Footer").then((m) => ({ default: m.Footer })),
+);
 import config from "./config";
 import { getFirebase } from "./firebaseLazy";
 import { DEFAULT_STATE, MetadataContext } from "./MetadataContext";
@@ -95,67 +117,69 @@ class WatchParty extends React.Component {
       <MantineProvider theme={theme} forceColorScheme="dark">
         <MetadataContext.Provider value={this.state}>
           <BrowserRouter>
-            <Route
-              path="/"
-              exact
-              render={(props) => {
-                return (
-                  <React.Fragment>
-                    <TopBar hideNewRoom />
-                    <Home />
-                    <Footer />
-                  </React.Fragment>
-                );
-              }}
-            />
-            <Route
-              path="/create"
-              exact
-              render={() => {
-                return <Create />;
-              }}
-            />
-            <Route
-              path="/watch/:roomId"
-              exact
-              render={(props) => {
-                return <App urlRoomId={props.match.params.roomId} />;
-              }}
-            />
-            <Route
-              path="/r/:vanity"
-              exact
-              render={(props) => {
-                return <App vanity={props.match.params.vanity} />;
-              }}
-            />
-            <Route path="/terms">
-              <TopBar />
-              <Terms />
-              <Footer />
-            </Route>
-            <Route path="/privacy">
-              <TopBar />
-              <Privacy />
-              <Footer />
-            </Route>
-            <Route path="/faq">
-              <TopBar />
-              <FAQ />
-              <Footer />
-            </Route>
-            <Route path="/discord/auth" exact>
-              <Discord />
-            </Route>
-            <Route path="/debug">
-              {/* hideNewRoom: creating a room from here would call getRoomKey
+            <Suspense fallback={null}>
+              <Route
+                path="/"
+                exact
+                render={(props) => {
+                  return (
+                    <React.Fragment>
+                      <TopBar hideNewRoom />
+                      <Home />
+                      <Footer />
+                    </React.Fragment>
+                  );
+                }}
+              />
+              <Route
+                path="/create"
+                exact
+                render={() => {
+                  return <Create />;
+                }}
+              />
+              <Route
+                path="/watch/:roomId"
+                exact
+                render={(props) => {
+                  return <App urlRoomId={props.match.params.roomId} />;
+                }}
+              />
+              <Route
+                path="/r/:vanity"
+                exact
+                render={(props) => {
+                  return <App vanity={props.match.params.vanity} />;
+                }}
+              />
+              <Route path="/terms">
+                <TopBar />
+                <Terms />
+                <Footer />
+              </Route>
+              <Route path="/privacy">
+                <TopBar />
+                <Privacy />
+                <Footer />
+              </Route>
+              <Route path="/faq">
+                <TopBar />
+                <FAQ />
+                <Footer />
+              </Route>
+              <Route path="/discord/auth" exact>
+                <Discord />
+              </Route>
+              <Route path="/debug">
+                {/* hideNewRoom: creating a room from here would call getRoomKey
                   and store the ?key= stats key as the room key */}
-              <TopBar hideNewRoom />
-              <Suspense fallback={null}>
-                <Debug />
-              </Suspense>
-              <Footer />
-            </Route>
+                <TopBar hideNewRoom />
+                <Suspense fallback={null}>
+                  <Debug />
+                </Suspense>
+                <Footer />
+              </Route>
+            </Suspense>
           </BrowserRouter>
         </MetadataContext.Provider>
       </MantineProvider>
