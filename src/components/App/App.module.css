@@ -533,3 +533,31 @@
   font-family: monospace;
   pointer-events: none;
 }
+
+/* Frozen share (round 95): frames stopped while the link is unhappy — the
+   badge says reconnecting and the pill marks the video itself */
+.shareStalled {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 202;
+  padding: 8px 20px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #ffd166;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
+  animation: stallPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes stallPulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}

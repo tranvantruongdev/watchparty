@@ -164,6 +164,8 @@ interface AppState {
   shareStats: string;
   // What the sharer's own encoder is doing: size, fps, and why quality is limited
   shareSendStats: string;
+  // No new frame while ICE is unhappy: the share is frozen (round 95)
+  shareStalled: boolean;
   voiceDeaf: boolean;
   participants: User[];
   rosterUpdateTS: Number;
@@ -272,6 +274,9 @@ export class App extends React.Component<AppProps, AppState> {
     roomSleepTimer: null,
     shareStats: "",
     shareSendStats: "",
+    // No new frame for ~4 s while the transport is unhappy: the share is
+    // frozen and the badge must say so instead of reading as a live stream
+    shareStalled: false,
     voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
     rosterUpdateTS: Date.now(),
@@ -409,6 +414,12 @@ export class App extends React.Component<AppProps, AppState> {
   consumerConn?: RTCPeerConnection;
   shareStatsTimer?: number;
   shareStatsLast?: { bytes: number; ts: number };
+  // Consecutive 2 s polls with zero new frames on the viewer copy (round 95):
+  // a static screen legitimately sends none, so frames alone must not raise
+  // the flag — it only shows while ICE is unhappy too (disconnected/failed),
+  // which a healthy static screen never is
+  shareStallTicks = 0;
+  shareLastFrames?: number;
   // Last 3 instantaneous encode fps samples for the sharer badge: the single
   // poll value swings 2-8 fps while the window average is steady (round 64)
   shareSendFps: number[] = [];
@@ -2335,7 +2346,9 @@ export class App extends React.Component<AppProps, AppState> {
     window.clearInterval(this.shareStatsTimer);
     this.shareStatsLast = undefined;
     this.shareSendFps = [];
-    this.setState({ shareStats: "", shareSendStats: "" });
+    this.shareStallTicks = 0;
+    this.shareLastFrames = undefined;
+    this.setState({ shareStats: "", shareSendStats: "", shareStalled: false });
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2528,6 +2541,11 @@ export class App extends React.Component<AppProps, AppState> {
     if (sharer && !this.consumerConn && !this.localStreamToPublish) {
       const pc = new RTCPeerConnection({ iceServers: iceServers() });
       this.consumerConn = pc;
+      // A fresh copy starts unstalled (and un-counted), whatever an old one
+      // flagged before the rebuild
+      this.shareStallTicks = 0;
+      this.shareLastFrames = undefined;
+      this.setState({ shareStalled: false });
       window.clearInterval(this.shareStatsTimer);
       this.shareStatsTimer = window.setInterval(
         () => this.pollShareStats(pc),
@@ -2550,6 +2568,9 @@ export class App extends React.Component<AppProps, AppState> {
         }
         pc.close();
         this.consumerConn = undefined;
+        // No copy left to poll: the frozen frame is not coming back until the
+        // sharer rebuilds, so flag it now (the poll can no longer flip it)
+        this.setState({ shareStalled: true });
       };
       pc.oniceconnectionstatechange = () => {
         if (pc.iceConnectionState === "failed") {
@@ -2588,6 +2609,23 @@ export class App extends React.Component<AppProps, AppState> {
       }
     });
     if (!video || !pair) return;
+    // Stalled = no new frame across 2 consecutive polls (~4 s) AND the link
+    // itself unhappy (ICE off connected). Either alone is legitimate: a static
+    // screen sends no frames for minutes (measured round 95, 20 s case) and
+    // ICE alone can flap during a healthy reconnect, so both must agree
+    const frames = video.framesReceived ?? 0;
+    if (this.shareLastFrames !== undefined) {
+      this.shareStallTicks =
+        frames > this.shareLastFrames ? 0 : this.shareStallTicks + 1;
+    }
+    this.shareLastFrames = frames;
+    const iceBad =
+      pc.iceConnectionState !== "connected" &&
+      pc.iceConnectionState !== "completed";
+    const stalled = this.shareStallTicks >= 2 && iceBad;
+    if (stalled !== this.state.shareStalled) {
+      this.setState({ shareStalled: stalled });
+    }
     const relay = [pair.localCandidateId, pair.remoteCandidateId].some(
       (id) => stats.get(id)?.candidateType === "relay",
     );
@@ -4104,8 +4142,13 @@ export class App extends React.Component<AppProps, AppState> {
                     )}
                     {this.state.shareStats && (
                       <div className={styles.shareStats}>
-                        {this.state.shareStats}
+                        {this.state.shareStalled
+                          ? "reconnecting…"
+                          : this.state.shareStats}
                       </div>
+                    )}
+                    {this.state.shareStalled && (
+                      <div className={styles.shareStalled}>Reconnecting…</div>
                     )}
                     {this.state.roomIntermission && (
                       <div className={styles.intermissionOverlay}>

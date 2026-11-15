@@ -167,6 +167,8 @@ export class VideoChat extends React.Component<
     reconnecting: string[];
     // Microphones the browser lists (labels stay empty until mic permission)
     mics: { id: string; label: string }[];
+    // Device-loss hint on the self tile (round 95)
+    deviceHint: string;
     // Saved mic deviceId ("" = system default)
     micId: string;
   }
@@ -180,6 +182,10 @@ export class VideoChat extends React.Component<
     reconnecting: [] as string[],
     mics: [] as { id: string; label: string }[],
     micId: readSavedMic(),
+    // One-line device-loss hint shown on the self tile ("round 95"): a mic or
+    // camera that ended on its own silently drops to mute/camera-off, so say
+    // why next to the control; cleared when that device is live again
+    deviceHint: "",
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -445,9 +451,10 @@ export class VideoChat extends React.Component<
       ourStream.removeTrack(oldTrack);
       ourStream.addTrack(newTrack);
       oldTrack.stop();
-      newTrack.addEventListener("ended", () => this.micOff());
+      newTrack.addEventListener("ended", () => this.micOff(true));
       this.saveMic(deviceId);
       this.refreshMics();
+      this.clearDeviceHint("Microphone");
     } finally {
       this.micSwitching = false;
     }
@@ -798,6 +805,8 @@ export class VideoChat extends React.Component<
       this.emitUserMute();
       return;
     }
+    // A fresh capture: any device-loss hint is stale by definition
+    this.setState({ deviceHint: "" });
     // The mic-on click is a user gesture: a saved boost (>100%) can start its
     // audio context now (before the awaits), it cannot at page load
     if (getVoiceVolume() > 1) {
@@ -859,8 +868,19 @@ export class VideoChat extends React.Component<
     this.forceUpdate();
   };
 
-  // Mic off: keep listening while someone else is in voice, else leave
-  micOff = () => {
+  // The device is live again (turned back on, reopened, switched): drop that
+  // device's hint, keep the other device's
+  clearDeviceHint = (which: "Camera" | "Microphone") => {
+    if (this.state.deviceHint.startsWith(which))
+      this.setState({ deviceHint: "" });
+  };
+
+  // Mic off: keep listening while someone else is in voice, else leave.
+  // fromEnded = the device died on its own (unplugged/revoked), not a button
+  // click — say so near the mic control instead of dropping to listen-only
+  // silently (round 95)
+  micOff = (fromEnded?: boolean) => {
+    if (fromEnded) this.setState({ deviceHint: "Microphone disconnected" });
     const ourStream = window.watchparty.ourStream;
     const selfId = getOrCreateClientId();
     const others = this.props.participants.some(
@@ -927,7 +947,9 @@ export class VideoChat extends React.Component<
     // Mic unplugged or revoked by the OS: the track ends and would stream
     // silence forever behind a green mic icon — show the manual mic-off state
     // instead (keep listening if someone else is in voice, else leave)
-    stream.getAudioTracks()[0]?.addEventListener("ended", () => this.micOff());
+    stream
+      .getAudioTracks()[0]
+      ?.addEventListener("ended", () => this.micOff(true));
     // Same for the camera: unplugging ends the track and the button would keep
     // showing a live camera over a frozen frame for everyone — show the manual
     // camera-off state instead (audio untouched)
@@ -959,6 +981,7 @@ export class VideoChat extends React.Component<
   // camera-on click goes through reopenCamera instead of an enabled flip
   cameraEnded = () => {
     if (this.getVideoWebRTC()) this.toggleVideoWebRTC();
+    this.setState({ deviceHint: "Camera disconnected" });
   };
 
   toggleVideoWebRTC = () => {
@@ -972,6 +995,7 @@ export class VideoChat extends React.Component<
         return;
       }
       track.enabled = !track.enabled;
+      if (track.enabled) this.clearDeviceHint("Camera");
     }
     this.forceUpdate();
   };
@@ -1022,6 +1046,7 @@ export class VideoChat extends React.Component<
         }),
       );
       newTrack.addEventListener("ended", () => this.cameraEnded());
+      this.clearDeviceHint("Camera");
       this.forceUpdate();
     } finally {
       this.cameraReopening = false;
@@ -1038,6 +1063,8 @@ export class VideoChat extends React.Component<
     if (ourStream && ourStream.getAudioTracks()[0]) {
       ourStream.getAudioTracks()[0].enabled =
         !ourStream.getAudioTracks()[0]?.enabled;
+      if (ourStream.getAudioTracks()[0].enabled)
+        this.clearDeviceHint("Microphone");
     }
     this.emitUserMute();
     this.forceUpdate();
@@ -1421,6 +1448,25 @@ export class VideoChat extends React.Component<
                           <IconMicrophone />
                         </ActionIcon>
                       </>
+                    )}
+                    {ourStream && p.id === selfId && this.state.deviceHint && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "32px",
+                          left: 0,
+                          width: "100%",
+                          textAlign: "center",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          color: "#ff8787",
+                          textShadow: "0 1px 2px #000",
+                          zIndex: 1,
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {this.state.deviceHint}
+                      </div>
                     )}
                     {p.id !== selfId && (
                       <>
