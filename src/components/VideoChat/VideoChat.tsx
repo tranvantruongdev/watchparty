@@ -159,21 +159,20 @@ const flushIce = (pc: RTCPeerConnection) => {
   queue.forEach((ice) => pc.addIceCandidate(ice).catch(() => {}));
 };
 
-export class VideoChat extends React.Component<
-  VideoChatProps,
-  {
-    playBlocked: boolean;
-    voiceVolume: number;
-    speaking: string[];
-    reconnecting: string[];
-    // Microphones the browser lists (labels stay empty until mic permission)
-    mics: { id: string; label: string }[];
-    // Device-loss hint on the self tile (round 95)
-    deviceHint: string;
-    // Saved mic deviceId ("" = system default)
-    micId: string;
-  }
-> {
+interface VideoChatState {
+  playBlocked: boolean;
+  voiceVolume: number;
+  speaking: string[];
+  reconnecting: string[];
+  // Microphones the browser lists (labels stay empty until mic permission)
+  mics: { id: string; label: string }[];
+  // Device-loss hint on the self tile (round 95)
+  deviceHint: string;
+  // Saved mic deviceId ("" = system default)
+  micId: string;
+}
+
+export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // Voice volume also lives on window.watchparty so it survives element
   // remounts and People-panel collapse (a fresh instance re-seeds from there)
   state = {
@@ -217,6 +216,8 @@ export class VideoChat extends React.Component<
   micSwitching = false;
   // A camera reopen is in flight (serialize reopenCamera — see the guard there)
   cameraReopening = false;
+  // Our root element, for the People-closed check below (round 121)
+  rootEl: HTMLDivElement | null = null;
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
@@ -521,6 +522,12 @@ export class VideoChat extends React.Component<
   // its own state
   pollSpeaking = () => {
     const videoPCs = window.watchparty.videoPCs ?? {};
+    // People column closed = the ring and badge have no reader: skip the whole
+    // scan. The timer keeps its cadence so reopening needs no restart dance —
+    // an idle tick is one DOM read (round 121); ourStream/PCs keep running
+    if (this.rootEl?.closest("[inert]")) {
+      return;
+    }
     const now = Date.now();
     const pageNow = performance.now();
     Object.entries(videoPCs).forEach(([id, pc]) => {
@@ -623,6 +630,34 @@ export class VideoChat extends React.Component<
       }
     }
   };
+
+  // App re-renders far more often than our props change (chat lines, share
+  // stats, share badges): skip those renders. Every state change renders —
+  // speaking/reconnecting/mic picker/portal are ours; every prop change
+  // renders (roster, deaf, ts badges). Round 121
+  shouldComponentUpdate(nextProps: VideoChatProps, nextState: VideoChatState) {
+    const p = this.props;
+    if (
+      nextProps.socket !== p.socket ||
+      nextProps.participants !== p.participants ||
+      nextProps.pictureMap !== p.pictureMap ||
+      nextProps.nameMap !== p.nameMap ||
+      nextProps.tsMap !== p.tsMap ||
+      nextProps.rosterUpdateTS !== p.rosterUpdateTS ||
+      nextProps.owner !== p.owner ||
+      nextProps.getLeaderTime !== p.getLeaderTime ||
+      nextProps.deaf !== p.deaf ||
+      nextProps.hide !== p.hide
+    ) {
+      return true;
+    }
+    for (const k of Object.keys(nextState) as (keyof VideoChatState)[]) {
+      if (nextState[k] !== this.state[k]) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   componentDidUpdate(prevProps: VideoChatProps) {
     if (this.props.deaf !== prevProps.deaf) {
@@ -1356,6 +1391,9 @@ export class VideoChat extends React.Component<
       SYSTEM_MIC;
     return (
       <div
+        ref={(el) => {
+          this.rootEl = el;
+        }}
         style={{
           display: "flex",
           flexWrap: "wrap",
@@ -1633,6 +1671,15 @@ export class VideoChat extends React.Component<
                             if (p.id !== selfId) {
                               this.attach(p.id);
                             }
+                          }
+                        } else {
+                          // React re-invokes an inline ref (null then the el)
+                          // on every render: only a real unmount leaves a
+                          // detached element here, and that entry must go so
+                          // applyAllVoiceOutputs never visits it (round 121)
+                          const cur = videoRefs[p.id];
+                          if (cur && !cur.isConnected) {
+                            delete videoRefs[p.id];
                           }
                         }
                       }}
