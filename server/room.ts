@@ -818,6 +818,13 @@ export class Room {
     if (data && data.length > 50000) {
       return;
     }
+    // Any pending dead-sharer grace is stale the moment the room's video is
+    // replaced by a command: a sharer who reconnects and starts a share again
+    // (or anyone whose share legitimately changes hands or ends) must not
+    // have their fresh state cleared when the old timer fires and sees
+    // clientId === getSharerId() true again
+    clearTimeout(this.sharerGraceTimer);
+    this.sharerGraceTimer = undefined;
     this.video = data;
     this.videoTS = 0;
     this.paused = false;
