@@ -179,6 +179,27 @@ export const Controls = (props: ControlsProps) => {
     roomSetPlaybackRate,
     roomPlaybackRate,
   } = props;
+  // Keyboard seeking: the same roomSeek the click handler calls, in 5s/30s steps
+  const onSeekKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled || !hasFiniteDuration) {
+      return;
+    }
+    const current = getCurrent();
+    const targetByKey: Record<string, number> = {
+      ArrowLeft: current - 5,
+      ArrowRight: current + 5,
+      PageDown: current - 30,
+      PageUp: current + 30,
+      Home: getStart(),
+      End: getEnd(),
+    };
+    const target = targetByKey[e.key];
+    if (target === undefined) {
+      return;
+    }
+    e.preventDefault();
+    roomSeek(Math.min(Math.max(target, getStart()), getEnd()));
+  };
   // console.log(leaderTime, currentTime);
   const behindThreshold = 10;
   const leader = live?.leader ?? leaderTime;
@@ -284,6 +305,22 @@ export const Controls = (props: ControlsProps) => {
       </div>
       <Progress.Root
         radius="0px"
+        role="slider"
+        tabIndex={0}
+        aria-label="Seek"
+        aria-valuemin={getStart()}
+        aria-valuemax={hasFiniteDuration ? getEnd() : 0}
+        aria-valuenow={
+          hasFiniteDuration
+            ? Math.min(Math.max(getCurrent(), getStart()), getEnd())
+            : 0
+        }
+        aria-valuetext={formatTimestamp(
+          getCurrent(),
+          isLiveStream ? zeroTime : undefined,
+        )}
+        aria-disabled={disabled || undefined}
+        onKeyDown={onSeekKeyDown}
         onClick={(e: any) => {
           if (!disabled) {
             // Read the time from the click event
@@ -514,6 +551,7 @@ export const Controls = (props: ControlsProps) => {
       <div style={{ width: "100px" }}>
         <Slider
           defaultValue={volume}
+          thumbLabel="Volume"
           disabled={muted}
           min={0}
           max={1}
