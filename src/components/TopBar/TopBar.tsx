@@ -12,7 +12,6 @@ import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { ProfileModal } from "../Modal/ProfileModal";
 import Announce from "../Announce/Announce";
 import { InviteButton } from "../InviteButton/InviteButton";
-import appStyles from "../App/App.module.css";
 import { MetadataContext } from "../../MetadataContext";
 import config from "../../config";
 import {
@@ -264,109 +263,33 @@ export const TopBar = (props: {
   const subscribeButton = <SubscribeButton />;
   return (
     <React.Fragment>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          padding: "4px 8px",
-          rowGap: "8px",
-        }}
-      >
+      <div className={styles.bar}>
         <a href="/" style={{ display: "flex" }}>
-          <img
-            style={{ width: "56px", height: "56px" }}
-            src="/logo192.png"
-            alt="WatchParty"
-          />
-          {/* <div
-              style={{
-                height: '48px',
-                width: '48px',
-                marginRight: '10px',
-                borderRadius: '50%',
-                position: 'relative',
-                backgroundColor: '#' + colorMappings.blue,
-              }}
-            >
-              <Icon
-                inverted
-                name="film"
-                size="large"
-                style={{
-                  position: 'absolute',
-                  top: 8,
-                  width: '100%',
-                  margin: '0 auto',
-                }}
-              />
-              <Icon
-                inverted
-                name="group"
-                size="large"
-                color="green"
-                style={{
-                  position: 'absolute',
-                  bottom: 8,
-                  width: '100%',
-                  margin: '0 auto',
-                }}
-              />
-            </div> */}
+          <img className={styles.logo} src="/logo192.png" alt="WatchParty" />
         </a>
         {props.roomTitle || props.roomDescription ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              marginRight: 10,
-              marginLeft: 10,
-            }}
-          >
+          <div className={styles.titleBlock}>
             <div
-              style={{
-                fontSize: "30px",
-                lineHeight: "30px",
-                color: props.roomTitleColor || softWhite,
-                fontWeight: 700,
-                letterSpacing: 1,
-              }}
+              className={styles.title}
+              style={{ color: props.roomTitleColor || softWhite }}
             >
               {props.roomTitle?.toUpperCase()}
             </div>
-            <Text size="sm" style={{}}>
-              {props.roomDescription}
-            </Text>
+            <Text size="sm">{props.roomDescription}</Text>
           </div>
         ) : (
           <React.Fragment>
-            <a href="/" style={{ display: "flex", textDecoration: "none" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                }}
-              >
+            <a href="/" className={styles.wordmark}>
+              <div className={styles.wordmarkInner}>
                 <div
-                  style={{
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                    color: "#a78bfa",
-                    fontSize: "30px",
-                    lineHeight: "30px",
-                  }}
+                  className={styles.wordmarkPart}
+                  style={{ color: "#a78bfa" }}
                 >
                   Watch
                 </div>
                 <div
-                  style={{
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                    color: "#f472b6",
-                    fontSize: "30px",
-                    lineHeight: "30px",
-                    marginLeft: "auto",
-                  }}
+                  className={styles.wordmarkPart}
+                  style={{ color: "#f472b6" }}
                 >
                   Party
                 </div>
@@ -375,23 +298,8 @@ export const TopBar = (props: {
           </React.Fragment>
         )}
         <Announce />
-        <div
-          className={appStyles.mobileStack}
-          style={{
-            display: "flex",
-            marginLeft: "auto",
-            alignItems: "center",
-            gap: "4px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "4px",
-            }}
-          >
+        <div className={styles.actions}>
+          <div className={styles.socials}>
             <ActionIcon
               component="a"
               color="gray"
@@ -400,6 +308,7 @@ export const TopBar = (props: {
               target="_blank"
               rel="noopener noreferrer"
               title="Discord"
+              aria-label="Discord"
             >
               <IconBrandDiscord />
             </ActionIcon>
@@ -411,6 +320,7 @@ export const TopBar = (props: {
               target="_blank"
               rel="noopener noreferrer"
               title="GitHub"
+              aria-label="GitHub"
             >
               <IconBrandGithub />
             </ActionIcon>

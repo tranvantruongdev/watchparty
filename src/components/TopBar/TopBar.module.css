@@ -1,0 +1,111 @@
+/* Round 126: the top bar's inline styles moved here so media queries can
+   flatten it to one row on phones (it stacked to ~186px on a 390px room
+   page: the right-side actions inherited .mobileStack from App.module.css,
+   which goes flex-direction:column at <=900px). Desktop >=900px is
+   pixel-identical to the old inline styles. */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  row-gap: 8px;
+}
+
+.logo {
+  width: 56px;
+  height: 56px;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-right: 10px;
+  margin-left: 10px;
+}
+
+.title {
+  font-size: 30px;
+  line-height: 30px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.wordmark {
+  display: flex;
+  text-decoration: none;
+}
+
+.wordmarkInner {
+  display: flex;
+  align-items: center;
+}
+
+.wordmarkPart {
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 30px;
+}
+
+.actions {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.socials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+@media only screen and (max-width: 900px) {
+  .logo {
+    width: 40px;
+    height: 40px;
+  }
+  .title {
+    font-size: 22px;
+    line-height: 22px;
+  }
+}
+
+@media only screen and (max-width: 600px) {
+  .bar {
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+  .logo {
+    width: 32px;
+    height: 32px;
+  }
+  /* One row can't fit the 218px wordmark next to the buttons: the logo icon
+     carries the brand, "New Room"/"Sign in" stay reachable. */
+  .wordmark {
+    display: none;
+  }
+  .titleBlock {
+    min-width: 0;
+  }
+  .title {
+    font-size: 16px;
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .titleBlock :global(.mantine-Text-root) {
+    display: none;
+  }
+  .socials {
+    display: none;
+  }
+  .actions {
+    flex-wrap: nowrap;
+  }
+  .actions :global(.mantine-Button-root) {
+    padding-inline: 8px;
+  }
+}

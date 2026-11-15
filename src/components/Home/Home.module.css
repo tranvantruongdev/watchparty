@@ -28,9 +28,30 @@
   align-items: center;
 }
 
+.heroImg {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.heroAction {
+  margin-top: 8px;
+  width: 300px;
+}
+
 @media only screen and (max-width: 600px) {
   .heroInner {
     flex-direction: column;
+  }
+  /* In a column flex the inline flex:1 1 0 zeroed the image column's basis
+     and with align-items:center it collapsed to ~75px wide (round 126). */
+  .heroImg {
+    flex: none;
+    width: 100%;
+  }
+  /* The fixed 300px action box made the hero column's min-content 420px and
+     the page scrolled sideways (round 126). */
+  .heroAction {
+    width: 100%;
   }
 }
 

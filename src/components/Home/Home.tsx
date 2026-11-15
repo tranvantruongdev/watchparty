@@ -26,7 +26,7 @@ export const Home = () => {
           heroText={"Watch videos together with friends anywhere."}
           subText={"No registration or download required."}
           action={
-            <div style={{ marginTop: "8px", width: "300px" }}>
+            <div className={styles.heroAction}>
               <NewRoomButton size="xl" />
             </div>
           }
@@ -150,6 +150,15 @@ const Feature = ({
   );
 };
 
+// Intrinsic sizes for the layout-shift reservation (and they let the browser
+// size the image before it loads on a slow connection).
+const HERO_DIMS: Record<string, [number, number]> = {
+  "/screenshot4.png": [2194, 1308],
+  "/screenshot18.png": [2124, 904],
+  "/screenshot14.png": [3000, 1993],
+  "/screenshot5.png": [1254, 654],
+};
+
 export const Hero = ({
   heroText,
   subText,
@@ -177,14 +186,12 @@ export const Hero = ({
           <div className={styles.subText}>{subText2}</div>
           {action}
         </div>
-        <div
-          style={{
-            flex: "1 1 0",
-          }}
-        >
+        <div className={styles.heroImg}>
           <img
             alt="hero"
-            style={{ width: "100%", borderRadius: "10px" }}
+            width={HERO_DIMS[image ?? ""]?.[0]}
+            height={HERO_DIMS[image ?? ""]?.[1]}
+            style={{ width: "100%", height: "auto", borderRadius: "10px" }}
             src={image}
           />
         </div>
