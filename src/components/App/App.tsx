@@ -406,6 +406,11 @@ export class App extends React.Component<AppProps, AppState> {
   // "Local copy" mode: the file this client plays from its own disk
   localCopyFile?: File;
   localCopyObjectUrl?: string;
+  // One chat-notification sound element, reused; a new Audio per message
+  // (round 110) leaked an element for every chat line read while hidden
+  chatAudio?: HTMLAudioElement;
+  // The player's mute state before the sharer preview forced it muted
+  sharePreviewWasMuted?: boolean;
   // The blob URL a non-converted file share plays leftVideo from; revoked when
   // the share ends so the file's handle doesn't stay pinned until tab close
   fileShareObjectUrl?: string;
@@ -486,6 +491,10 @@ export class App extends React.Component<AppProps, AppState> {
     window.clearInterval(this.progressUpdater);
     window.clearTimeout(this.playbackCheckTimer);
     window.clearTimeout(this.ytPostSeekTimer);
+    if (this.localCopyObjectUrl) {
+      URL.revokeObjectURL(this.localCopyObjectUrl);
+      this.localCopyObjectUrl = undefined;
+    }
   }
 
   init = async () => {
@@ -1119,7 +1128,10 @@ export class App extends React.Component<AppProps, AppState> {
         ((document.visibilityState && document.visibilityState !== "visible") ||
           this.state.currentTab !== "chat")
       ) {
-        new Audio("/clearly.mp3").play();
+        if (!this.chatAudio) {
+          this.chatAudio = new Audio("/clearly.mp3");
+        }
+        this.chatAudio.play();
       }
       this.state.chat.push(data);
       if (this.state.chat.length > 100) {
@@ -1874,6 +1886,11 @@ export class App extends React.Component<AppProps, AppState> {
     const url = this.localCopyObjectUrl;
     this.localCopyObjectUrl = undefined;
     this.localCopyFile = undefined;
+    // Revoke, not just drop: the blob handle pinned the whole file until tab
+    // close (measured round 110)
+    if (url) {
+      URL.revokeObjectURL(url);
+    }
     const leftVideo = this.HTMLInterface.getVideoEl();
     if (url && leftVideo && leftVideo.src === url) {
       leftVideo.pause();
@@ -2337,6 +2354,19 @@ export class App extends React.Component<AppProps, AppState> {
         track.stop();
       });
     this.localStreamToPublish = undefined;
+    if (wasSharing) {
+      // Drop the sharer preview mirror with the capture; a viewer's consumer
+      // stream lives in srcObject too, but only the publisher gets here with
+      // wasSharing (their share was never "started")
+      const leftVideo = this.HTMLInterface.getVideoEl();
+      if (leftVideo) {
+        leftVideo.srcObject = null;
+        if (this.sharePreviewWasMuted !== undefined) {
+          leftVideo.muted = this.sharePreviewWasMuted;
+          this.sharePreviewWasMuted = undefined;
+        }
+      }
+    }
     // Release the file share's blob URL. leftVideo keeps the already-decoded
     // media and REC:host's clearState wipes its src right after; the revoke
     // only stops the file's handle from staying pinned until tab close
@@ -2385,6 +2415,25 @@ export class App extends React.Component<AppProps, AppState> {
     if (localTrack && !localTrack.onended) {
       // Stop sharing if the local stream stops
       localTrack.onended = () => this.stopPublishingLocalStream();
+    }
+    // The sharer's own preview: no PC connects to ourselves, so nothing ever
+    // streams back into the player and it stayed black (measured round 110).
+    // Mirror the live capture, muted, on every setup (REC:host's clearState
+    // wipes the element each time the host state re-lands)
+    if (
+      sharer?.id === selfId &&
+      this.localStreamToPublish &&
+      !this.isLocalStreamAFile
+    ) {
+      const leftVideo = this.HTMLInterface.getVideoEl();
+      if (leftVideo) {
+        if (leftVideo.srcObject !== this.localStreamToPublish) {
+          this.sharePreviewWasMuted = leftVideo.muted;
+        }
+        leftVideo.srcObject = this.localStreamToPublish;
+        leftVideo.muted = true;
+        this.localPlay();
+      }
     }
     if (this.state.roomMedia.includes("@")) {
       let prefix = "screenshare://";
@@ -4562,6 +4611,9 @@ export class App extends React.Component<AppProps, AppState> {
                 overflow: "hidden",
                 gap: "4px",
               }}
+              // Collapsed = width 0, but clipped content stays in the Tab
+              // order: block it while invisible (measured round 110)
+              {...(!this.state.showChatColumn ? ({ inert: "" } as any) : {})}
               className={`${
                 (this.state.fullScreen
                   ? styles.fullHeightColumnFullscreen
@@ -4652,6 +4704,14 @@ export class App extends React.Component<AppProps, AppState> {
                     // visibility: this.state.showPeopleColumn ? 'visible' : 'hidden',
                     transition: "height ease-out 0.5s",
                   }}
+                  // Closed = height 0, but the voice tiles inside keep Tab
+                  // focus (measured round 110). The overlay is clipped, so
+                  // make it unfocusable while closed; the voice connection
+                  // itself runs in JS and keeps going. React 18 types don't
+                  // know `inert`, hence the spread cast
+                  {...(!this.state.showPeopleColumn
+                    ? ({ inert: "" } as any)
+                    : {})}
                 >
                   <VideoChat
                     ref={this.videoChatRef}
