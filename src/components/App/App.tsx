@@ -2427,7 +2427,14 @@ export class App extends React.Component<AppProps, AppState> {
     ) {
       const leftVideo = this.HTMLInterface.getVideoEl();
       if (leftVideo) {
-        if (leftVideo.srcObject !== this.localStreamToPublish) {
+        // Save once per share: a mid-share clearState wipes srcObject, so a
+        // later setup would re-save the element's forced-preview muted=true
+        // over the user's pre-share state (measured round 111: the restore
+        // then left the player muted after the share ended)
+        if (
+          leftVideo.srcObject !== this.localStreamToPublish &&
+          this.sharePreviewWasMuted === undefined
+        ) {
           this.sharePreviewWasMuted = leftVideo.muted;
         }
         leftVideo.srcObject = this.localStreamToPublish;
@@ -3356,6 +3363,18 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
   localToggleMute = () => {
+    // While the sharer preview mirrors the live capture (element forced
+    // muted), a click must not unmute the mirror — the sharer would hear
+    // their own capture (echo, measured round 111). The button reads
+    // "Unmute" here, so record that choice and apply it when the share ends
+    if (
+      this.localStreamToPublish &&
+      !this.isLocalStreamAFile &&
+      this.sharePreviewWasMuted !== undefined
+    ) {
+      this.sharePreviewWasMuted = false;
+      return;
+    }
     this.localSetMute(!this.Player().isMuted());
   };
 

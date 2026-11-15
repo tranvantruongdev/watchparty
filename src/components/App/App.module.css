@@ -574,3 +574,62 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* Phone layouts (round 111). The player + overlays live in an unclassed
+   wrapper div (inline flex-grow: 1) and the controls row is playerColumn's
+   so both are picked structurally: :has() pins the player wrapper and the
+   controls row is picked by its own module class (div:last-child alone would
+   reorder the controls instead of the player — measured round 111).
+   Portrait: the stacked action row (~400 px of buttons) pushed the player
+   below the fold and left it tiny — the video block opens on top now, chat
+   below it. Landscape: the column takes the viewport height and the player +
+   controls take the first screen (combo/share rows wrap and fall below the
+   fold); chat stays below, collapsible via its chevron, which renders there
+   because landscape screen width > 600. */
+@media only screen and (max-width: 600px) {
+  :global(#playerColumn) > div:has(> [class*="playerContainer"]) {
+    order: -2;
+  }
+
+  :global(#playerColumn) > div[class*="_controls_"] {
+    order: -1;
+  }
+}
+
+@media only screen and (max-width: 900px) and (orientation: landscape) {
+  :global(#playerColumn) .mobileStack {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .shareButton {
+    min-width: 0;
+  }
+
+  :global(#playerColumn) > div[class*="_controls_"] {
+    order: -1;
+  }
+
+  /* First screen = video block + controls: the wrapper gets the viewport
+     height minus the 72 px top bar, the ~76 px controls row and slack for a
+     wrapping top bar; combo/share rows scroll below the fold. The flexed
+     wrapper refuses to shrink below its content otherwise (min-height). */
+  :global(#playerColumn) > div:has(> [class*="playerContainer"]) {
+    order: -2;
+    height: calc(100dvh - 176px);
+    min-height: 0;
+    flex-grow: 0;
+  }
+
+  .playerContainer {
+    /* the sized wrapper already bounds the box; 48vh would overflow it */
+    min-height: 0;
+  }
+
+  .playerContainer :global(#leftVideo) {
+    height: 100%;
+    /* beats the inline calc() cap: the sized wrapper already bounds it */
+    max-height: none !important;
+    object-fit: contain;
+  }
+}
