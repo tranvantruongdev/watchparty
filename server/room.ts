@@ -1247,8 +1247,20 @@ export class Room {
       return;
     }
     // Emojis can be multiple bytes; value must be a string or its coerced
-    // key ("[object Object]", "123") would be stored and broadcast room-wide
-    if (typeof data.value !== "string" || data.value.length > 8) {
+    // key ("[object Object]", "123") would be stored and broadcast room-wide.
+    // R116: real picker emojis run long in UTF-16 units (👨‍👩‍👧‍👦 = 11,
+    // 🧑🏻‍🤝‍🧑🏽 = 12, 👩🏻‍❤️‍💋‍👨🏽 = 14) and the old 8-unit cap silently
+    // dropped them; still bounded — 24 units AND at most 8 grapheme clusters
+    if (typeof data.value !== "string" || data.value.length > 24) {
+      return;
+    }
+    if (
+      [
+        ...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(
+          data.value,
+        ),
+      ].length > 8
+    ) {
       return;
     }
     // The reactions map is a plain object keyed by this string: "toString" or
@@ -1303,7 +1315,16 @@ export class Room {
     }
     // Emojis can be multiple bytes; value must be a string (same rule as
     // addReaction, including the inherited-key refusal)
-    if (typeof data.value !== "string" || data.value.length > 8) {
+    if (typeof data.value !== "string" || data.value.length > 24) {
+      return;
+    }
+    if (
+      [
+        ...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(
+          data.value,
+        ),
+      ].length > 8
+    ) {
       return;
     }
     if (data.value in Object.prototype) {

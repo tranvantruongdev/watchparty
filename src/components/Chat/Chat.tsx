@@ -1,4 +1,5 @@
 import React, { RefObject, useContext } from "react";
+import { createPortal } from "react-dom";
 import {
   ActionIcon,
   Avatar,
@@ -160,15 +161,18 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   handleReactionClick = (value: string, id?: string, timestamp?: string) => {
+    // The picker calls this without id/timestamp: fall back to the message the
+    // reaction menu was opened for, so a re-pick finds the message and toggles
+    // the reaction off instead of always sending an add the server no-ops on
+    const msgId = id || this.state.reactionMenu.selectedMsgId;
+    const msgTimestamp =
+      timestamp || this.state.reactionMenu.selectedMsgTimestamp;
     const msg = this.props.chat.find(
-      (m) => m.id === id && m.timestamp === timestamp,
+      (m) => m.id === msgId && m.timestamp === msgTimestamp,
     );
-    const data = {
-      value,
-      msgId: id || this.state.reactionMenu.selectedMsgId,
-      msgTimestamp: timestamp || this.state.reactionMenu.selectedMsgTimestamp,
-    };
-    if (msg?.reactions?.[value].includes(clientId)) {
+    const data = { value, msgId, msgTimestamp };
+    // The ?. after [value]: a message can have reactions but not this value
+    if (msg?.reactions?.[value]?.includes(clientId)) {
       this.props.socket.emit("CMD:removeReaction", data);
     } else {
       this.props.socket.emit("CMD:addReaction", data);
@@ -431,60 +435,51 @@ export class Chat extends React.Component<ChatProps> {
             </React.Suspense>
           </div>
         )}
-        <CSSTransition
-          in={this.state.reactionMenu.isOpen}
-          timeout={300}
-          classNames={{
-            enter: styles["reactionMenu-enter"],
-            enterActive: styles["reactionMenu-enter-active"],
-            exit: styles["reactionMenu-exit"],
-            exitActive: styles["reactionMenu-exit-active"],
-          }}
-          unmountOnExit
-        >
-          <div
-            style={{
-              position: "fixed",
-              // Clamp into the viewport: on a short screen (landscape phone,
-              // 390px tall) a raw offset puts the picker off-screen entirely
-              top: Math.max(
-                8,
-                Math.min(
-                  this.state.reactionMenu.yPosition - 150,
-                  window.innerHeight - 450,
+        {this.state.reactionMenu.isOpen &&
+          // Portal to the document body: position:fixed inside the chat column
+          // is anchored to the column, not the viewport, because .rightColumn's
+          // backdrop-filter makes it the containing block for fixed descendants
+          // (the picker then lands at left+columnX, off the right edge of the
+          // screen). In the body, the fixed clamp below works as written
+          createPortal(
+            <div
+              style={{
+                position: "fixed",
+                // Clamp into the viewport: on a short screen (landscape phone,
+                // 390px tall) a raw offset puts the picker off-screen entirely
+                top: Math.max(
+                  8,
+                  Math.min(
+                    this.state.reactionMenu.yPosition - 150,
+                    window.innerHeight - 450,
+                  ),
                 ),
-              ),
-              left: Math.max(
-                8,
-                Math.min(
-                  this.state.reactionMenu.xPosition - 240,
-                  window.innerWidth - 370,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    this.state.reactionMenu.xPosition - 240,
+                    window.innerWidth - 370,
+                  ),
                 ),
-              ),
-              maxWidth: "calc(100vw - 16px)",
-            }}
-          >
-            <React.Suspense fallback={null}>
-              <EmojiPicker
-                theme="dark"
-                previewPosition="none"
-                maxFrequentRows={1}
-                perLine={6}
-                onClickOutside={() => this.setReactionMenu(false)}
-                onEmojiSelect={(emoji: any) => {
-                  this.handleReactionClick(emoji.native);
-                  this.setReactionMenu(false);
-                }}
-              />
-            </React.Suspense>
-          </div>
-          {/* <ReactionMenu
-            handleReactionClick={this.handleReactionClick}
-            closeMenu={() => this.setReactionMenu(false)}
-            yPosition={this.state.reactionMenu.yPosition}
-            xPosition={this.state.reactionMenu.xPosition}
-          /> */}
-        </CSSTransition>
+                maxWidth: "calc(100vw - 16px)",
+              }}
+            >
+              <React.Suspense fallback={null}>
+                <EmojiPicker
+                  theme="dark"
+                  previewPosition="none"
+                  maxFrequentRows={1}
+                  perLine={6}
+                  onClickOutside={() => this.setReactionMenu(false)}
+                  onEmojiSelect={(emoji: any) => {
+                    this.handleReactionClick(emoji.native);
+                    this.setReactionMenu(false);
+                  }}
+                />
+              </React.Suspense>
+            </div>,
+            document.body,
+          )}
         {this.state.replyTo && (
           <div
             className={styles.replyComposer}
