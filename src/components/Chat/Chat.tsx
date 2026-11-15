@@ -538,6 +538,7 @@ export class Chat extends React.Component<ChatProps> {
             <div style={{ display: "flex", gap: 4 }}>
               {this.props.voiceButton}
               <ActionIcon
+                className={styles.emojiToggle}
                 onClick={() => {
                   // Add a delay to prevent the click from triggering onClickOutside
                   const curr = this.state.isPickerOpen;

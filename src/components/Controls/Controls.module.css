@@ -49,3 +49,10 @@
 .action {
   cursor: pointer;
 }
+
+/* The role=button icons: show keyboard focus like the real buttons get */
+.controls svg[role="button"]:focus-visible {
+  outline: 2px solid #845ef7;
+  outline-offset: 2px;
+  border-radius: 4px;
+}

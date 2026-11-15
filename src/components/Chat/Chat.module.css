@@ -90,6 +90,16 @@
   border-radius: 16px;
 }
 
+/* 28px default ActionIcons are under the ~36px tap-target floor on touch
+   screens; with a mouse the compact size stays */
+@media (pointer: coarse) {
+  .floatReactions :global(.mantine-ActionIcon-root),
+  .emojiToggle {
+    width: 36px;
+    height: 36px;
+  }
+}
+
 .system {
   font-size: 10px;
   text-transform: uppercase;

@@ -107,6 +107,18 @@ export class SignInButton extends React.Component<SignInButtonProps> {
     if (this.context.user) {
       return (
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Open profile"
+          className="profileButton"
+          onKeyDown={(e: React.KeyboardEvent) => {
+            // Keys typed inside the profile modal bubble here through the portal
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this.setState({ isProfileOpen: true });
+            }
+          }}
           style={{
             margin: "4px",
             minWidth: "40px",
@@ -260,7 +272,11 @@ export const TopBar = (props: {
         }}
       >
         <a href="/" style={{ display: "flex" }}>
-          <img style={{ width: "56px", height: "56px" }} src="/logo192.png" />
+          <img
+            style={{ width: "56px", height: "56px" }}
+            src="/logo192.png"
+            alt="WatchParty"
+          />
           {/* <div
               style={{
                 height: '48px',

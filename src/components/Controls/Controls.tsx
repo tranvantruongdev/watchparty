@@ -18,7 +18,43 @@ import {
   IconMaximize,
   IconPictureInPicture,
   IconPlayerSkipForwardFilled,
+  type IconProps,
 } from "@tabler/icons-react";
+
+/** The control-bar icons are bare SVGs: mouse-only with no name. Wrap the
+ *  interactive ones in a button role so keyboard users can reach them. */
+const ActIcon = ({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  ...rest
+}: {
+  icon: React.ComponentType<IconProps>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+} & IconProps) => (
+  <Icon
+    role="button"
+    tabIndex={0}
+    aria-label={label}
+    title={label}
+    aria-disabled={disabled || undefined}
+    onClick={() => {
+      if (!disabled) {
+        onClick();
+      }
+    }}
+    onKeyDown={(e: React.KeyboardEvent) => {
+      if (!disabled && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        onClick();
+      }
+    }}
+    {...rest}
+  />
+);
 
 interface ControlsProps {
   duration: number;
@@ -180,13 +216,22 @@ export const Controls = (props: ControlsProps) => {
   return (
     <div className={styles.controls}>
       {paused ? (
-        <IconPlayerPlayFilled {...playPauseProps} />
+        <ActIcon
+          icon={IconPlayerPlayFilled}
+          label={paused ? "Play" : "Pause"}
+          {...playPauseProps}
+        />
       ) : (
-        <IconPlayerPauseFilled {...playPauseProps} />
+        <ActIcon
+          icon={IconPlayerPauseFilled}
+          label={paused ? "Play" : "Pause"}
+          {...playPauseProps}
+        />
       )}
       {playlist.length > 0 && (
-        <IconPlayerSkipForwardFilled
-          title="Skip to next"
+        <ActIcon
+          icon={IconPlayerSkipForwardFilled}
+          label="Skip to next"
           className={styles.action}
           onClick={() => roomPlaylistPlay(0)}
         />
@@ -356,20 +401,23 @@ export const Controls = (props: ControlsProps) => {
           </Menu.Dropdown>
         </Menu>
       }
-      <IconRepeat
-        onClick={() => {
-          if (!disabled) {
-            props.roomSetLoop(Boolean(!props.loop));
-          }
-        }}
+      <ActIcon
+        icon={IconRepeat}
+        label="Loop"
+        disabled={disabled}
+        onClick={() => props.roomSetLoop(Boolean(!props.loop))}
         className={` ${styles.action}`}
-        title="Loop"
         color={props.loop ? "green" : softWhite}
       />
       {props.isYouTube ? (
         <Menu>
           <Menu.Target>
-            <IconBadgeCc className={styles.action} />
+            <IconBadgeCc
+              className={styles.action}
+              role="button"
+              tabIndex={0}
+              aria-label="Captions"
+            />
           </Menu.Target>
           <Menu.Dropdown>
             {[
@@ -392,12 +440,11 @@ export const Controls = (props: ControlsProps) => {
           </Menu.Dropdown>
         </Menu>
       ) : (
-        <IconBadgeCc
-          onClick={() => {
-            localSubtitleModal();
-          }}
+        <ActIcon
+          icon={IconBadgeCc}
+          label="Captions"
+          onClick={() => localSubtitleModal()}
           className={` ${styles.action}`}
-          title="Captions"
           color={subtitled ? "green" : softWhite}
         />
       )}
@@ -407,7 +454,9 @@ export const Controls = (props: ControlsProps) => {
           <Menu.Target>
             <IconHeadphones
               className={styles.action}
-              title="Audio track"
+              role="button"
+              tabIndex={0}
+              aria-label="Audio track"
               color={softWhite}
             />
           </Menu.Target>
@@ -427,35 +476,38 @@ export const Controls = (props: ControlsProps) => {
           </Menu.Dropdown>
         </Menu>
       )}
-      <IconTheater
+      <ActIcon
+        icon={IconTheater}
+        label="Theater Mode"
         onClick={() => localFullScreen(false)}
         className={` ${styles.action}`}
-        title="Theater Mode"
       />
-      <IconMaximize
+      <ActIcon
+        icon={IconMaximize}
+        label="Fullscreen"
         onClick={() => localFullScreen(true)}
         className={` ${styles.action}`}
-        title="Fullscreen"
       />
       {togglePictureInPicture && (
-        <IconPictureInPicture
+        <ActIcon
+          icon={IconPictureInPicture}
+          label="Picture-in-Picture"
           onClick={togglePictureInPicture}
           className={` ${styles.action}`}
-          title="Picture-in-Picture"
         />
       )}
       {muted ? (
-        <IconVolumeOff
-          onClick={() => {
-            localToggleMute();
-          }}
+        <ActIcon
+          icon={IconVolumeOff}
+          label="Unmute"
+          onClick={() => localToggleMute()}
           className={` ${styles.action}`}
         />
       ) : (
-        <IconVolume
-          onClick={() => {
-            localToggleMute();
-          }}
+        <ActIcon
+          icon={IconVolume}
+          label="Mute"
+          onClick={() => localToggleMute()}
           className={` ${styles.action}`}
         />
       )}
