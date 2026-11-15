@@ -482,6 +482,8 @@ export class App extends React.Component<AppProps, AppState> {
     document.onkeydown = null;
     window.clearInterval(this.heartbeat);
     window.clearInterval(this.tsInterval);
+    window.clearInterval(this.shareStatsTimer);
+    window.clearInterval(this.progressUpdater);
     window.clearTimeout(this.playbackCheckTimer);
     window.clearTimeout(this.ytPostSeekTimer);
   }
@@ -1244,7 +1246,10 @@ export class App extends React.Component<AppProps, AppState> {
       // Only the ts badges in the people column display these, and they only
       // change every second while it is visible — don't re-render the whole
       // tree for them otherwise
-      if (this.state.showPeopleColumn) {
+      if (
+        this.state.showPeopleColumn &&
+        !this.sameTsMap(this.state.tsMap, data)
+      ) {
         this.setState({ tsMap: data }, onTick);
       } else {
         onTick();
@@ -2636,9 +2641,10 @@ export class App extends React.Component<AppProps, AppState> {
     const mbps =
       ((video.bytesReceived - last.bytes) * 8) / (now - last.ts) / 1000;
     const codec = stats.get(video.codecId)?.mimeType?.split("/")[1] ?? "";
-    this.setState({
-      shareStats: `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`,
-    });
+    const shareStats = `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`;
+    if (shareStats !== this.state.shareStats) {
+      this.setState({ shareStats });
+    }
   };
 
   // The sharer's own badge: what the encode actually does, which is what every
@@ -2683,9 +2689,10 @@ export class App extends React.Component<AppProps, AppState> {
         : lim === "cpu"
           ? " · encoder limited by CPU"
           : ` · encoder limited by ${lim}`;
-    this.setState({
-      shareSendStats: ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${avgFps}fps${limit}`,
-    });
+    const shareSendStats = ` · sending ${out.frameWidth ?? 0}x${out.frameHeight ?? 0} ${avgFps}fps${limit}`;
+    if (shareSendStats !== this.state.shareSendStats) {
+      this.setState({ shareSendStats });
+    }
   };
 
   startVBrowser = async (options: { size: string }) => {
@@ -3386,6 +3393,7 @@ export class App extends React.Component<AppProps, AppState> {
       <>
         <ActionIcon
           title={talking ? "Turn off mic" : "Turn on mic"}
+          aria-label={talking ? "Mute microphone" : "Unmute microphone"}
           color={talking ? "red" : "green"}
           onClick={() =>
             talking
@@ -3397,6 +3405,7 @@ export class App extends React.Component<AppProps, AppState> {
         </ActionIcon>
         <ActionIcon
           title={deaf ? "Hear the others" : "Don't hear the others"}
+          aria-label={deaf ? "Undeafen" : "Deafen"}
           color={deaf ? "red" : "gray"}
           onClick={() => {
             window.localStorage.setItem("watchparty-deaf", deaf ? "0" : "1");
@@ -3478,6 +3487,16 @@ export class App extends React.Component<AppProps, AppState> {
       return calculateMedian(values);
     }
     return Math.max(...values);
+  };
+
+  // A paused room reports the same position for everyone every second; the ts
+  // badges would then re-render the whole tree for an identical map
+  sameTsMap = (a: NumberDict, b: NumberDict) => {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) {
+      return false;
+    }
+    return keys.every((key) => a[key] === b[key]);
   };
 
   onVideoEnded = (url: string) => {
@@ -4132,6 +4151,14 @@ export class App extends React.Component<AppProps, AppState> {
                         />
                       </div>
                     )}
+                    {this.playingScreenShare() &&
+                      sharer &&
+                      sharer.id !== clientId && (
+                        <span className={styles.visuallyHidden}>
+                          {(this.state.nameMap[sharer.id] ?? "Someone") +
+                            " is sharing their screen"}
+                        </span>
+                      )}
                     {this.isSharingScreen() && (
                       <div className={styles.shareStats}>
                         You're sharing your screen (
