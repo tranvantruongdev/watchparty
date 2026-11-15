@@ -26,6 +26,7 @@ import {
   IconVolume,
   IconX,
 } from "@tabler/icons-react";
+import classes from "./VideoChat.module.css";
 
 interface VideoChatProps {
   socket: Socket;
@@ -466,8 +467,12 @@ export class VideoChat extends React.Component<
     this.socket.on("connect", this.onSocketConnect);
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshMics);
     this.refreshMics();
-    // ~2 polls a second is plenty; Chrome updates audioLevel roughly that fast
-    this.speakTimer = setInterval(this.pollSpeaking, 450);
+    // The speaking poll has work only while a voice PC exists: a remount into
+    // an active voice session restarts it here; a fresh room stays timer-less
+    // until updateWebRTC creates the first PC (see startSpeakTimer)
+    if (Object.keys(window.watchparty.videoPCs ?? {}).length) {
+      this.startSpeakTimer();
+    }
   }
 
   componentWillUnmount() {
@@ -493,6 +498,16 @@ export class VideoChat extends React.Component<
       this.audioCtx = undefined;
     }
   }
+
+  // (Re)start the speaking poll. Idle cost: with nobody in voice there is no
+  // stream to analyse, so the timer only lives while a PC does — updateWebRTC
+  // starts it when a PC appears, pollSpeaking stops itself when the map empties
+  startSpeakTimer = () => {
+    if (!this.speakTimer) {
+      // ~2 polls a second is plenty; Chrome updates audioLevel roughly that fast
+      this.speakTimer = setInterval(this.pollSpeaking, 450);
+    }
+  };
 
   // Who is talking right now, so a dead mic or a half-broken route is visible
   // at a glance. Chrome publishes each receiver's incoming audio level
@@ -592,6 +607,20 @@ export class VideoChat extends React.Component<
       recon.some((id, i) => id !== prevRecon[i])
     ) {
       this.setState({ reconnecting: recon });
+    }
+    // Everyone left voice: no PCs, nothing left to analyse — stop the timer
+    // until updateWebRTC creates the next one, and drop the speaking markers
+    // (the loop above only visits live PCs, so a departed peer's marker would
+    // otherwise keep its ring lit and outlive them into a rejoin)
+    if (!Object.keys(videoPCsNow).length) {
+      if (this.speakTimer) {
+        clearInterval(this.speakTimer);
+        this.speakTimer = undefined;
+      }
+      if (Object.keys(this.speakSeen).length) {
+        this.speakSeen = {};
+        this.setState({ speaking: [] });
+      }
     }
   };
 
@@ -715,7 +744,6 @@ export class VideoChat extends React.Component<
     if (!pc) {
       return;
     }
-    console.log("recv", from, data);
     if (msg.ice !== undefined) {
       // Candidates can outlive the PC they belong to (rebuild races during a
       // network blip); dropping them is fine, throwing is not. Before any
@@ -972,6 +1000,9 @@ export class VideoChat extends React.Component<
     Object.keys(videoPCs).forEach((key) => {
       videoPCs[key].close();
       delete videoPCs[key];
+      // Same reason as the per-peer teardown in updateWebRTC: no detached
+      // element left behind
+      delete window.watchparty.videoRefs[key];
     });
     this.socket.emit("CMD:leaveVideo");
   };
@@ -1019,6 +1050,9 @@ export class VideoChat extends React.Component<
         fresh = await navigator.mediaDevices.getUserMedia({ video: true });
       } catch (e) {
         console.warn("camera reopen failed", e);
+        // The click showed nothing before (console.warn only): say why on the
+        // tile, same channel as a device that died on its own
+        this.setState({ deviceHint: "Camera unavailable" });
         return;
       }
       // Left / a teardown mutated the stream while the device opened
@@ -1032,6 +1066,10 @@ export class VideoChat extends React.Component<
       const newTrack = fresh.getVideoTracks()[0];
       ourStream.removeTrack(dead);
       ourStream.addTrack(newTrack);
+      // Attach the ended listener NOW, before the replaceTrack awaits: ended
+      // fires once, and a camera that dies while they run was never noticed
+      // with the listener attached only after them
+      newTrack.addEventListener("ended", () => this.cameraEnded());
       await Promise.all(
         Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
           if (id === getOrCreateClientId() || pc.connectionState === "closed") {
@@ -1045,8 +1083,11 @@ export class VideoChat extends React.Component<
             .catch(() => {});
         }),
       );
-      newTrack.addEventListener("ended", () => this.cameraEnded());
-      this.clearDeviceHint("Camera");
+      // A camera that died during the awaits already re-set the hint through
+      // cameraEnded — do not clear a live problem
+      if (newTrack.readyState === "live") {
+        this.clearDeviceHint("Camera");
+      }
       this.forceUpdate();
     } finally {
       this.cameraReopening = false;
@@ -1100,6 +1141,9 @@ export class VideoChat extends React.Component<
         delete videoPCs[key];
         delete this.remoteStreams[key];
         this.dropVoiceNode(key);
+        // Their tile unmounts with them; without this the detached <video>
+        // lingers in videoRefs forever (applyAllVoiceOutputs keeps visiting it)
+        delete videoRefs[key];
       }
     });
     // Not listed in voice yet (first join, or our entry was dropped by a
@@ -1277,10 +1321,11 @@ export class VideoChat extends React.Component<
         };
       }
     });
+    // PCs exist (or just did): the speaking poll has work again
+    this.startSpeakTimer();
   };
 
   sendSignal = async (to: string, data: any) => {
-    console.log("send", to, data);
     this.socket.emit("signal", { to, msg: data });
   };
 
@@ -1383,6 +1428,13 @@ export class VideoChat extends React.Component<
             <div key={p.id}>
               <div
                 data-speaking={isSpeaking(p.id) ? "true" : "false"}
+                // The speaking ring is color-only: name it for screen readers
+                aria-label={
+                  isSpeaking(p.id)
+                    ? `${nameMap[p.id] || p.id} is speaking`
+                    : undefined
+                }
+                role={isSpeaking(p.id) ? "group" : undefined}
                 style={{
                   position: "relative",
                 }}
@@ -1413,6 +1465,7 @@ export class VideoChat extends React.Component<
                     }
                   />
                   <div
+                    className={classes.controls}
                     style={{
                       display: "flex",
                       justifyContent: "center",
@@ -1438,12 +1491,22 @@ export class VideoChat extends React.Component<
                         <ActionIcon
                           color={this.getVideoWebRTC() ? "green" : "red"}
                           onClick={this.toggleVideoWebRTC}
+                          aria-label={
+                            this.getVideoWebRTC()
+                              ? "Turn off camera"
+                              : "Turn on camera"
+                          }
                         >
                           <IconVideo />
                         </ActionIcon>
                         <ActionIcon
                           color={this.getAudioWebRTC() ? "green" : "red"}
                           onClick={this.toggleAudioWebRTC}
+                          aria-label={
+                            this.getAudioWebRTC()
+                              ? "Mute microphone"
+                              : "Unmute microphone"
+                          }
                         >
                           <IconMicrophone />
                         </ActionIcon>
@@ -1470,10 +1533,22 @@ export class VideoChat extends React.Component<
                     )}
                     {p.id !== selfId && (
                       <>
-                        {p.isVideoChat && <IconVideo color={softWhite} />}
+                        {/* Color-only status icons: give screen readers the
+                            state the color carries (round 102) */}
+                        {p.isVideoChat && (
+                          <IconVideo
+                            color={softWhite}
+                            role="img"
+                            aria-label={`${nameMap[p.id] || p.id} camera on`}
+                          />
+                        )}
                         {p.isVideoChat && (
                           <IconMicrophone
                             color={p.isMuted ? "red" : softWhite}
+                            role="img"
+                            aria-label={`${nameMap[p.id] || p.id} ${
+                              p.isMuted ? "muted" : "microphone on"
+                            }`}
                           />
                         )}
                       </>
@@ -1529,12 +1604,21 @@ export class VideoChat extends React.Component<
                     <video
                       ref={(el) => {
                         if (el) {
+                          // Inline refs re-run on every render; apply (and
+                          // attach) only when the element itself is new — a
+                          // changed volume/deaf/stream re-applies through
+                          // applyAllVoiceOutputs (slider, deaf prop) and
+                          // attach (ontrack), so a same-element rerun was
+                          // pure overhead
+                          const isNew = videoRefs[p.id] !== el;
                           videoRefs[p.id] = el;
-                          // muted/volume come from here only (no React muted
-                          // prop to fight it); self is always muted
-                          this.applyVoiceOutput(p.id);
-                          if (p.id !== selfId) {
-                            this.attach(p.id);
+                          if (isNew) {
+                            // muted/volume come from here only (no React muted
+                            // prop to fight it); self is always muted
+                            this.applyVoiceOutput(p.id);
+                            if (p.id !== selfId) {
+                              this.attach(p.id);
+                            }
                           }
                         }
                       }}
@@ -1554,6 +1638,7 @@ export class VideoChat extends React.Component<
                         ...videoChatContentStyle,
                         ...(isSpeaking(p.id) ? speakingStyle : {}),
                       }}
+                      alt={nameMap[p.id] || p.id}
                       src={
                         pictureMap[p.id] ||
                         getDefaultPicture(
