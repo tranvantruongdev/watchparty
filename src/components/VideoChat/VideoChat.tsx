@@ -1154,12 +1154,17 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
 
   toggleAudioWebRTC = () => {
     const ourStream = window.watchparty.ourStream;
-    if (ourStream && ourStream.getAudioTracks()[0]) {
-      ourStream.getAudioTracks()[0].enabled =
-        !ourStream.getAudioTracks()[0]?.enabled;
-      if (ourStream.getAudioTracks()[0].enabled)
-        this.clearDeviceHint("Microphone");
+    const audioTrack = ourStream && ourStream.getAudioTracks()[0];
+    if (!audioTrack) {
+      // Listening (auto-listen, or mic-off removed the track): there is no
+      // track to flip, the button means "turn my mic on" — same path as the
+      // chat-bar mic button (it used to be a silent no-op here, measured
+      // round 165: 0 bytes out for the whole 30 s window)
+      this.setupWebRTC();
+      return;
     }
+    audioTrack.enabled = !audioTrack.enabled;
+    if (audioTrack.enabled) this.clearDeviceHint("Microphone");
     this.emitUserMute();
     this.forceUpdate();
   };
