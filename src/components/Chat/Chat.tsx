@@ -115,6 +115,10 @@ export class Chat extends React.Component<ChatProps> {
     isNearBottom: true,
     // Messages that arrived while scrolled up; shown on the jump button
     unread: 0,
+    // The join history lands in one post-paint commit (measured r139): while
+    // it does, keep the live region inert so a screen reader doesn't read the
+    // whole backlog on load; flip to polite once the backlog has settled
+    liveReady: false,
     isPickerOpen: false,
     reactionMenu: {
       isOpen: false,
@@ -133,10 +137,22 @@ export class Chat extends React.Component<ChatProps> {
     // Messages live in chatStore (round 130) so an incoming message re-renders
     // only Chat, not the whole App; memo'd ChatMessages bail via the comparator
     this.unsubChatStore = chatStore.subscribe(() => this.forceUpdate());
+    // When the on-screen keyboard opens (interactive-widget=resizes-content),
+    // this container's height shrinks WITHOUT a scroll event, so scrollTop
+    // stays and the newest messages fall below the fold while the input dock
+    // stays visible. Pin back to the bottom — but only if the user was there;
+    // someone scrolled up reading history keeps their position.
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.state.isNearBottom) this.scrollToBottom();
+    });
+    if (this.messagesRef.current)
+      this.resizeObserver.observe(this.messagesRef.current);
   }
 
   componentWillUnmount() {
     this.unsubChatStore?.();
+    this.resizeObserver?.disconnect();
+    if (this.liveTimer) window.clearTimeout(this.liveTimer);
   }
 
   componentDidUpdate(prevProps: ChatProps) {
@@ -144,6 +160,12 @@ export class Chat extends React.Component<ChatProps> {
     if (scrollTimestamp !== this.lastScrollTS) {
       if (this.lastScrollTS === 0 || this.state.isNearBottom) {
         this.scrollToBottom();
+      }
+      if (this.lastScrollTS === 0 && !this.liveTimer) {
+        this.liveTimer = window.setTimeout(() => {
+          this.liveTimer = undefined;
+          this.setState({ liveReady: true });
+        }, 1000);
       }
       this.lastScrollTS = scrollTimestamp;
     }
@@ -169,6 +191,8 @@ export class Chat extends React.Component<ChatProps> {
   // last scrollTimestamp seen by componentDidUpdate above
   lastScrollTS = 0;
   unsubChatStore?: () => void;
+  resizeObserver?: ResizeObserver;
+  liveTimer?: number;
 
   setReactionMenu = (
     isOpen: boolean,
@@ -414,7 +438,7 @@ export class Chat extends React.Component<ChatProps> {
         >
           <div
             role="log"
-            aria-live="polite"
+            aria-live={this.state.liveReady ? "polite" : "off"}
             aria-relevant="additions"
             aria-label="Chat messages"
             style={{ display: "flex", flexDirection: "column", gap: "8px" }}

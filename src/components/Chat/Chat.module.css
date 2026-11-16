@@ -52,6 +52,15 @@
   min-width: 0;
 }
 
+/* Skip painting + laying out off-screen message rows: with the full
+   100-message history the browser no longer runs the whole list per scroll
+   step or per new row. contain-intrinsic-size keeps the scrollbar steady:
+   "auto" remembers each row's real height once it has been rendered. */
+.comment {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
 /* Soft glass bubble around each message body (name + time + text) */
 .bubble {
   background: rgba(255, 255, 255, 0.045);
