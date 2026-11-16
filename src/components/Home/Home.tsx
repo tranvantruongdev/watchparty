@@ -30,7 +30,8 @@ export const Home = () => {
               <NewRoomButton size="xl" />
             </div>
           }
-          image={"/screenshot4.png"}
+          image={"/screenshot4.webp"}
+          eager
         />
         <div className={styles.featureSection}>
           <Feature
@@ -63,7 +64,7 @@ export const Home = () => {
         <Hero
           heroText={"React to moments together."}
           subText={"Find moments of shared joy even when you're apart."}
-          image={"/screenshot18.png"}
+          image={"/screenshot18.webp"}
           color="green"
         />
         <div className={styles.featureSection}>
@@ -94,7 +95,7 @@ export const Home = () => {
           subText={
             "Bring video and chat front-and-center for minimal distractions."
           }
-          image={"/screenshot14.png"}
+          image={"/screenshot14.webp"}
         />
         <div
           style={{
@@ -153,12 +154,13 @@ const Feature = ({
 };
 
 // Intrinsic sizes for the layout-shift reservation (and they let the browser
-// size the image before it loads on a slow connection).
+// size the image before it loads on a slow connection). WebP copies sized to
+// 2x the largest displayed width (540 CSS px on desktop).
 const HERO_DIMS: Record<string, [number, number]> = {
-  "/screenshot4.png": [2194, 1308],
-  "/screenshot18.png": [2124, 904],
-  "/screenshot14.png": [3000, 1993],
-  "/screenshot5.png": [1254, 654],
+  "/screenshot4.webp": [1080, 644],
+  "/screenshot18.webp": [1080, 460],
+  "/screenshot14.webp": [1080, 718],
+  "/screenshot5.webp": [1080, 564],
 };
 
 export const Hero = ({
@@ -168,6 +170,7 @@ export const Hero = ({
   action,
   image,
   color,
+  eager,
 }: {
   heroText?: string;
   subText?: string;
@@ -175,6 +178,9 @@ export const Hero = ({
   action?: React.ReactNode;
   image?: string;
   color?: string;
+  // Above-fold hero image: load eagerly with high priority (it is the LCP
+  // element); everything else waits until the user scrolls near it.
+  eager?: boolean;
 }) => {
   return (
     <div className={`${styles.hero} ${color === "green" ? styles.green : ""}`}>
@@ -195,6 +201,8 @@ export const Hero = ({
             height={HERO_DIMS[image ?? ""]?.[1]}
             style={{ width: "100%", height: "auto", borderRadius: "10px" }}
             src={image}
+            loading={eager ? "eager" : "lazy"}
+            {...(eager ? { fetchpriority: "high" } : {})}
           />
         </div>
       </div>
@@ -223,7 +231,7 @@ export const DiscordBot = () => {
             Add to Discord
           </Button>
         }
-        image={"/screenshot5.png"}
+        image={"/screenshot5.webp"}
       />
     </div>
   );
