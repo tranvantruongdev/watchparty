@@ -1286,10 +1286,19 @@ export class App extends React.Component<AppProps, AppState> {
           this.hasDuration()
         ) {
           this.updateCatchUpChip(this.getLeaderTime() - data[clientId]);
+          // Steady-state accuracy (round 163): a 3-member room measured a
+          // constant ~1 s offset from the join/start race that nothing
+          // corrects — the pbr nudge above is dormant (roomPlaybackRate
+          // defaults to 1) and the chip only shows >2 s BEHIND, on a click.
+          // Auto-resync self (never the room) when |drift| > 0.5 s survives
+          // 4 consecutive ticks: one seek, then quiet while the stale
+          // own-entry works its way out of the next maps.
+          this.maybeCorrectDrift(this.getLeaderTime() - data[clientId]);
         } else {
           // Paused / solo / live / no duration: no drift to report, take the
           // chip down if it was up
           this.updateCatchUpChip(0);
+          this.driftStreak = 0;
         }
         if (this.state.roomSubtitle) {
           const sharer = this.state.participants.find((p) => p.isScreenShare);
@@ -3026,6 +3035,78 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState({ catchUpBehind: null });
     // The leader is playing, so their position has advanced since the map
     // arrived — add the staleness back instead of landing 1-2 s short
+    this.localSeek(this.getLeaderTime() + (Date.now() - this.tsMapAt) / 1000);
+  };
+
+  // Consecutive REC:tsMap ticks with |drift| > 0.5 s before auto-resync
+  driftStreak = 0;
+  // Milliseconds timestamp until which auto-resync stays quiet after firing
+  // (our own last report in tsMap is stale for ~2 s, same as the chip)
+  driftSuppressedUntil = 0;
+  // When the last correction fired, and how many consecutive corrections did
+  // not hold (drift came back > 0.5 s within 2 windows) — each failure
+  // doubles the quiet window so a member that cannot keep up (slow
+  // connection) is not seek-pumped into re-buffering every ~14 s
+  driftLastFixAt = 0;
+  driftFailedFixes = 0;
+
+  maybeCorrectDrift = (delta: number) => {
+    if (!Number.isFinite(delta)) {
+      return;
+    }
+    const now = Date.now();
+    if (now < this.driftSuppressedUntil) {
+      // Drift came back within 2 windows of a correction: it did not hold —
+      // give up the next seek and double the quiet window instead
+      if (
+        this.driftLastFixAt &&
+        now - this.driftLastFixAt <= 20000 &&
+        Math.abs(delta) > 0.5
+      ) {
+        this.driftFailedFixes = Math.min(this.driftFailedFixes + 1, 3);
+        this.driftLastFixAt = 0;
+        this.driftSuppressedUntil = now + 10000 * 2 ** this.driftFailedFixes;
+        console.log("drift correction did not hold, backing off");
+      }
+      return;
+    }
+    // HTML <video> only — the YouTube player has its own seek pitfalls (see
+    // ensureYtPlaysAfterSeek right below) and its element is not a real video
+    if (this.usingYoutube()) {
+      return;
+    }
+    const el = this.Player().getVideoEl();
+    // Mid-seek, locally paused, or not playing smoothly (stalled or our own
+    // buffering report armed): seeking now would only re-buffer — wait for a
+    // healthy player
+    if (
+      !el ||
+      el.seeking ||
+      el.paused ||
+      el.readyState < 3 ||
+      this.bufferingReported
+    ) {
+      return;
+    }
+    if (Math.abs(delta) <= 0.5) {
+      this.driftStreak = 0;
+      if (now - this.driftLastFixAt > 20000) {
+        this.driftFailedFixes = 0;
+      }
+      return;
+    }
+    this.driftStreak += 1;
+    if (this.driftStreak < 4) {
+      return;
+    }
+    this.driftStreak = 0;
+    this.driftLastFixAt = now;
+    this.driftSuppressedUntil = now + 10000;
+    console.log(
+      "drift",
+      delta.toFixed(2),
+      "s survived 4 ticks, resyncing self to leader",
+    );
     this.localSeek(this.getLeaderTime() + (Date.now() - this.tsMapAt) / 1000);
   };
 
