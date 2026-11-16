@@ -416,6 +416,19 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   render() {
+    const messages = chatStore.getSnapshot().messages;
+    // Two messages can share timestamp+id (same sender, same millisecond: the
+    // server stamps the ISO time on receipt, so two CMD:chat processed in one
+    // tick collide) and the old key timestamp+id then duplicates, which makes
+    // React drop or mis-update a message. Disambiguate repeats; still stable
+    // for unchanged lists so the memo checks (r99/r139) keep holding
+    const keyOccurrences: { [base: string]: number } = {};
+    const messageKeys = messages.map((msg) => {
+      const base = msg.timestamp + msg.id;
+      const occ = keyOccurrences[base] || 0;
+      keyOccurrences[base] = occ + 1;
+      return occ === 0 ? base : `${base}-${occ}`;
+    });
     return (
       <div
         className={this.props.className}
@@ -443,11 +456,10 @@ export class Chat extends React.Component<ChatProps> {
             aria-label="Chat messages"
             style={{ display: "flex", flexDirection: "column", gap: "8px" }}
           >
-            {chatStore.getSnapshot().messages.map((msg, i) => {
+            {messages.map((msg, i) => {
               // Hide avatar+name on a continuation line: same sender, both
               // plain messages (system/replies stay ungrouped), within a minute
-              const prev =
-                i > 0 ? chatStore.getSnapshot().messages[i - 1] : undefined;
+              const prev = i > 0 ? messages[i - 1] : undefined;
               const groupWithPrev = Boolean(
                 prev &&
                 msg.id &&
@@ -464,7 +476,7 @@ export class Chat extends React.Component<ChatProps> {
               );
               return (
                 <ChatMessage
-                  key={msg.timestamp + msg.id}
+                  key={messageKeys[i]}
                   isSelected={
                     msg.id === this.state.reactionMenu.selectedMsgId &&
                     msg.timestamp ===

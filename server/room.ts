@@ -918,7 +918,10 @@ export class Room {
   };
 
   private changeUserPicture = (socket: Socket, data: string) => {
-    if (data && data.length > 10000) {
+    // Real pictures are https Gravatar / Google-account URLs (getUserImage in
+    // src/utils/utils.ts); anything else (javascript:, data:, junk) has no use
+    // in <Avatar src> and React warns it will block javascript: URLs
+    if (data.length > 10000 || !/^https?:\/\/\S+$/i.test(data)) {
       return;
     }
     this.pictureMap[socket.clientId] = data;
