@@ -1459,12 +1459,43 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState({ fileSelection: data });
   };
 
+  // Round 150: App mounts its modals conditionally, so closing one unmounts the
+  // whole Mantine Modal and its built-in returnFocus never runs — focus falls
+  // to <body>. Remember the focused trigger when a modal opens and put focus
+  // back after React has removed the modal from the DOM.
+  modalReturnFocus: HTMLElement | null = null;
+  openModalTrackingFocus = <K extends keyof AppState>(
+    patch: Pick<AppState, K>,
+  ) => {
+    this.modalReturnFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    this.setState(patch);
+  };
+  closeModalRestoreFocus = <K extends keyof AppState>(
+    patch: Pick<AppState, K>,
+  ) => {
+    this.setState(patch);
+    const el = this.modalReturnFocus;
+    this.modalReturnFocus = null;
+    if (el && el.isConnected) {
+      // after this update commits and unmounts the modal
+      window.setTimeout(() => el.focus(), 0);
+    }
+  };
+
   setMultiSelectModal = (isMultiSelectModalOpen: boolean) => {
-    this.setState({ isMultiSelectModalOpen });
+    isMultiSelectModalOpen
+      ? this.openModalTrackingFocus({ isMultiSelectModalOpen })
+      : this.closeModalRestoreFocus({ isMultiSelectModalOpen });
   };
 
   resetMultiSelect = () => {
-    this.setState({ isMultiSelectModalOpen: false, fileSelection: [] });
+    this.closeModalRestoreFocus({
+      isMultiSelectModalOpen: false,
+      fileSelection: [],
+    });
   };
 
   loadSettings = async () => {
@@ -3116,7 +3147,7 @@ export class App extends React.Component<AppProps, AppState> {
   localSubtitleModal = () => {
     // Native player uses subtitle modal.
     if (this.usingNative()) {
-      this.setState({ isSubtitleModalOpen: true });
+      this.openModalTrackingFocus({ isSubtitleModalOpen: true });
     }
   };
 
@@ -3840,7 +3871,9 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   setSettingsModalOpen = (settingsModalOpen: boolean) => {
-    this.setState({ settingsModalOpen });
+    settingsModalOpen
+      ? this.openModalTrackingFocus({ settingsModalOpen })
+      : this.closeModalRestoreFocus({ settingsModalOpen });
   };
 
   setTheaterMode = (theaterMode: boolean) => {
@@ -3946,21 +3979,27 @@ export class App extends React.Component<AppProps, AppState> {
         {this.state.isVBrowserModalOpen && (
           <React.Suspense fallback={null}>
             <VBrowserModal
-              closeModal={() => this.setState({ isVBrowserModalOpen: false })}
+              closeModal={() =>
+                this.closeModalRestoreFocus({ isVBrowserModalOpen: false })
+              }
               startVBrowser={this.startVBrowser}
             />
           </React.Suspense>
         )}
         {this.state.isScreenShareModalOpen && (
           <ScreenShareModal
-            closeModal={() => this.setState({ isScreenShareModalOpen: false })}
+            closeModal={() =>
+              this.closeModalRestoreFocus({ isScreenShareModalOpen: false })
+            }
             startScreenShare={this.startScreenShare}
           />
         )}
         {this.state.isFileShareModalOpen && (
           <React.Suspense fallback={null}>
             <FileShareModal
-              closeModal={() => this.setState({ isFileShareModalOpen: false })}
+              closeModal={() =>
+                this.closeModalRestoreFocus({ isFileShareModalOpen: false })
+              }
               startFileShare={this.startFileShare}
             />
           </React.Suspense>
@@ -3968,7 +4007,9 @@ export class App extends React.Component<AppProps, AppState> {
         {this.state.isSubtitleModalOpen && (
           <React.Suspense fallback={null}>
             <SubtitleModal
-              closeModal={() => this.setState({ isSubtitleModalOpen: false })}
+              closeModal={() =>
+                this.closeModalRestoreFocus({ isSubtitleModalOpen: false })
+              }
               socket={this.socket}
               roomSubtitle={this.state.roomSubtitle}
               roomMedia={this.state.roomMedia}
@@ -4157,7 +4198,7 @@ export class App extends React.Component<AppProps, AppState> {
                           <Button
                             color="yellow"
                             onClick={() => {
-                              this.setState({
+                              this.openModalTrackingFocus({
                                 shareEndedPrompt: false,
                                 isScreenShareModalOpen:
                                   !this.isLocalStreamAFile,
@@ -4176,7 +4217,7 @@ export class App extends React.Component<AppProps, AppState> {
                             color="violet"
                             disabled={!this.haveLock()}
                             onClick={() => {
-                              this.setState({
+                              this.openModalTrackingFocus({
                                 isScreenShareModalOpen: true,
                               });
                             }}
@@ -4193,7 +4234,7 @@ export class App extends React.Component<AppProps, AppState> {
                             disabled={!this.haveLock()}
                             color="violet"
                             onClick={() => {
-                              this.setState({
+                              this.openModalTrackingFocus({
                                 isVBrowserModalOpen: true,
                               });
                             }}
@@ -4330,7 +4371,7 @@ export class App extends React.Component<AppProps, AppState> {
                             color="violet"
                             disabled={!this.haveLock()}
                             onClick={() => {
-                              this.setState({
+                              this.openModalTrackingFocus({
                                 isFileShareModalOpen: true,
                               });
                             }}
