@@ -3624,9 +3624,10 @@ export class App extends React.Component<AppProps, AppState> {
     if (
       !container.requestFullscreen &&
       //@ts-expect-error
-      container.webkitEnterFullScreen
+      container.webkitEnterFullscreen
     ) {
-      // e.g. iPhone doesn't allow requestFullscreen
+      // e.g. iPhone doesn't allow requestFullscreen. Check the same method
+      // name we call (round 171: the guard tested the capital-S spelling)
       //@ts-expect-error
       container.webkitEnterFullscreen();
       return;

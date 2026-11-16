@@ -701,6 +701,17 @@
     min-height: 0;
   }
 
+  /* Real fullscreen of #playerColumn: the fixed wrapper height above exists
+     to keep the top bar + controls on screen in windowed mode, but inside
+     fullscreen it keeps the picture at its windowed size (round 171: video
+     content 366x206 both before and after clicking Fullscreen at 844x390).
+     Let the wrapper grow into the freed top bar. */
+  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]) {
+    height: auto;
+    flex-grow: 1;
+    min-height: 0;
+  }
+
   .playerContainer :global(#leftVideo) {
     height: 100%;
     /* beats the inline calc() cap: the sized wrapper already bounds it */
