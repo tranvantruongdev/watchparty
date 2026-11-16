@@ -4,7 +4,7 @@ import { EVENT } from "./events";
 import { NekoClient } from "./client";
 import GuacamoleKeyboard from "./keyboard";
 import config from "../../config";
-import { VIDEO_MAX_HEIGHT_CSS } from "../../utils/utils";
+import { VIDEO_MAX_HEIGHT_CSS, isTouchPrimary } from "../../utils/utils";
 import { Button } from "@mantine/core";
 import { IconClipboard, IconKeyboardFilled } from "@tabler/icons-react";
 
@@ -365,6 +365,9 @@ export class VBrowser extends React.Component<{
   };
 
   render() {
+    // touch-primary devices (tablet without a mouse) get the keyboard/paste
+    // affordances even though isMobile() is only a width check (round 148)
+    const touchControls = this.props.isMobile || isTouchPrimary();
     // leftVideoParent is the target for fullscreen, which loses its style when set to fullscreenElement
     // extra container layer is to be able to keep styling for overlay/video
     return (
@@ -378,7 +381,7 @@ export class VBrowser extends React.Component<{
             gap: "4px",
           }}
         >
-          {this.props.isMobile && this.props.controlling && (
+          {touchControls && this.props.controlling && (
             <Button
               onClick={() => {
                 const dummy = document.getElementById("dummy");
@@ -389,7 +392,7 @@ export class VBrowser extends React.Component<{
               Open Keyboard
             </Button>
           )}
-          {this.props.isMobile && this.props.controlling && (
+          {touchControls && this.props.controlling && (
             <Button
               onClick={async () => {
                 // Guacamole ctrl v codes

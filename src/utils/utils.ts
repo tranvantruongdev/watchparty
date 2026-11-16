@@ -212,6 +212,13 @@ export const isMobile = () => {
   return window.screen.width <= 600;
 };
 
+// Touch-primary device (phone or tablet, no reliable mouse): gates touch
+// affordances such as the VBrowser "Open Keyboard" button. Screen-size /
+// layout decisions keep using isMobile().
+export const isTouchPrimary = () =>
+  window.matchMedia("(pointer: coarse)").matches ||
+  window.matchMedia("(hover: none)").matches;
+
 export function shuffle(array: any[]) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * i);
