@@ -62,6 +62,7 @@ const defaults = {
   VBROWSER_ADMIN_KEY: "", // Optional, the key to hit admin endpoints on the vbrowser
   OPENSUBTITLES_KEY: "", // Optional, key to OpenSubtitles API
   ROOM_KEY: "", // Optional, secret needed to create or join rooms (share links as /?key=<ROOM_KEY>)
+  SESSION_TTL_MS: 7 * 24 * 60 * 60 * 1000, // How long a room keeps a departed visitor's session claim before sweeping it
   TURN_URLS: "", // Optional, static TURN urls, comma separated (e.g. ExpressTURN: turn:free.expressturn.com:3478,turn:free.expressturn.com:3478?transport=tcp)
   TURN_USERNAME: "", // Optional, username for TURN_URLS
   TURN_PASSWORD: "", // Optional, password for TURN_URLS

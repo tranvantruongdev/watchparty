@@ -42,6 +42,16 @@ const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 // reconnects within seconds of the link returning and re-announces
 const SHARER_GRACE_MS = 10_000;
 
+// How long a departed visitor's in-memory session claim (sessionMap) stays
+// kept. It must outlive them — deleting it on disconnect would let an
+// onlooker claim their clientId with their own secret — but not the room's
+// whole life: a permanent room with rotating visitors grew one entry per
+// visitor forever (measured 1000 join/leave cycles = 1000 stale entries).
+// 7 days matches the redis claim's TTL above; swept entries re-claim on the
+// real client's next connect (their own secret), an attacker cannot.
+// Overridable via env for a fast leak test (r161 measured with 5000)
+const SESSION_TTL_MS = Number(config.SESSION_TTL_MS) || 7 * 24 * 60 * 60 * 1000;
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -75,8 +85,13 @@ export class Room {
   private io: Server;
   private socketIdMap: StringDict = {};
   // clientId -> sessionId secret. In-memory version of the redis session map,
-  // so clientId spoofing is also blocked when redis isn't configured
-  private sessionMap: StringDict = {};
+  // so clientId spoofing is also blocked when redis isn't configured.
+  // lastSeen drives the TTL sweep below (entries expire after SESSION_TTL_MS)
+  private sessionMap: {
+    [clientId: string]: { sessionId: string; lastSeen: number };
+  } = {};
+  // Counts the 1s tsInterval ticks so the session sweep runs once a minute
+  private sessionTick = 0;
   // clientId -> timestamps of the float reactions they sent in the last second
   private floatReactionTimes: { [clientId: string]: number[] } = {};
   // clientId -> true while that viewer reports being stuck buffering
@@ -199,6 +214,17 @@ export class Room {
           delete this.tsMap[key];
         }
       });
+      // Expire stale session claims once a minute: the room's tick already
+      // runs every second, so piggyback the sweep on every 60th pass
+      this.sessionTick = (this.sessionTick + 1) % 60;
+      if (this.sessionTick === 0) {
+        const cutoff = Date.now() - SESSION_TTL_MS;
+        Object.keys(this.sessionMap).forEach((id) => {
+          if (this.sessionMap[id].lastSeen < cutoff) {
+            delete this.sessionMap[id];
+          }
+        });
+      }
       if (this.video) {
         this.lastTsMap = Date.now();
         io.of(roomId).emit("REC:tsMap", this.tsMap);
@@ -312,10 +338,13 @@ export class Room {
         // The first connection of a clientId claims its sessionId; later ones must match.
         // Lives only as long as the room is in memory, so it never outlasts the redis claim
         if (this.sessionMap[clientId] === undefined) {
-          this.sessionMap[clientId] = sessionId;
-        } else if (this.sessionMap[clientId] !== sessionId) {
+          this.sessionMap[clientId] = { sessionId, lastSeen: Date.now() };
+        } else if (this.sessionMap[clientId].sessionId !== sessionId) {
           next(new Error("Incorrect sessionId"));
           return;
+        } else {
+          // Same client back again: their claim stays fresh
+          this.sessionMap[clientId].lastSeen = Date.now();
         }
         if (redis) {
           const key = "session:" + clientId;
