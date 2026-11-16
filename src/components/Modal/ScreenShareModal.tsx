@@ -1,5 +1,5 @@
 import React, { useContext, useState } from "react";
-import { Modal, Button, Table } from "@mantine/core";
+import { Modal, Button, Table, Alert } from "@mantine/core";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { MetadataContext } from "../../MetadataContext";
 
@@ -40,6 +40,9 @@ export const ScreenShareModal = ({
   const { isSubscriber } = useContext(MetadataContext);
   const subscribeButton = <SubscribeButton />;
   const [mbps, setMbps] = useState(String(getShareMbps()));
+  // Phone browsers (and pages without a secure context) have no
+  // getDisplayMedia: Start would close this dialog and do nothing at all
+  const canShare = Boolean(navigator.mediaDevices?.getDisplayMedia);
   return (
     <Modal
       closeButtonProps={{ "aria-label": "Close" }}
@@ -57,6 +60,12 @@ export const ScreenShareModal = ({
           tab, not an application.
         </li>
       </ul>
+      {!canShare && (
+        <Alert color="red" mb="sm">
+          This browser can't share a screen. Open WatchParty in Chrome or Edge
+          on a computer to share.
+        </Alert>
+      )}
       <div>
         Quality (max upload per viewer):{" "}
         {[
@@ -129,6 +138,7 @@ export const ScreenShareModal = ({
             <Table.Td></Table.Td>
             <Table.Td>
               <Button
+                disabled={!canShare}
                 onClick={() => {
                   startScreenShare(false);
                   closeModal();
@@ -141,6 +151,7 @@ export const ScreenShareModal = ({
               {isSubscriber ? (
                 <Button
                   color="orange"
+                  disabled={!canShare}
                   onClick={() => {
                     startScreenShare(true);
                     closeModal();
