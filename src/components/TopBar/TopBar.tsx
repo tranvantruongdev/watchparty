@@ -1,4 +1,10 @@
-import React, { useCallback, useContext, useState } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  useState,
+} from "react";
 import {
   serverPath,
   getUserImage,
@@ -7,9 +13,16 @@ import {
 } from "../../utils/utils";
 import { ActionIcon, Avatar, Button, Menu, Text } from "@mantine/core";
 import type firebase from "firebase/compat/app";
-import { LoginModal } from "../Modal/LoginModal";
+// Login/profile modals only open on a click: keep them out of the eager
+// bundle (TopBar ships on every route) and load on demand, preloading on
+// pointer-over of their triggers like Chat does for the emoji picker
+const loadLoginModal = () =>
+  import("../Modal/LoginModal").then((m) => ({ default: m.LoginModal }));
+const LoginModal = lazy(loadLoginModal);
+const loadProfileModal = () =>
+  import("../Modal/ProfileModal").then((m) => ({ default: m.ProfileModal }));
+const ProfileModal = lazy(loadProfileModal);
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
-import { ProfileModal } from "../Modal/ProfileModal";
 import Announce from "../Announce/Announce";
 import { InviteButton } from "../InviteButton/InviteButton";
 import { MetadataContext } from "../../MetadataContext";
@@ -120,6 +133,8 @@ export class SignInButton extends React.Component<SignInButtonProps> {
           tabIndex={0}
           aria-label="Open profile"
           className="profileButton"
+          onPointerEnter={() => loadProfileModal()}
+          onFocus={() => loadProfileModal()}
           onKeyDown={(e: React.KeyboardEvent) => {
             // Keys typed inside the profile modal bubble here through the portal
             if (e.target !== e.currentTarget) return;
@@ -142,10 +157,12 @@ export class SignInButton extends React.Component<SignInButtonProps> {
             onClick={() => this.setState({ isProfileOpen: true })}
           />
           {this.state.isProfileOpen && this.context.user && (
-            <ProfileModal
-              userImage={this.state.userImage}
-              close={() => this.setState({ isProfileOpen: false })}
-            />
+            <Suspense fallback={null}>
+              <ProfileModal
+                userImage={this.state.userImage}
+                close={() => this.setState({ isProfileOpen: false })}
+              />
+            </Suspense>
           )}
         </div>
       );
@@ -153,12 +170,16 @@ export class SignInButton extends React.Component<SignInButtonProps> {
     return (
       <React.Fragment>
         {this.state.isLoginOpen && (
-          <LoginModal
-            closeModal={() => this.setState({ isLoginOpen: false })}
-          />
+          <Suspense fallback={null}>
+            <LoginModal
+              closeModal={() => this.setState({ isLoginOpen: false })}
+            />
+          </Suspense>
         )}
         <Button
           leftSection={<IconLogin />}
+          onPointerEnter={() => loadLoginModal()}
+          onFocus={() => loadLoginModal()}
           onClick={() => this.setState({ isLoginOpen: true })}
         >
           Sign in

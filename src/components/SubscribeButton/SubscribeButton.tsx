@@ -1,9 +1,22 @@
-import React, { useCallback, useContext, useState } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  useState,
+} from "react";
 import { Button } from "@mantine/core";
 import { serverPath } from "../../utils/utils";
-import { SubscribeModal } from "../Modal/SubscribeModal";
 import { MetadataContext } from "../../MetadataContext";
 import { IconStarFilled, IconTool } from "@tabler/icons-react";
+
+// Click-gated modal: load on demand (preloaded on pointer-over below) instead
+// of riding the eager bundle every route pays for
+const loadSubscribeModal = () =>
+  import("../Modal/SubscribeModal").then((m) => ({
+    default: m.SubscribeModal,
+  }));
+const SubscribeModal = lazy(loadSubscribeModal);
 
 export const SubscribeButton = () => {
   const { isSubscriber } = useContext(MetadataContext);
@@ -14,11 +27,17 @@ export const SubscribeButton = () => {
   return (
     <>
       {isSubscribeModalOpen && (
-        <SubscribeModal closeSubscribe={() => setIsSubscribeModalOpen(false)} />
+        <Suspense fallback={null}>
+          <SubscribeModal
+            closeSubscribe={() => setIsSubscribeModalOpen(false)}
+          />
+        </Suspense>
       )}
       <Button
         leftSection={<IconStarFilled />}
         color="orange"
+        onPointerEnter={() => loadSubscribeModal()}
+        onFocus={() => loadSubscribeModal()}
         onClick={() => setIsSubscribeModalOpen(true)}
       >
         Subscribe
