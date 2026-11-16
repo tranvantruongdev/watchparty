@@ -483,6 +483,18 @@ export class App extends React.Component<AppProps, AppState> {
   async componentDidMount() {
     document.onfullscreenchange = this.onFullScreenChange;
     document.onkeydown = this.onKeydown;
+    // Round 135: a tab Chrome throttled or froze while hidden wakes up stale —
+    // the last REC:tsMap / share stats are minutes old and the player can sit
+    // far behind the room (measured: ~16 s of drift still there a minute
+    // after returning, with only the manual catch-up chip). Reuse the join
+    // path: CMD:askHost -> REC:host (room.ts:569 answers immediately; a
+    // disconnected socket.io buffers the emit and flushes it on reconnect)
+    // and tick the stats polls once. visibilitychange only fires on real
+    // hidden<->visible flips (never on a mere focus change), resume only
+    // follows a freeze, pageshow only matters for a bfcache restore.
+    document.addEventListener("visibilitychange", this.pageVisibility);
+    document.addEventListener("resume", this.pageWake);
+    window.addEventListener("pageshow", this.pageShow);
     this.setupCaptureHandle();
     // chatStore is module-global: a remounted App (another room without a page
     // load) must not show the previous room's messages until chatinit arrives
@@ -519,6 +531,9 @@ export class App extends React.Component<AppProps, AppState> {
     // way; removeEventListener would not match them
     document.onfullscreenchange = null;
     document.onkeydown = null;
+    document.removeEventListener("visibilitychange", this.pageVisibility);
+    document.removeEventListener("resume", this.pageWake);
+    window.removeEventListener("pageshow", this.pageShow);
     window.clearInterval(this.heartbeat);
     window.clearInterval(this.tsInterval);
     window.clearInterval(this.shareStatsTimer);
@@ -3365,6 +3380,49 @@ export class App extends React.Component<AppProps, AppState> {
   onFullScreenChange = () => {
     this.setState({ fullScreen: Boolean(document.fullscreenElement) });
     setTimeout(() => this.chatRef.current?.scrollToBottom(), 100);
+  };
+
+  // One immediate catch-up when the page becomes visible again after being
+  // hidden or frozen (round 135): pull the room's current media + position
+  // through the existing askHost path and tick the stats polls once instead
+  // of waiting for their 1-2 s intervals. share/localcopy/vbrowser handlers
+  // ignore a same-media REC:host by design (realtime streams), YouTube gets
+  // the gentle >2 s resync, URL media re-cues at the server position.
+  pageWake = () => {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    this.socket.emit("CMD:askHost");
+    if (this.consumerConn) {
+      this.pollShareStats(this.consumerConn);
+    }
+    if (this.localStreamToPublish) {
+      this.pollSendStats();
+    }
+    this.reportBuffering();
+  };
+
+  // A quick tab switch must not resync: for URL media (and a paused YouTube)
+  // REC:host re-cues the player, i.e. a reload + rebuffer on every switch
+  // back. Only a hide long enough for Chrome's timer throttling to matter
+  // asks the host; resume/pageshow (a real freeze / bfcache) always do.
+  // ponytail: fixed 60 s threshold, measure real hidden-tab drift to tune it
+  hiddenAt = 0;
+  pageVisibility = () => {
+    if (document.visibilityState === "hidden") {
+      this.hiddenAt = Date.now();
+      return;
+    }
+    if (this.hiddenAt && Date.now() - this.hiddenAt >= 60000) {
+      this.pageWake();
+    }
+    this.hiddenAt = 0;
+  };
+
+  pageShow = (e: PageTransitionEvent) => {
+    if (e.persisted) {
+      this.pageWake();
+    }
   };
 
   onKeydown = (e: any) => {
