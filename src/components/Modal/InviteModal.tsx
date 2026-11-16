@@ -9,11 +9,19 @@ export const InviteModal = ({
   closeInviteModal: () => void;
 }) => {
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const inviteLink = withRoomKey(window.location.href);
   const handleCopyInviteLink = () => {
-    navigator.clipboard.writeText(inviteLink);
-    setInviteLinkCopied(true);
+    // Clipboard can legitimately fail (permission denied, stale focus): the
+    // success message must not lie, or the friend never receives the link.
+    navigator.clipboard
+      .writeText(inviteLink)
+      .then(() => {
+        setCopyFailed(false);
+        setInviteLinkCopied(true);
+      })
+      .catch(() => setCopyFailed(true));
   };
 
   return (
@@ -28,7 +36,11 @@ export const InviteModal = ({
         label="Copy and share this link:"
         readOnly
         rightSection={
-          <ActionIcon onClick={handleCopyInviteLink} color="teal">
+          <ActionIcon
+            onClick={handleCopyInviteLink}
+            color="teal"
+            aria-label="Copy invite link"
+          >
             <IconCopy size={16} />
           </ActionIcon>
         }
@@ -37,6 +49,14 @@ export const InviteModal = ({
       {inviteLinkCopied && (
         <div style={{ marginTop: 15 }}>
           <b style={{ color: "green" }}>Link copied to clipboard.</b>
+        </div>
+      )}
+      {copyFailed && (
+        <div style={{ marginTop: 15 }}>
+          <b style={{ color: "red" }}>
+            Couldn't copy automatically — select the link above and copy it
+            manually.
+          </b>
         </div>
       )}
     </Modal>

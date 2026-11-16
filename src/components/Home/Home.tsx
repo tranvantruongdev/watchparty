@@ -106,7 +106,9 @@ export const Home = () => {
         >
           <div className={styles.heroText}>Get started!</div>
           <div className={styles.featureSection}>
-            <Stepper active={-1}>
+            {/* active=-1 + no step selection: these steps are a story, not
+                buttons — clicking/focusing them did nothing but trap Tab */}
+            <Stepper active={-1} allowNextStepsSelect={false}>
               <Stepper.Step label="Make a room" />
               <Stepper.Step label="Share link with friends" />
               <Stepper.Step label="Pick something to watch" />

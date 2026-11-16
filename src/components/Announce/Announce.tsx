@@ -37,7 +37,7 @@ const Announce = () => {
         setAnnouncement(top);
       }
     };
-    update();
+    update().catch(() => {});
   }, []);
 
   const onDismiss = useCallback((value: number) => {

@@ -1,4 +1,4 @@
-import React, { useCallback, useContext } from "react";
+import React, { useCallback, useContext, useState } from "react";
 import {
   serverPath,
   getUserImage,
@@ -75,13 +75,23 @@ export const NewRoomButton = (props: {
   openNewTab?: boolean;
 }) => {
   const context = useContext(MetadataContext);
+  const [pending, setPending] = useState(false);
   const onClick = useCallback(async () => {
-    await createRoom(context.user, props.openNewTab);
-  }, [context.user, props.openNewTab]);
+    // A slow /createRoom + a second impatient click used to create two rooms.
+    if (pending) return;
+    setPending(true);
+    try {
+      await createRoom(context.user, props.openNewTab);
+    } finally {
+      setPending(false);
+    }
+  }, [context.user, props.openNewTab, pending]);
   return (
     <Button
       size={props.size}
       onClick={onClick}
+      loading={pending}
+      disabled={pending}
       leftSection={<IconCirclePlusFilled />}
     >
       New Room

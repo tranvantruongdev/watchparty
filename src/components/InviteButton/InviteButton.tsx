@@ -15,6 +15,7 @@ export const InviteButton = () => {
         size="36px"
         color="green"
         title="Invite friends"
+        aria-label="Invite friends"
         onClick={() => setInviteModalOpen(true)}
       >
         <IconUserPlus />

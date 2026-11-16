@@ -1,4 +1,4 @@
-import React, { useContext, useRef } from "react";
+import React, { useContext, useEffect, useRef } from "react";
 import { createRoom } from "../TopBar/TopBar";
 import { Loader } from "@mantine/core";
 import { MetadataContext } from "../../MetadataContext";
@@ -6,9 +6,14 @@ import { MetadataContext } from "../../MetadataContext";
 export const Create = () => {
   const { user } = useContext(MetadataContext);
   const buttonEl = useRef<HTMLButtonElement>(null);
-  setTimeout(() => {
-    buttonEl?.current?.click();
-  }, 1000);
+  // One auto-click per mount: a timer created in the render body fired again on
+  // every re-render (StrictMode, MetadataContext updates) and created extra rooms.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      buttonEl?.current?.click();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div
       style={{
