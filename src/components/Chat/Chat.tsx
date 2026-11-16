@@ -753,6 +753,7 @@ const ChatMessage = React.memo(function ChatMessage({
     message;
   const spellFull = 5; // the number of people whose names should be written out in full in the reaction popup
   const imageMsg = renderImageString(msg);
+  const canManage = Boolean(owner && owner === user?.uid);
   return (
     <div
       style={{
@@ -797,16 +798,40 @@ const ChatMessage = React.memo(function ChatMessage({
               socket={socket}
               userToManage={id}
               isChatMessage
-              disabled={!Boolean(owner && owner === user?.uid)}
+              disabled={!canManage}
               trigger={
-                <div
-                  style={{ cursor: "pointer", fontWeight: 700 }}
-                  title={isSub ? "WatchParty Plus subscriber" : ""}
-                  className={`${isSub ? styles.subscriber : styles.light} ${styles.hoverEffect}`}
-                >
-                  {Boolean(system) && "System"}
-                  {nameMap[id] || id}
-                </div>
+                canManage ? (
+                  // A real button so keyboard users can reach the member menu
+                  // (Enter/Space open, Escape returns focus here). Styled to
+                  // look exactly like the div below, plus a focus ring.
+                  <button
+                    type="button"
+                    aria-label={`Options for ${nameMap[id] || id}`}
+                    style={{
+                      cursor: "pointer",
+                      font: "inherit",
+                      fontWeight: 700,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      textAlign: "inherit",
+                    }}
+                    title={isSub ? "WatchParty Plus subscriber" : ""}
+                    className={`${isSub ? styles.subscriber : styles.light} ${styles.hoverEffect}`}
+                  >
+                    {Boolean(system) && "System"}
+                    {nameMap[id] || id}
+                  </button>
+                ) : (
+                  <div
+                    style={{ cursor: "pointer", fontWeight: 700 }}
+                    title={isSub ? "WatchParty Plus subscriber" : ""}
+                    className={`${isSub ? styles.subscriber : styles.light} ${styles.hoverEffect}`}
+                  >
+                    {Boolean(system) && "System"}
+                    {nameMap[id] || id}
+                  </div>
+                )
               }
             />
             <div className={styles.small + " " + styles.dark}>

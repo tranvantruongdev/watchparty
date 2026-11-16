@@ -1511,20 +1511,28 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                     socket={socket}
                     userToManage={p.id}
                     trigger={
-                      <IconDotsVertical
+                      // A real icon button so keyboard users can open the
+                      // member menu; transparent, same footprint as the bare
+                      // icon it replaces
+                      <ActionIcon
+                        variant="transparent"
+                        size={24}
+                        aria-label={`Options for ${nameMap[p.id] || p.id}`}
                         style={{
                           position: "absolute",
                           right: 0,
                           top: 0,
-                          cursor: "pointer",
                           zIndex: 1,
+                          color: "inherit",
                           visibility: Boolean(
                             owner && owner === this.context.user?.uid,
                           )
                             ? "visible"
                             : "hidden",
                         }}
-                      />
+                      >
+                        <IconDotsVertical />
+                      </ActionIcon>
                     }
                   />
                   <div
