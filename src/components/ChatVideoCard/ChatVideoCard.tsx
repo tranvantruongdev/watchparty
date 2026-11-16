@@ -107,6 +107,7 @@ const ChatVideoCard: React.FC<{
           <div className={classes.Controls}>
             <ActionIcon
               title="Add to Playlist"
+              aria-label="Add to Playlist"
               onClick={(e) => {
                 e.stopPropagation();
                 e.nativeEvent.stopImmediatePropagation();
@@ -122,6 +123,7 @@ const ChatVideoCard: React.FC<{
             <ActionIcon
               color="green"
               title="Play now"
+              aria-label="Play now"
               onClick={handlePlayClick}
               disabled={disabled}
             >
@@ -130,6 +132,7 @@ const ChatVideoCard: React.FC<{
             <ActionIcon
               color="black"
               title="Play next"
+              aria-label="Play next"
               onClick={handlePlayNextClick}
               disabled={disabled}
             >
@@ -138,6 +141,7 @@ const ChatVideoCard: React.FC<{
             <ActionIcon
               color="red"
               title="Remove"
+              aria-label="Remove"
               onClick={handleRemoveClick}
               disabled={disabled}
             >

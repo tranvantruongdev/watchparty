@@ -2,3 +2,8 @@
   font-weight: 700;
   margin-top: 10px;
 }
+
+.helpIcon:focus-visible {
+  outline: 2px solid var(--mantine-color-violet-5);
+  border-radius: 4px;
+}

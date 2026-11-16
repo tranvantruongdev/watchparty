@@ -151,6 +151,7 @@ export const SettingsModal = ({
         onClose={() => setModalOpen(false)}
         centered
         title={"Settings"}
+        returnFocus
       >
         <div>
           <div className={styles.sectionHeader}>Room Settings</div>
@@ -171,7 +172,17 @@ export const SettingsModal = ({
             }
             helpIcon={
               <IconHelpCircle
+                role="button"
+                tabIndex={0}
+                aria-label="About permanent rooms"
                 onClick={() => setPermModalOpen(true)}
+                onKeyDown={(e: any) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setPermModalOpen(true);
+                  }
+                }}
+                className={styles.helpIcon}
                 style={{ cursor: "pointer" }}
               />
             }
@@ -267,7 +278,13 @@ export const SettingsModal = ({
             disabled={false}
             content={
               <div style={{ display: "flex", gap: "14px" }}>
-                <ActionIcon color="red" size="lg" onClick={() => clearChat()}>
+                <ActionIcon
+                  color="red"
+                  size="lg"
+                  aria-label="Clear chat"
+                  title="Clear chat"
+                  onClick={() => clearChat()}
+                >
                   <IconTrash />
                 </ActionIcon>
                 <div>
@@ -370,6 +387,8 @@ export const SettingsModal = ({
                         <ActionIcon
                           color={roomTitleColorInput}
                           disabled={!isSubscriber}
+                          aria-label="Edit title color"
+                          title="Edit title color"
                         >
                           <IconPaintFilled size={16} />
                         </ActionIcon>
