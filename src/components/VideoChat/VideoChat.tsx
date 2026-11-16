@@ -9,6 +9,7 @@ import {
   getColorForStringHex,
   getDefaultPicture,
   iceServers,
+  isTouchPrimary,
   softWhite,
 } from "../../utils/utils";
 import { UserMenu } from "../UserMenu/UserMenu";
@@ -170,6 +171,9 @@ interface VideoChatState {
   deviceHint: string;
   // Saved mic deviceId ("" = system default)
   micId: string;
+  // Width of the voice-tile flex root (clientWidth incl. padding, 0 until
+  // first measurement): tiles shrink so two fit per row on phones (round 167)
+  peopleW: number;
 }
 
 export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
@@ -186,6 +190,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     // camera that ended on its own silently drops to mute/camera-off, so say
     // why next to the control; cleared when that device is live again
     deviceHint: "",
+    peopleW: 0,
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -221,6 +226,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   cameraReopening = false;
   // Our root element, for the People-closed check below (round 121)
   rootEl: HTMLDivElement | null = null;
+  // Watches the root's width so tiles can two-up on narrow panels (round 167)
+  resizeObs?: ResizeObserver;
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
@@ -477,9 +484,20 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     if (Object.keys(window.watchparty.videoPCs ?? {}).length) {
       this.startSpeakTimer();
     }
+    // Tile two-up (round 167): measure the panel once now, then on every
+    // width change (phone rotation, People overlay reflow). Same value =
+    // no re-render
+    if (this.rootEl && typeof ResizeObserver !== "undefined") {
+      this.resizeObs = new ResizeObserver(() => {
+        const w = this.rootEl?.clientWidth ?? 0;
+        this.setState((s) => (s.peopleW === w ? null : { peopleW: w }));
+      });
+      this.resizeObs.observe(this.rootEl);
+    }
   }
 
   componentWillUnmount() {
+    this.resizeObs?.disconnect();
     this.socket.off("signal", this.handleSignal);
     this.socket.off("roster", this.onRoster);
     this.socket.off("connect", this.onSocketConnect);
@@ -1399,7 +1417,18 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       this.props;
     const ourStream = window.watchparty.ourStream;
     const videoRefs = window.watchparty.videoRefs;
-    const videoChatSize = participants.length > 2 ? 180 : 250;
+    // Fixed 180px gave one tile per row on phones where two would fit: the
+    // People overlay is 372px at 390 portrait, and 2x180 + 4px gap misses it
+    // by the overlay border + root padding (measured round 167). Shrink to
+    // half the row (minus gap) when >2 members; 1-2 members keep 250 and
+    // just clamp to the panel so a tile never overflows. Desktop panels are
+    // wide enough that min() keeps the old sizes everywhere
+    const contentW = this.state.peopleW ? this.state.peopleW - 8 : 0;
+    const fit2Up = contentW > 0 ? Math.floor((contentW - 4) / 2) : Infinity;
+    const videoChatSize = Math.min(
+      participants.length > 2 ? 180 : 250,
+      participants.length > 2 ? fit2Up : contentW > 0 ? contentW : Infinity,
+    );
     const videoChatContentStyle: React.CSSProperties = {
       height: videoChatSize,
       width: videoChatSize,
@@ -1409,6 +1438,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     const selfId = getOrCreateClientId();
     // Violet ring on seats whose mic is picking up sound right now
     const isSpeaking = (id: string) => this.state.speaking.includes(id);
+    // Touch controls are 34px tall (coarse CSS), so on the self tile the
+    // Leave/cam/mic row and the 3-dot member menu collide (measured round
+    // 167: 26px overlap): drop the menu just below the row on touch. Desktop
+    // icons are 28px and fit — keep desktop pixels identical
+    const touchPrimary = isTouchPrimary();
     const speakingStyle: React.CSSProperties = {
       boxShadow: "0 0 0 3px #a78bfa",
     };
@@ -1526,7 +1560,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                         style={{
                           position: "absolute",
                           right: 0,
-                          top: 0,
+                          top:
+                            touchPrimary && ourStream && p.id === selfId
+                              ? 34
+                              : 0,
                           zIndex: 1,
                           color: "inherit",
                           visibility: Boolean(
@@ -1550,6 +1587,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                       top: 0,
                       left: 0,
                       zIndex: 1,
+                      // Narrow two-up tiles (164px) can't fit Leave + both
+                      // icons on one 34px row: wrap the overflow inside the
+                      // tile instead of spilling into the neighbour
+                      flexWrap: "wrap",
                     }}
                   >
                     {ourStream && p.id === selfId && (

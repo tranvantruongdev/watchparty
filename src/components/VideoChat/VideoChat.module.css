@@ -6,3 +6,24 @@
   outline: 2px solid #a78bfa;
   outline-offset: 2px;
 }
+
+/* The row is an absolute full-width box over the tile top: with default
+   pointer-events its empty right half swallowed clicks meant for the 3-dot
+   member menu (measured round 167: the whole menu unclickable on 164px
+   two-up tiles where the wrapped row is 72px tall). Pass clicks through the
+   box; the buttons inside stay interactive */
+.controls {
+  pointer-events: none;
+}
+.controls > * {
+  pointer-events: auto;
+}
+
+/* Touch tap floor (round 167): the self tile's Leave button is Mantine size
+   xs = 30px, under the 32px minimum (measured 30x96 on phone emulation).
+   Matches the 34px ActionIcon bump in App.module.css */
+@media (pointer: coarse) {
+  .controls :global(.mantine-Button-root) {
+    min-height: 34px;
+  }
+}
