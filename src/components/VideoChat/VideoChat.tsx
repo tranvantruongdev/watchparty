@@ -694,13 +694,16 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   };
 
   emitUserMute = () => {
-    this.socket.emit("CMD:userMute", { isMuted: !this.getAudioWebRTC() });
+    this.socket.emit("CMD:userMute", {
+      isMuted: !this.getAudioWebRTC(),
+      isCameraOff: !this.getVideoWebRTC(),
+    });
   };
 
   // A socket reconnect must re-announce our mute flag: App re-emits
   // CMD:joinVideo on "connect", but a gap outlasting the server's ping window
-  // drops the whole roster entry, so the fresh one has no isMuted and the
-  // room reads a muted mic as open until the user next toggles it
+  // drops the whole roster entry, so the fresh one has no isMuted/isCameraOff
+  // and the room reads a muted mic as open until the user next toggles it
   onSocketConnect = () => {
     if (window.watchparty.ourStream) {
       this.emitUserMute();
@@ -1076,6 +1079,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       track.enabled = !track.enabled;
       if (track.enabled) this.clearDeviceHint("Camera");
     }
+    this.emitUserMute();
     this.forceUpdate();
   };
 
@@ -1135,6 +1139,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       // cameraEnded — do not clear a live problem
       if (newTrack.readyState === "live") {
         this.clearDeviceHint("Camera");
+        this.emitUserMute();
       }
       this.forceUpdate();
     } finally {
@@ -1209,6 +1214,13 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         return;
       }
       if (id === selfId) {
+        // A leave raced a stale roster: stopWebRTC already cleared ourStream
+        // and the refs while participants still lists us in voice, so the
+        // self tile unmounted — building its PC here would throw on the
+        // missing ref and unmount the whole app (no error boundary)
+        if (!videoRefs[id]) {
+          return;
+        }
         videoPCs[id] = new RTCPeerConnection();
         videoRefs[id].srcObject = ourStream;
       } else {
@@ -1596,9 +1608,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                             state the color carries (round 102) */}
                         {p.isVideoChat && (
                           <IconVideo
-                            color={softWhite}
+                            color={p.isCameraOff ? "red" : softWhite}
                             role="img"
-                            aria-label={`${nameMap[p.id] || p.id} camera on`}
+                            aria-label={`${nameMap[p.id] || p.id} camera ${
+                              p.isCameraOff ? "off" : "on"
+                            }`}
                           />
                         )}
                         {p.isVideoChat && (
@@ -1722,6 +1736,31 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                       }
                     />
                   )}
+                  {ourStream &&
+                    p.isVideoChat &&
+                    p.id !== selfId &&
+                    p.isCameraOff && (
+                      // The camera-off member still streams a muted/black
+                      // video track (audio rides the element, round 121), so
+                      // the <video> stays mounted and this covers the black
+                      // frame with the same avatar a non-voice member shows
+                      <img
+                        style={{
+                          ...videoChatContentStyle,
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                        }}
+                        alt={nameMap[p.id] || p.id}
+                        src={
+                          pictureMap[p.id] ||
+                          getDefaultPicture(
+                            nameMap[p.id],
+                            getColorForStringHex(p.id),
+                          )
+                        }
+                      />
+                    )}
                   {p.id !== selfId &&
                     this.state.reconnecting.includes(p.id) && (
                       <div

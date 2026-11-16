@@ -12,6 +12,7 @@ interface User {
   id: string;
   isVideoChat?: boolean;
   isMuted?: boolean;
+  isCameraOff?: boolean;
   isScreenShare?: boolean;
   buffering?: boolean;
 }

@@ -1546,19 +1546,31 @@ export class Room {
       // next join's first roster would carry it until that join's CMD:userMute
       // lands (a live mic shown muted, red icon rendered)
       delete match.isMuted;
+      delete match.isCameraOff;
     }
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
 
   private setUserMute = (socket: Socket, raw: unknown) => {
-    const data = raw as { isMuted: boolean };
+    const data = raw as { isMuted: boolean; isCameraOff?: boolean };
     // isMuted rides the roster broadcast verbatim, so only a real boolean
     if (!data || typeof data.isMuted !== "boolean") {
+      return;
+    }
+    // The camera flag rides the same event; an old client that omits it never
+    // touches it here (absent = camera on / unchanged)
+    if (
+      data.isCameraOff !== undefined &&
+      typeof data.isCameraOff !== "boolean"
+    ) {
       return;
     }
     const match = this.roster.find((user) => user.id === socket.clientId);
     if (match) {
       match.isMuted = data.isMuted;
+      if (data.isCameraOff !== undefined) {
+        match.isCameraOff = data.isCameraOff;
+      }
     }
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
