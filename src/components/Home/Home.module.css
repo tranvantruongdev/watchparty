@@ -24,6 +24,11 @@
 .heroInner {
   padding: 30px;
   max-width: 1200px;
+  /* Definite width so the row is laid out at its final size from the first
+     paint: an unloaded hero img (flex: 1 1 0 column) contributes ~0 intrinsic
+     width, so the row used to expand 785 -> 1200px when the bitmap arrived,
+     pushing everything below it down (round 157, CLS 0.18). */
+  width: 100%;
   display: flex;
   align-items: center;
 }
