@@ -455,6 +455,14 @@ export class App extends React.Component<AppProps, AppState> {
   // which a healthy static screen never is
   shareStallTicks = 0;
   shareLastFrames?: number;
+  // Round 145 tried a frame-gap stall watch here (no presented frame for 10 s
+  // => "Sharer's screen paused") and REVERTED it the same round: the static
+  // measurement proved a legitimately frozen share and a starved sender are
+  // indistinguishable at the viewer — motion-then-static for 60 s froze
+  // framesReceived AND bytesReceived AND packetsReceived at exactly 0 deltas
+  // with ICE connected, so any frame/byte-silence threshold false-alarms on
+  // the most common share (slides, docs, paused video). Keep the ICE-based
+  // poll behavior; a real fix needs a sender-side signal
   // Last 3 instantaneous encode fps samples for the sharer badge: the single
   // poll value swings 2-8 fps while the window average is steady (round 64)
   shareSendFps: number[] = [];
