@@ -165,6 +165,19 @@ const glassCardStyle: React.CSSProperties = {
 
 const clientId = getOrCreateClientId();
 
+// Round 168: the player's volume survives a reload / a new tab, like the voice
+// volume does (watchparty-voice-volume). "0".."1"; anything unparsable falls
+// back to full volume
+const VOLUME_KEY = "watchparty-volume";
+const parseStoredVolume = (raw: string | null): number => {
+  // Number(null) is 0, not NaN: a missing key must fall back to full volume
+  if (raw === null || raw === "") {
+    return 1;
+  }
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1;
+};
+
 // Round 122: every Watchparty tab exposes this non-identifying Capture Handle
 // at startup, so a sharer capturing a monitor that shows a Watchparty tab can
 // detect it (see checkSelfCapture). Not a secret and not an identity — any
@@ -1552,6 +1565,9 @@ export class App extends React.Component<AppProps, AppState> {
           onReady: () => {
             console.log("yt onReady");
             this.YouTubeInterface = new YouTube(ytPlayer);
+            // The iframe player starts at full volume: restore the last user
+            // volume/mute (round 168). Later media changes reuse this player
+            this.applyStoredVolume();
             this.setState({ loading: false });
             // We might have failed to play YT originally, ask for the current video again
             if (this.usingYoutube()) {
@@ -3223,6 +3239,19 @@ export class App extends React.Component<AppProps, AppState> {
 
   localSetVolume = (volume: number) => {
     this.Player().setVolume(volume);
+    window.localStorage.setItem(VOLUME_KEY, String(volume));
+    this.refreshControls();
+  };
+
+  // (Re)created player (reload, new tab, media swap) starts at the user's last
+  // volume. Mute is not remembered: localPlay mutes/unmutes on its own for
+  // autoplay and screen share hosting, so a saved mute would be whatever the
+  // app last forced, not the user's choice. Targets both players: whichever
+  // is live takes it, the other is a null-element no-op
+  applyStoredVolume = () => {
+    const volume = parseStoredVolume(localStorage.getItem(VOLUME_KEY));
+    this.HTMLInterface.setVolume(volume);
+    this.YouTubeInterface.setVolume(volume);
     this.refreshControls();
   };
 
@@ -4686,7 +4715,14 @@ export class App extends React.Component<AppProps, AppState> {
                                 },
                                 () => {
                                   this.localSetMute(false);
-                                  this.localSetVolume(1);
+                                  // The click means "give me sound", not "full
+                                  // blast": keep the user's saved volume
+                                  // (round 168), don't stomp it with 1
+                                  this.localSetVolume(
+                                    parseStoredVolume(
+                                      localStorage.getItem(VOLUME_KEY),
+                                    ),
+                                  );
                                   if (!this.state.roomPaused) {
                                     this.localPlay();
                                   }
@@ -4859,6 +4895,13 @@ export class App extends React.Component<AppProps, AppState> {
                         // roomMedia, not e.currentTarget.src (the resolved
                         // absolute/blob src would never match the server's url)
                         onEnded={() => this.onVideoEnded(this.state.roomMedia)}
+                        // Every (re)created element starts at volume 1: restore
+                        // the user's last volume/mute per media load (round 168)
+                        onLoadedMetadata={() => {
+                          if (this.usingNative()) {
+                            this.applyStoredVolume();
+                          }
+                        }}
                         playsInline
                         onClick={this.roomTogglePlay}
                       ></video>
