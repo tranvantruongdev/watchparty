@@ -86,4 +86,31 @@ for (const volume of [0, 1, 2, 3]) {
   eq(`self ${volume}`, [o.useGraph, o.muted, o.gain], [false, true, 0]);
 }
 
+// mutedForMe: one seat silenced for this listener only (round 180). At every
+// volume the element is muted and no gain node exists; clearing it restores the
+// seat exactly to the volume/deaf rule
+for (const volume of [0, 0.5, 1, 1.05, 2, 3]) {
+  for (const deaf of [false, true]) {
+    const o = voicePeerOutput({ self: false, deaf, volume, mutedForMe: true });
+    eq(
+      `mutedForMe ${volume} deaf=${deaf}`,
+      [o.muted, o.gain, o.useGraph, o.elementVolume],
+      [true, 0, false, 1],
+    );
+  }
+  eq(
+    `mutedForMe cleared ${volume}`,
+    voicePeerOutput({ self: false, deaf: false, volume, mutedForMe: false }),
+    out(false, false, volume),
+  );
+}
+// self stays muted and unrouted even if a stale local mute is set for our id
+for (const volume of [0, 1, 2]) {
+  eq(
+    `self mutedForMe ${volume}`,
+    voicePeerOutput({ self: true, deaf: false, volume, mutedForMe: true }),
+    out(true, false, volume),
+  );
+}
+
 console.log("voiceVolume checks passed");

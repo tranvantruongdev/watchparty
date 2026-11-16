@@ -19,6 +19,8 @@ import {
   parseStoredVoiceVolume,
   voicePeerOutput,
 } from "./voiceVolume";
+import { isMutedForMe, mutedForMeIds, setMutedForMe } from "./localVoice";
+import { VoiceTileMenu } from "./VoiceTileMenu";
 import {
   IconDotsVertical,
   IconMicrophone,
@@ -174,6 +176,9 @@ interface VideoChatState {
   // Width of the voice-tile flex root (clientWidth incl. padding, 0 until
   // first measurement): tiles shrink so two fit per row on phones (round 167)
   peopleW: number;
+  // Seats this listener muted locally (round 180), mirrored from localVoice so
+  // the tile icon and menu label re-render on toggle
+  mutedForMe: string[];
 }
 
 export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
@@ -191,6 +196,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     // why next to the control; cleared when that device is live again
     deviceHint: "",
     peopleW: 0,
+    mutedForMe: mutedForMeIds(),
   };
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -279,17 +285,20 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     const self = id === getOrCreateClientId();
     const stream = this.remoteStreams[id];
     const hasAudio = !!stream?.getAudioTracks().length;
+    const mutedForMe = !self && isMutedForMe(id);
     const volume = getVoiceVolume();
     const ctx =
-      !self && volume > 1 && hasAudio
+      !self && !mutedForMe && volume > 1 && hasAudio
         ? this.ensureAudioContext()
         : this.audioCtx;
     // Only use the graph when it can play now; else the element plays at <=100%
-    const canRoute = !self && hasAudio && ctx?.state === "running";
+    const canRoute =
+      !self && !mutedForMe && hasAudio && ctx?.state === "running";
     const out = voicePeerOutput({
       self,
       deaf: this.props.deaf,
       volume: canRoute ? volume : Math.min(volume, 1),
+      mutedForMe,
     });
     el.muted = out.muted;
     if (!self) {
@@ -365,6 +374,17 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       this.ensureAudioContext();
     }
     this.applyAllVoiceOutputs();
+  };
+
+  // Mute/unmute ONE other member for this listener only (round 180). Purely
+  // local: no socket event, so the member and everyone else are unaffected.
+  // The store is module-scoped, so the choice survives element remounts, the
+  // People panel closing (this component unmounts) and the member's own
+  // renegotiation/reconnect, which keeps their clientId
+  toggleMutedForMe = (id: string) => {
+    setMutedForMe(id, !isMutedForMe(id));
+    this.setState({ mutedForMe: mutedForMeIds() });
+    this.applyVoiceOutput(id);
   };
 
   // Microphones the browser lists. Labels are empty until mic permission, so
@@ -1436,6 +1456,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       position: "relative",
     };
     const selfId = getOrCreateClientId();
+    // The host's options menu owns the tile's top-right corner; the local
+    // audio menu sits next to it, so it must shift when that menu is shown
+    const hostMenuVisible = Boolean(owner && owner === this.context.user?.uid);
     // Violet ring on seats whose mic is picking up sound right now
     const isSpeaking = (id: string) => this.state.speaking.includes(id);
     // Touch controls are 34px tall (coarse CSS), so on the self tile the
@@ -1577,6 +1600,17 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                       </ActionIcon>
                     }
                   />
+                  {ourStream && p.id !== selfId && p.isVideoChat && (
+                    // Local-only voice control for this member (round 180):
+                    // mute their audio for me, never for the room
+                    <VoiceTileMenu
+                      id={p.id}
+                      name={nameMap[p.id] || p.id}
+                      muted={this.state.mutedForMe.includes(p.id)}
+                      onToggle={this.toggleMutedForMe}
+                      right={hostMenuVisible ? 30 : 0}
+                    />
+                  )}
                   <div
                     className={classes.controls}
                     style={{

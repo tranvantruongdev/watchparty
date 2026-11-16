@@ -34,13 +34,21 @@ export const voicePeerOutput = ({
   self,
   deaf,
   volume,
+  mutedForMe = false,
 }: {
   self: boolean;
   deaf: boolean;
   volume: number;
+  // This listener muted this seat locally (VoiceTileMenu)
+  mutedForMe?: boolean;
 }): VoicePeerOutput => {
   const v = clampVoiceVolume(volume);
   if (self) {
+    return { useGraph: false, muted: true, elementVolume: 1, gain: 0 };
+  }
+  // "Mute for me" (VoiceTileMenu): the seat plays nothing at any volume, so
+  // no element audio and no gain node either
+  if (mutedForMe) {
     return { useGraph: false, muted: true, elementVolume: 1, gain: 0 };
   }
   if (v > 1) {
