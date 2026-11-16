@@ -40,7 +40,7 @@ import { generateName } from "../../utils/generateName";
 import { Chat, type SeekCommand } from "../Chat/Chat";
 import { chatStore } from "./chatStore";
 import { ChatOverlay } from "./ChatOverlay";
-import { TopBar } from "../TopBar/TopBar";
+import { NewRoomButton, TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
 import { getCurrentSettings } from "../Settings/LocalSettings";
@@ -67,6 +67,7 @@ import {
   Badge,
   TextInput,
   Button,
+  Modal,
   Switch,
   Tooltip,
 } from "@mantine/core";
@@ -78,6 +79,7 @@ import {
   IconFile,
   IconFiles,
   IconHistory,
+  IconHome,
   IconKeyboardFilled,
   IconList,
   IconHeadphones,
@@ -245,6 +247,11 @@ interface AppState {
     playFn?: () => void;
   }[];
   overlayMsg: string;
+  // The server answered that this room does not exist (no namespace): the
+  // screen must say so and stop offering a reload that can never work. Kept
+  // apart from overlayMsg, whose modal (ErrorModal) also covers transient
+  // errors where "Try again" is right.
+  roomGone: boolean;
   isErrorAuth: boolean;
   settings: Settings;
   vBrowserResolution: string;
@@ -347,6 +354,7 @@ export class App extends React.Component<AppProps, AppState> {
     connections: 0,
     fileSelection: [],
     overlayMsg: "",
+    roomGone: false,
     isErrorAuth: false,
     settings: {},
     vBrowserResolution: "1280x720@30",
@@ -630,6 +638,7 @@ export class App extends React.Component<AppProps, AppState> {
       this.setState({
         state: "connected",
         overlayMsg: "",
+        roomGone: false,
         errorMessage: "",
         successMessage: "",
         warningMessage: "",
@@ -658,7 +667,20 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on("connect_error", (err: any) => {
       console.error(err);
       if (err.message === "Invalid namespace") {
-        this.setState({ overlayMsg: "Couldn't load this room." });
+        // The server answered: this room does not exist (deleted, expired, or
+        // never created). Auto-reconnect may still bring it back if storage
+        // reloads it, but a modal "Try again" reloads onto the same answer.
+        this.setState({
+          roomGone: true,
+          overlayMsg: "",
+          warningMessage: "",
+        });
+      } else if (err.type === "TransportError") {
+        // Server unreachable (down, network cut): the socket keeps retrying on
+        // its own, so show the reconnect pill and no blocking modal
+        if (!this.state.roomGone) {
+          this.setState({ warningMessage: "Reconnecting..." });
+        }
       } else if (err.message === "password") {
         this.setState({ isErrorAuth: true });
       } else if (err.message === "roomKey") {
@@ -4133,12 +4155,41 @@ export class App extends React.Component<AppProps, AppState> {
             />
           </React.Suspense>
         )}
-        {this.state.state === "starting" && (
+        {this.state.state === "starting" && !this.state.roomGone && (
           <Overlay className={styles.flexCenter}>
             <Title order={2}>Loading...</Title>
           </Overlay>
         )}
         {this.state.overlayMsg && <ErrorModal error={this.state.overlayMsg} />}
+        {this.state.roomGone && (
+          <Modal
+            opened
+            onClose={() => {}}
+            title="This room no longer exists."
+            centered
+            withCloseButton={false}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                gap: "8px",
+              }}
+            >
+              <NewRoomButton size="xl" />
+              <Button
+                size="xl"
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+                leftSection={<IconHome />}
+              >
+                Go to home
+              </Button>
+            </div>
+          </Modal>
+        )}
         {this.state.isErrorAuth && <PasswordModal roomId={this.state.roomId} />}
         {this.state.settingsModalOpen && (
           <React.Suspense fallback={null}>
