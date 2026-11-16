@@ -606,7 +606,11 @@ export class Room {
         (await validateOwner()) && this.setRoomOwner(socket, data);
       });
       on("CMD:playlistNext", (data: unknown) => {
-        validateLock() && allowRelay() && this.playlistNext(data);
+        // The client only ever sends the ended video's url. An empty/missing
+        // payload would skip playlistNext's url validation entirely and force
+        // the list forward, so it is rejected here; the server's own
+        // auto-advance calls playlistNext(null) directly, never this handler.
+        validateLock() && allowRelay() && !!data && this.playlistNext(data);
       });
       on("CMD:playlistAdd", (data: unknown) => {
         validateLock() &&
