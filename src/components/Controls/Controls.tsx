@@ -409,13 +409,12 @@ export const Controls = (props: ControlsProps) => {
           <Menu.Target>
             <button
               type="button"
-              className={`${styles.actBtn} ${styles.action}`}
+              className={`${styles.actBtn} ${styles.action} ${styles.speedPill}`}
               style={{
                 backgroundColor: "rgba(100,100,100, 0.6)",
                 fontSize: 10,
                 borderRadius: "4px",
                 padding: "2px",
-                minHeight: 24,
                 fontWeight: 700,
                 color: "inherit",
                 fontFamily: "inherit",

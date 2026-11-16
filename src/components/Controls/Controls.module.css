@@ -82,6 +82,14 @@
   cursor: pointer;
 }
 
+/* The speed pill's 24px desktop min-height used to be an inline style, which
+   beat the coarse-pointer rule above — touch got a 24px pill next to 32px
+   neighbours. Under (pointer: coarse) the .controls button rule (higher
+   specificity) wins over this class and the pill grows to 32px */
+.speedPill {
+  min-height: 24px;
+}
+
 /* The icon buttons: reset the <button> chrome so the icon keeps its exact
    previous box (flex item of the same size), colour comes from the button */
 .actBtn {
