@@ -7,6 +7,7 @@ import {
   formatTimestamp,
   iceServers,
   isMobile,
+  isTouchPrimary,
   serverPath,
   testAutoplay,
   openFileSelector,
@@ -4923,8 +4924,11 @@ export class App extends React.Component<AppProps, AppState> {
                   rightSection={
                     <Button
                       size="compact-xs"
-                      // 22px is too small to tap on a phone (round 133)
-                      style={{ height: isMobile() ? 24 : undefined }}
+                      // 22px is too small to tap on a phone (round 133) or
+                      // any touch-primary device such as a tablet (round 154)
+                      style={{
+                        height: isMobile() || isTouchPrimary() ? 24 : undefined,
+                      }}
                       onClick={async () =>
                         this.updateName(await generateName())
                       }
