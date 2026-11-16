@@ -18,6 +18,12 @@
   justify-content: center;
   /* Making this larger causes issues on mobile */
   min-height: 48vh;
+  /* Container queries (round 175): the share pill's compact form switches on
+     THIS box's width, not the device — a narrow sidebar on a desktop gets the
+     compact pill too. inline-size containment: the box is already
+     position:relative for the pills and sized by its parent, so nothing else
+     changes. */
+  container-type: inline-size;
 }
 
 .flexCenter {
@@ -552,6 +558,24 @@
   font-size: 11px;
   font-family: monospace;
   pointer-events: none;
+}
+
+/* Compact pill on narrow players (round 175): the full text covered up to 66%
+   of a phone's picture width (98% for the sharer's, wrapped to 2 lines), so
+   containers under 640px show "720p · 30fps" instead; desktop (container
+   ≥ 641px) keeps the full text pixel-identical. The full text is still in the
+   DOM on a visuallyHidden span for screen readers. */
+.pillCompact {
+  display: none;
+}
+
+@container (max-width: 640px) {
+  .pillWide {
+    display: none;
+  }
+  .pillCompact {
+    display: inline;
+  }
 }
 
 /* Frozen share (round 95): frames stopped while the link is unhappy — the
