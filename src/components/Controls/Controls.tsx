@@ -273,6 +273,7 @@ export const Controls = (props: ControlsProps) => {
       >
         <Button
           size="compact-xs"
+          className={styles.compactBtn}
           color={isBehind ? "blue" : "grey"}
           title="Sync"
           onClick={() => {
@@ -293,6 +294,7 @@ export const Controls = (props: ControlsProps) => {
       {props.toggleExplore && (
         <Button
           size="compact-xs"
+          className={styles.compactBtn}
           color={props.exploring ? "orange" : "grey"}
           variant={props.exploring ? "filled" : "subtle"}
           title={
@@ -413,6 +415,7 @@ export const Controls = (props: ControlsProps) => {
                 fontSize: 10,
                 borderRadius: "4px",
                 padding: "2px",
+                minHeight: 24,
                 fontWeight: 700,
                 color: "inherit",
                 fontFamily: "inherit",

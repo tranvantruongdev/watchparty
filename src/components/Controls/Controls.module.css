@@ -12,7 +12,7 @@
   padding-left: 10px;
   padding-top: 4px;
   padding-bottom: 4px;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* 900 not 600: a landscape phone (~844px) kept the unwrapped rows and the
@@ -29,13 +29,21 @@
   }
 }
 
+/* The compact Mantine buttons (Sync / Solo) are 22px tall from the factory;
+   a mouse still needs a 24px target. Coarse pointers get 32px from the
+   .controls button rule below instead */
+@media (pointer: fine) {
+  .controls .compactBtn {
+    min-height: 24px;
+  }
+}
+
 /* Coarse pointers can't hit an 8px seek bar or a 22px button; with a mouse the
    compact sizes stay. The seek/volume tracks keep the desktop's thin visible
    height — their tap area is the transparent ::before band below, which never
    changes what the eye sees */
 @media (pointer: coarse) {
   .controls {
-    gap: 8px;
     padding-top: 2px;
     padding-bottom: 2px;
   }
@@ -43,22 +51,26 @@
   .controls button {
     min-height: 32px;
   }
+}
 
-  /* Mantine's drag handler lives on the track container, so the band must be
-     its ::before — a band on the root would never reach the handler */
-  .controls :global(.mantine-Slider-trackContainer) {
-    position: relative;
-  }
+/* Mantine's drag handler lives on the track container, so the band must be
+   its ::before — a band on the root would never reach the handler. Every
+   pointer gets a 24px-tall hit area around the thin visible track.
+   touch-action keeps the browser from claiming band taps for page pan/zoom
+   (measured: without it a touch tap just above the thumb is swallowed) */
+.controls :global(.mantine-Slider-trackContainer) {
+  position: relative;
+  touch-action: none;
+}
 
-  .controls :global(.mantine-Slider-trackContainer)::before {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 0;
-    right: 0;
-    height: 24px;
-    transform: translateY(-50%);
-  }
+.controls :global(.mantine-Slider-trackContainer)::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 24px;
+  transform: translateY(-50%);
 }
 
 .text {
@@ -95,22 +107,15 @@
   outline-offset: 2px;
 }
 
-/* The bar stays 8px tall for the eye, but a mouse gets a 16px band to hit.
-   Absolutely positioned, so the row does not move (coarse pointers keep the
-   32px root above, the band only adds to it) */
+/* The bar stays 8px tall for the eye, but every pointer gets a 24px band to
+   hit. Absolutely positioned, so the row does not move (the band only adds to
+   it) */
 .controls :global(.mantine-Progress-root)::before {
   content: "";
   position: absolute;
   top: 50%;
   left: 0;
   right: 0;
-  height: 16px;
+  height: 24px;
   transform: translateY(-50%);
-}
-
-/* After the 16px rule above: same specificity, so source order decides */
-@media (pointer: coarse) {
-  .controls :global(.mantine-Progress-root)::before {
-    height: 24px;
-  }
 }
