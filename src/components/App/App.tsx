@@ -1721,6 +1721,20 @@ export class App extends React.Component<AppProps, AppState> {
     }, ms);
   };
 
+  // Round 185: same shape as showError but on the yellow top-center pill,
+  // which overlays nothing (the red bottom-right alert sat over the chat
+  // input and blocked it for the whole duration). Mantine's Alert is
+  // role="alert", so screen readers announce it like the red one
+  showWarning = (message: string, ms = 3000) => {
+    this.setState({ warningMessage: message });
+    setTimeout(() => {
+      // Only clear our own message: "Reconnecting..." owns warningMessage too
+      this.setState((state) =>
+        state.warningMessage === message ? { warningMessage: "" } : null,
+      );
+    }, ms);
+  };
+
   // Round 184: getDisplayMedia throws NotAllowedError both when the person
   // closes the picker (stay silent) and when the system or browser forbids
   // capture (the sharer saw nothing). Tell them apart: Chrome words the block
@@ -2065,14 +2079,16 @@ export class App extends React.Component<AppProps, AppState> {
       // (App.tsx:2318) ever runs, and a handler attached after the event fired
       // never receives it — the room would stay on a dead capture forever, and
       // every rebuild re-attaches the same ended track. setupRTCConnections'
-      // !localTrack.onended guard keeps this idempotent once PCs exist
+      // !track.onended guard keeps this idempotent once PCs exist
       captureTrack.onended = () => this.stopPublishingLocalStream();
       this.isLocalStreamAFile = false;
       // Round 184: audio is always requested, but sharing a window (or a
       // screen without "share system audio") returns video only, and the
-      // sharer would never learn that every viewer hears nothing
+      // sharer would never learn that every viewer hears nothing. Round 185:
+      // moved to the yellow pill — 8 s on the red alert blocked the chat
+      // input the whole time
       if (!stream.getAudioTracks().length) {
-        this.showError(
+        this.showWarning(
           "No audio is being shared, so viewers will hear nothing. To share sound, pick a tab or the whole screen and tick the audio box.",
           8000,
         );
@@ -2614,6 +2630,7 @@ export class App extends React.Component<AppProps, AppState> {
     shareStatsStore.setSend("");
     this.setState({ shareStalled: false, shareUnreachable: 0 });
     this.shareLinkDownTicks = {};
+    this.shareLinkFirstSeen = {};
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2641,11 +2658,16 @@ export class App extends React.Component<AppProps, AppState> {
     }
     const sharer = this.state.participants.find((p) => p.isScreenShare);
     const selfId = getOrCreateClientId();
-    const localTrack = this.localStreamToPublish?.getVideoTracks()[0];
-    if (localTrack && !localTrack.onended) {
-      // Stop sharing if the local stream stops
-      localTrack.onended = () => this.stopPublishingLocalStream();
-    }
+    // Stop sharing if the local stream stops. Round 185: every track, not
+    // just video — an audio-only file (mp3) has no video track, so its ended
+    // went unwired and the room stayed stuck on the ended share while
+    // viewers' clocks ran on (measured: sharer paused at the file's 10 s,
+    // viewer clock counting to 34 s and beyond)
+    this.localStreamToPublish?.getTracks().forEach((track) => {
+      if (!track.onended) {
+        track.onended = () => this.stopPublishingLocalStream();
+      }
+    });
     // The sharer's own preview: no PC connects to ourselves, so nothing ever
     // streams back into the player and it stayed black (measured round 110).
     // Mirror the live capture, muted, on every setup (REC:host's clearState
@@ -2944,6 +2966,9 @@ export class App extends React.Component<AppProps, AppState> {
   // real bitrate (it ramps up over the first minute and quality-limits on
   // bandwidth/CPU), so show the real limit live; the cap is only a ceiling
   shareLinkDownTicks: Record<string, number> = {};
+  // When each viewer's link first appeared this share (round 185): the
+  // "not reaching" count starts after a 15 s join grace
+  shareLinkFirstSeen: Record<string, number> = {};
   pollSendStats = async () => {
     // A PC can die without a single event: Chrome changes iceConnectionState/
     // connectionState to "closed" on a page-side close() but fires NOTHING
@@ -2962,14 +2987,25 @@ export class App extends React.Component<AppProps, AppState> {
     // Round 184: a viewer whose link is down (offline, ICE failed/stuck in
     // disconnected) got nothing and the sharer's pill still read "sending".
     // Count per viewer id across PC rebuilds (a failed link is rebuilt and
-    // starts "new" again), 3 polls (~6 s) in a row: a joining viewer connects
-    // in ~1 s and a blip heals in 1-2 s, so neither trips it
+    // starts "new" again), 3 polls (~6 s) in a row: a blip heals in 1-2 s, so
+    // it never trips it. Round 185: not during a viewer's first 15 s — a
+    // joining viewer's ICE sits "new" for its whole setup (8 s with a slow
+    // answer, measured), which is a join, not a cut. A grace, not "was it
+    // ever connected": a viewer whose ICE never gets through is rebuilt every
+    // ~16 s and never reads "failed", and is exactly who this warning is for.
+    // firstSeen is per viewer id for the share's lifetime (reset in
+    // stopPublishingLocalStream), so PC rebuilds don't restart the grace
+    const now = Date.now();
     const downTicks: Record<string, number> = {};
     Object.entries(this.publisherConns).forEach(([id, conn]) => {
+      this.shareLinkFirstSeen[id] ??= now;
       const up =
         conn.iceConnectionState === "connected" ||
         conn.iceConnectionState === "completed";
-      downTicks[id] = up ? 0 : (this.shareLinkDownTicks[id] ?? 0) + 1;
+      downTicks[id] =
+        up || now - this.shareLinkFirstSeen[id] < 15000
+          ? 0
+          : (this.shareLinkDownTicks[id] ?? 0) + 1;
     });
     this.shareLinkDownTicks = downTicks;
     const unreachable = Object.values(downTicks).filter((n) => n >= 3).length;
