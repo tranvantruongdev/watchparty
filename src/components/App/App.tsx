@@ -782,30 +782,7 @@ export class App extends React.Component<AppProps, AppState> {
       this.localStreamToPublish = undefined;
       this.isLocalStreamAFile = false;
       this.setupRTCConnections();
-      // Put back whatever we were watching before the attempt cleared
-      // leftVideo: the room media didn't change, so no REC:host will reload it
-      // and the RTC paths above skip already-connected viewers
-      const preShare = this.preShareVideoState;
-      this.preShareVideoState = undefined;
-      const leftVideo = this.HTMLInterface.getVideoEl();
-      if (!leftVideo || !preShare) {
-        return;
-      }
-      if (this.state.roomMedia !== preShare.roomMedia) {
-        // The room's media changed while we were sharing (someone else took
-        // over): it's loading through the normal paths, don't cover it
-        return;
-      }
-      if (preShare.srcObject) {
-        leftVideo.srcObject = preShare.srcObject;
-        leftVideo.play();
-      } else if (preShare.src) {
-        leftVideo.src = preShare.src;
-        leftVideo.currentTime = preShare.time;
-        if (!this.state.roomPaused) {
-          leftVideo.play();
-        }
-      }
+      this.restorePreShareVideo();
     });
     socket.on("REC:host", async (data: HostState) => {
       let currentMedia = data.video || "";
@@ -1847,6 +1824,33 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // Puts back whatever we were watching before a file share attempt cleared
+  // leftVideo: the room media didn't change, so no REC:host will reload it
+  // and the RTC paths skip already-connected viewers
+  restorePreShareVideo = () => {
+    const preShare = this.preShareVideoState;
+    this.preShareVideoState = undefined;
+    const leftVideo = this.HTMLInterface.getVideoEl();
+    if (!leftVideo || !preShare) {
+      return;
+    }
+    if (this.state.roomMedia !== preShare.roomMedia) {
+      // The room's media changed while we were sharing (someone else took
+      // over): it's loading through the normal paths, don't cover it
+      return;
+    }
+    if (preShare.srcObject) {
+      leftVideo.srcObject = preShare.srcObject;
+      leftVideo.play();
+    } else if (preShare.src) {
+      leftVideo.src = preShare.src;
+      leftVideo.currentTime = preShare.time;
+      if (!this.state.roomPaused) {
+        leftVideo.play();
+      }
+    }
+  };
+
   // Shares a file from this device. With convert, the file is first transcoded in this browser using WebCodecs
   // into a format browsers can play (see clientTranscode.ts), then shared the same way as an unconverted file.
   startFileShare = async (
@@ -1956,12 +1960,19 @@ export class App extends React.Component<AppProps, AppState> {
     }
     //@ts-expect-error
     this.localStreamToPublish = leftVideo.captureStream();
+    const captured = this.localStreamToPublish;
+    // A video whose picture the browser can't decode (e.g. HEVC) still
+    // captures its audio, which would share a black screen with the room
     if (
-      !this.localStreamToPublish ||
-      !this.localStreamToPublish.getTracks().length
+      !captured ||
+      !captured.getTracks().length ||
+      (!captured.getVideoTracks().length && !file.type.startsWith("audio/"))
     ) {
       this.localStreamToPublish = undefined;
+      // The attempt cleared leftVideo and may be playing the file's audio
+      this.HTMLInterface.pauseVideo();
       this.showError("This file can't be played in your browser");
+      this.restorePreShareVideo();
       return;
     }
     this.isLocalStreamAFile = true;
