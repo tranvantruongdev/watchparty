@@ -21,20 +21,31 @@ export function ShareStatsPills(props: {
   sharing: boolean;
   capMbps: number;
   stalled: boolean;
+  // Viewers whose link has been down for ~6 s (round 184): the encoder keeps
+  // "sending" to a dead link, so the sharer's pill must say they get nothing
+  unreachable: number;
 }) {
   const snap = useSyncExternalStore(
     shareStatsStore.subscribe,
     shareStatsStore.getSnapshot,
   );
-  const sharingFull = `You're sharing your screen (${props.capMbps} Mbps max)${snap.send}`;
+  const warn = props.unreachable
+    ? ` · not reaching ${props.unreachable} ${props.unreachable === 1 ? "viewer" : "viewers"}`
+    : "";
+  const sharingFull = `You're sharing your screen (${props.capMbps} Mbps max)${snap.send}${warn}`;
   const sharingCompact = compactHint(snap.send)
-    ? `sharing · ${compactHint(snap.send)}`
+    ? `sharing · ${compactHint(snap.send)}${warn}`
     : sharingFull;
   const statsFull = props.stalled ? "reconnecting…" : snap.stats;
   return (
     <>
       {props.sharing && (
-        <div className={styles.shareStats}>
+        <div
+          className={
+            styles.shareStats +
+            (props.unreachable ? " " + styles.shareStatsWarn : "")
+          }
+        >
           <span className={styles.visuallyHidden}>{sharingFull}</span>
           <span aria-hidden="true">
             <span className={styles.pillWide}>{sharingFull}</span>

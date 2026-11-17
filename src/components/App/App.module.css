@@ -560,6 +560,12 @@
   pointer-events: none;
 }
 
+/* Sharer's pill while a viewer's link is down (round 184): same yellow as the
+   viewer's "Reconnecting…" so the two ends read alike */
+.shareStatsWarn {
+  color: #ffd166;
+}
+
 /* Compact pill on narrow players (round 175): the full text covered up to 66%
    of a phone's picture width (98% for the sharer's, wrapped to 2 lines), so
    containers under 640px show "720p · 30fps" instead; desktop (container

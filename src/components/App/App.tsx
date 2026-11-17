@@ -212,6 +212,9 @@ interface AppState {
   // stats badge text itself lives in shareStatsStore (round 123): it changes
   // almost every 2 s poll and must not re-render the whole App for a string
   shareStalled: boolean;
+  // Sharer side (round 184): how many viewers' links have been down for
+  // ~6 s (ICE not connected), so the sharer's pill can say who isn't getting it
+  shareUnreachable: number;
   // The sharer hid their own-screen preview (round 115): leftVideo stops
   // mirroring the capture and a short note takes its place
   sharePreviewHidden: boolean;
@@ -326,6 +329,7 @@ export class App extends React.Component<AppProps, AppState> {
     // No new frame for ~4 s while the transport is unhappy: the share is
     // frozen and the badge must say so instead of reading as a live stream
     shareStalled: false,
+    shareUnreachable: 0,
     sharePreviewHidden: false,
     voiceDeaf: window.localStorage.getItem("watchparty-deaf") === "1",
     participants: [],
@@ -1733,11 +1737,29 @@ export class App extends React.Component<AppProps, AppState> {
     this.socket.emit("CMD:deleteChatMessages", {});
   };
 
-  showError = (message: string) => {
+  showError = (message: string, ms = 3000) => {
     this.setState({ errorMessage: message });
     setTimeout(() => {
       this.setState({ errorMessage: "" });
-    }, 3000);
+    }, ms);
+  };
+
+  // Round 184: getDisplayMedia throws NotAllowedError both when the person
+  // closes the picker (stay silent) and when the system or browser forbids
+  // capture (the sharer saw nothing). Tell them apart: Chrome words the block
+  // "Permission denied by system", or a second denial in a row arrives under
+  // 1 s after the click, faster than anyone can open and dismiss a picker
+  shareDeniedBefore = false;
+  noteShareDenied = (err: DOMException, clickedAt: number) => {
+    const blocked =
+      /system/i.test(err.message) ||
+      (this.shareDeniedBefore && Date.now() - clickedAt < 1000);
+    this.shareDeniedBefore = true;
+    if (blocked) {
+      this.showError(
+        "Screen sharing is blocked by your system or browser settings",
+      );
+    }
   };
 
   // Stops client-side conversion (if running) and releases its resources
@@ -1968,6 +1990,7 @@ export class App extends React.Component<AppProps, AppState> {
         },
       });
       let stream: MediaStream;
+      const clickedAt = Date.now();
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
           ...baseOptions(),
@@ -1994,16 +2017,21 @@ export class App extends React.Component<AppProps, AppState> {
           } catch (retryErr) {
             if ((retryErr as DOMException)?.name !== "NotAllowedError") {
               this.showError("Could not start screen share");
+            } else {
+              this.noteShareDenied(retryErr as DOMException, clickedAt);
             }
             return;
           }
         } else {
           if ((err as DOMException)?.name !== "NotAllowedError") {
             this.showError("Could not start screen share");
+          } else {
+            this.noteShareDenied(err as DOMException, clickedAt);
           }
           return;
         }
       }
+      this.shareDeniedBefore = false;
       const captureTrack = stream.getVideoTracks()[0];
       this.localStreamToPublish = stream;
       // Resolve the preview before the first mirror attach (round 115): the
@@ -2029,6 +2057,15 @@ export class App extends React.Component<AppProps, AppState> {
       // !localTrack.onended guard keeps this idempotent once PCs exist
       captureTrack.onended = () => this.stopPublishingLocalStream();
       this.isLocalStreamAFile = false;
+      // Round 184: audio is always requested, but sharing a window (or a
+      // screen without "share system audio") returns video only, and the
+      // sharer would never learn that every viewer hears nothing
+      if (!stream.getAudioTracks().length) {
+        this.showError(
+          "No audio is being shared, so viewers will hear nothing. To share sound, pick a tab or the whole screen and tick the audio box.",
+          8000,
+        );
+      }
       this.socket.emit("CMD:joinScreenShare", {
         file: false,
         mediasoup: useMediaSoup,
@@ -2564,7 +2601,8 @@ export class App extends React.Component<AppProps, AppState> {
     this.shareLastFrames = undefined;
     shareStatsStore.setStats("");
     shareStatsStore.setSend("");
-    this.setState({ shareStalled: false });
+    this.setState({ shareStalled: false, shareUnreachable: 0 });
+    this.shareLinkDownTicks = {};
     Object.values(this.publisherConns).forEach((pc) => {
       pc.close();
     });
@@ -2894,6 +2932,7 @@ export class App extends React.Component<AppProps, AppState> {
   // viewer's quality depends on. The browser, not our Mbps picker, decides the
   // real bitrate (it ramps up over the first minute and quality-limits on
   // bandwidth/CPU), so show the real limit live; the cap is only a ceiling
+  shareLinkDownTicks: Record<string, number> = {};
   pollSendStats = async () => {
     // A PC can die without a single event: Chrome changes iceConnectionState/
     // connectionState to "closed" on a page-side close() but fires NOTHING
@@ -2908,6 +2947,23 @@ export class App extends React.Component<AppProps, AppState> {
     if (dead.length) {
       dead.forEach(([id]) => delete this.publisherConns[id]);
       this.setupRTCConnections();
+    }
+    // Round 184: a viewer whose link is down (offline, ICE failed/stuck in
+    // disconnected) got nothing and the sharer's pill still read "sending".
+    // Count per viewer id across PC rebuilds (a failed link is rebuilt and
+    // starts "new" again), 3 polls (~6 s) in a row: a joining viewer connects
+    // in ~1 s and a blip heals in 1-2 s, so neither trips it
+    const downTicks: Record<string, number> = {};
+    Object.entries(this.publisherConns).forEach(([id, conn]) => {
+      const up =
+        conn.iceConnectionState === "connected" ||
+        conn.iceConnectionState === "completed";
+      downTicks[id] = up ? 0 : (this.shareLinkDownTicks[id] ?? 0) + 1;
+    });
+    this.shareLinkDownTicks = downTicks;
+    const unreachable = Object.values(downTicks).filter((n) => n >= 3).length;
+    if (unreachable !== this.state.shareUnreachable) {
+      this.setState({ shareUnreachable: unreachable });
     }
     const pc = Object.values(this.publisherConns)[0];
     if (!pc) return;
@@ -4687,6 +4743,7 @@ export class App extends React.Component<AppProps, AppState> {
                         this.state.participants.length - 1,
                       )}
                       stalled={this.state.shareStalled}
+                      unreachable={this.state.shareUnreachable}
                     />
                     {this.state.shareStalled && (
                       <div className={styles.shareStalled}>Reconnecting…</div>
