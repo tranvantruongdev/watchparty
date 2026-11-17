@@ -90,6 +90,13 @@ const io = new Server(server, {
   cors: {},
   transports: ["websocket"],
   maxHttpBufferSize: 256 * 1024,
+  // A member whose link died must not keep a seat (and, for a sharer, the
+  // room's media) for up to the engine.io default pingInterval+pingTimeout
+  // (25s+20s = 45s, measured 35s to the roster drop). 10s+10s detects a dead
+  // link in 10-20s instead: a 5s blip still keeps its pong window, and the
+  // 10s SHARER_GRACE_MS still covers the reconnect.
+  pingInterval: 10_000,
+  pingTimeout: 10_000,
 });
 const rooms = new Map<string, Room>();
 
