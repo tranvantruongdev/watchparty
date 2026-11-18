@@ -5014,7 +5014,12 @@ export class App extends React.Component<AppProps, AppState> {
                       // own to start: leftVideo only mirrors their muted preview,
                       // so Unmute would re-mute them (and could play the empty
                       // element before the preview mounts)
-                      !this.isSharingScreen() && (
+                      !this.isSharingScreen() &&
+                      // The host of a file share is the same: their leftVideo is
+                      // the local file itself, already playing unmuted from their
+                      // own picker click (measured round 209: the overlay covered
+                      // an audible share). A viewer of the share still needs it
+                      !this.isLocalStreamAFile && (
                         <Overlay className={styles.flexCenter}>
                           <Button
                             onClick={() => {
