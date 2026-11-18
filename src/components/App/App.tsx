@@ -287,6 +287,8 @@ interface AppState {
   warningMessage: string;
   isChatDisabled: boolean;
   showChatColumn: boolean;
+  // Messages from others that arrived while the chat column was collapsed
+  chatUnread: number;
   showPeopleColumn: boolean;
   owner: string | undefined;
   vanity: string | undefined;
@@ -385,6 +387,7 @@ export class App extends React.Component<AppProps, AppState> {
     successMessage: "",
     warningMessage: "",
     isChatDisabled: false,
+    chatUnread: 0,
     showChatColumn: isMobile()
       ? true
       : Boolean(
@@ -520,6 +523,9 @@ export class App extends React.Component<AppProps, AppState> {
   chatAutoCollapsed = false;
 
   componentDidUpdate(_prevProps: AppProps, prevState: AppState) {
+    if (this.state.showChatColumn && this.state.chatUnread) {
+      this.setState({ chatUnread: 0 });
+    }
     const wasShare = isScreenShare(prevState.roomMedia);
     const isShare = isScreenShare(this.state.roomMedia);
     if (isShare && !wasShare) {
@@ -1246,6 +1252,17 @@ export class App extends React.Component<AppProps, AppState> {
       // chatStore (round 130): the message must not commit the whole App;
       // Chat and the fullscreen overlay subscribe to the store themselves
       chatStore.push(data);
+      // Only commits App while the column is collapsed, so the round 130
+      // "a message must not re-render App" holds whenever the chat is open
+      // cmd lines (host / screenshare / seek notices) are room events, not chat
+      if (
+        !data.system &&
+        !data.cmd &&
+        data.id !== clientId &&
+        !this.state.showChatColumn
+      ) {
+        this.setState((s) => ({ chatUnread: s.chatUnread + 1 }));
+      }
     });
     socket.on("REC:addReaction", (data: Reaction) => {
       const hit = chatStore.mutate(data.msgId, data.msgTimestamp, (msg) => {
@@ -5192,6 +5209,27 @@ export class App extends React.Component<AppProps, AppState> {
                         <IconChevronLeft size={16} />
                       )}
                     </ActionIcon>
+                    {this.state.chatUnread > 0 && (
+                      <Badge
+                        size="xs"
+                        color="red"
+                        aria-label={`${this.state.chatUnread} unread messages`}
+                        style={{
+                          position: "absolute",
+                          top: -10,
+                          right: -8,
+                          // above the collapsed chat column's edge line
+                          zIndex: 2,
+                          minWidth: 16,
+                          padding: "0 4px",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {this.state.chatUnread > 9
+                          ? "9+"
+                          : this.state.chatUnread}
+                      </Badge>
+                    )}
                   </div>
                 )}
               </div>
