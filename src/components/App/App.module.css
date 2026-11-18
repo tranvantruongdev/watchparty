@@ -780,3 +780,28 @@
     object-fit: contain;
   }
 }
+
+/* Player fullscreen in the portrait phone layout: the video's inline
+   max-height (calc(100vh - 180px)) caps the picture at its windowed size,
+   leaving dead space between the picture and the bar once #playerColumn is
+   the fullscreen element (round 205). Fill the column minus the bar — the
+   same contract as the landscape rule above (round 171). The wrapper's
+   inline flex-grow: 1 already stretches it; only the video cap needs
+   lifting. Desktop windows wide enough for the desktop layout are covered
+   by the min-width: 901px fullscreen rule instead. */
+@media only screen and (max-width: 900px) and (orientation: portrait) {
+  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]) {
+    height: auto;
+    flex-grow: 1;
+    min-height: 0;
+  }
+
+  /* Scoped to fullscreen: the windowed portrait wrapper is not sized, so an
+     uncapped video there would follow its intrinsic height */
+  :global(#playerColumn):fullscreen .playerContainer :global(#leftVideo) {
+    height: 100%;
+    /* beats the inline calc() cap: the fullscreen wrapper already bounds it */
+    max-height: none !important;
+    object-fit: contain;
+  }
+}
