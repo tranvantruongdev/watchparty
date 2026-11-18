@@ -327,6 +327,11 @@ interface AppState {
   catchUpBehind: number | null;
 }
 
+// One id per page load (r220). A socket.io reconnect reuses the same query,
+// so it survives a network blip; a reopened tab (same localStorage clientId)
+// gets a new one, which tells the sharer its old PC to us is dead
+const pageId = Math.random().toString(36).slice(2);
+
 export class App extends React.Component<AppProps, AppState> {
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -682,6 +687,7 @@ export class App extends React.Component<AppProps, AppState> {
       transports: ["websocket"],
       query: {
         clientId,
+        pageId,
         password,
         shard,
         roomId: roomId.slice(1),
@@ -2832,10 +2838,26 @@ export class App extends React.Component<AppProps, AppState> {
           // second encode and upload bandwidth for nothing
           return;
         }
+        // r220: a member who reopens the tab keeps its clientId (the server
+        // supersede path keeps the roster entry), so our PC to them still
+        // looks connected while ICE stares at the dead tab, and no fresh offer
+        // goes out until the 6 s watchdog. The roster carries each member's
+        // per-page-load id: a change means a new tab, so close the PC and let
+        // the rebuild below offer at once. Not the socket id: that also
+        // changes on a socket blip of a live page, where the rebuild froze the
+        // share 6.6 s (measured). Old server/client: both undefined, no change
+        const pageId = (user as AnyDict).pageId;
+        const existing = this.publisherConns[id];
+        if (existing && (existing as unknown as AnyDict).pageId !== pageId) {
+          existing.close();
+          delete this.publisherConns[id];
+        }
         if (!this.publisherConns[id]) {
           // Set up the RTCPeerConnection for sharing media to each member
           const pc = new RTCPeerConnection({ iceServers: iceServers() });
           this.publisherConns[id] = pc;
+          // r220: the page this PC serves (see the mismatch check above)
+          (pc as unknown as AnyDict).pageId = pageId;
           this.localStreamToPublish?.getTracks().forEach((track) => {
             if (this.localStreamToPublish == null) {
               return;

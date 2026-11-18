@@ -84,6 +84,8 @@ export class Room {
   private tsMap: NumberDict = {};
   private io: Server;
   private socketIdMap: StringDict = {};
+  // clientId -> per-page-load id from the handshake (r220, see getRosterForApp)
+  private pageIdMap: StringDict = {};
   // clientId -> sessionId secret. In-memory version of the redis session map,
   // so clientId spoofing is also blocked when redis isn't configured.
   // lastSeen drives the TTL sweep below (entries expire after SESSION_TTL_MS)
@@ -394,6 +396,12 @@ export class Room {
         // before the reassign would delete the roster entry (voice/mute flags
         // with it) instead of leaving it to the reconnecting socket
         this.socketIdMap[clientId] = socket.id;
+        const pageId = socket.handshake.query?.pageId;
+        if (typeof pageId === "string") {
+          this.pageIdMap[clientId] = pageId;
+        } else {
+          delete this.pageIdMap[clientId];
+        }
         if (superseded) {
           superseded.emit("kicked");
           superseded.disconnect();
@@ -783,12 +791,18 @@ export class Room {
     return sharerId;
   };
 
-  protected getRosterForApp = (): User[] => {
+  // r220: each entry carries the member's per-page-load id so the sharer can
+  // tell a reopened tab (same clientId — the supersede path keeps the roster
+  // entry) from a live page, and rebuild that publisher PC at once instead of
+  // waiting for ICE dead-detection + the 6 s watchdog. Additive field: older
+  // clients never read it, so they behave exactly as before
+  protected getRosterForApp = (): (User & { pageId?: string })[] => {
     return this.roster.map((p) => {
       return {
         ...p,
         isScreenShare: p.id === this.getSharerId(),
         buffering: this.bufferingMap[p.id],
+        pageId: this.pageIdMap[p.id],
       };
     });
   };
@@ -2238,6 +2252,7 @@ export class Room {
       delete this.bufferingMap[clientId];
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
+      delete this.pageIdMap[clientId];
       delete this.floatReactionTimes[clientId];
       delete this.intermissionTimes[clientId];
       delete this.sleepTimes[clientId];
