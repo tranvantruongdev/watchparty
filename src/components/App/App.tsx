@@ -810,6 +810,15 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on("REC:shareRejected", () => {
       // Someone else started sharing first: drop our capture without a leave
       // (we never became the sharer), then watch theirs.
+      // The rejected attempt already fired the "No audio..." yellow pill
+      // (startScreenShare warns before the server answers): it blames a share
+      // that never started, so clear it — and only it, "Reconnecting..." also
+      // owns warningMessage
+      this.setState((state) =>
+        state.warningMessage.includes("No audio is being shared")
+          ? { warningMessage: "" }
+          : null,
+      );
       this.stopConvert();
       if (this.isLocalStreamAFile) {
         // Stopping the capture doesn't stop our file playing in leftVideo
