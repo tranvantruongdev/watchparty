@@ -227,7 +227,18 @@ export class Room {
       }
       if (this.video) {
         this.lastTsMap = Date.now();
-        io.of(roomId).emit("REC:tsMap", this.tsMap);
+        // This 1 s broadcast is the client sync heartbeat while the room
+        // PLAYS: App.tsx only consumes tsMap ticks when !roomPaused (sync
+        // pbr, catch-up chip, auto-resync), and every viewer's entry moves
+        // each tick while playing. A paused room — the state overnight and
+        // BRB rooms sit in for hours — rebuilt an identical map every tick
+        // and still broadcast it: measured 8 frames/s (~3.4 KB/s) for a
+        // paused 8-member room. Skip it while paused; the join-time and
+        // cmdHost emits still fire, so a joiner keeps their snapshot, and
+        // the first tick after a resume broadcasts again.
+        if (!this.paused) {
+          io.of(roomId).emit("REC:tsMap", this.tsMap);
+        }
       }
     }, 1000);
 
