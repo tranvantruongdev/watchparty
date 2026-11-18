@@ -162,8 +162,20 @@ const flushIce = (pc: RTCPeerConnection) => {
   queue.forEach((ice) => pc.addIceCandidate(ice).catch(() => {}));
 };
 
+// Events after which a blocked voice element may be played. A mouse click or
+// key press counts as activation at pointerdown/keydown, a touch only at
+// touchend/pointerup (round 188)
+const GESTURE_EVENTS = ["pointerdown", "pointerup", "touchend", "keydown"];
+
+// How long the "mic disconnected" notice stays on the page
+const MIC_NOTICE_MS = 8000;
+
 interface VideoChatState {
   playBlocked: boolean;
+  // Page-level notice that the mic ended on its own (round 188): the self-tile
+  // hint lives in the People panel, which is closed by default and holds no
+  // self tile once the call is left
+  micNotice: string;
   voiceVolume: number;
   speaking: string[];
   reconnecting: string[];
@@ -186,6 +198,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // remounts and People-panel collapse (a fresh instance re-seeds from there)
   state = {
     playBlocked: false,
+    micNotice: "",
     voiceVolume: getVoiceVolume(),
     speaking: [] as string[],
     reconnecting: [] as string[],
@@ -225,6 +238,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   } = {};
   // A mic switch is in flight (serialize changeMic — see the guard there)
   micSwitching = false;
+  micNoticeTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   // Bumped by every teardown (Leave, mic-off, auto-listen's leave): a capture
   // that started before the teardown must not resurrect voice when it resolves
   teardownSeq = 0;
@@ -345,19 +359,37 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     if (el.paused) {
       el.play().catch(() => {
         this.setState({ playBlocked: true });
-        document.addEventListener("pointerdown", this.retryPlay, {
-          once: true,
-        });
-        document.addEventListener("keydown", this.retryPlay, { once: true });
+        GESTURE_EVENTS.forEach((type) =>
+          document.addEventListener(type, this.retryPlay),
+        );
       });
     }
   };
 
+  // Play every voice element now (inside a gesture). The hint and the gesture
+  // listeners go only once every play() succeeded: a touch tap fires pointerdown
+  // BEFORE the browser counts it as activation (that happens on touchend /
+  // pointerup), so a one-shot pointerdown retry was refused again and left the
+  // listener silent with the hint gone (round 188)
   retryPlay = () => {
-    this.setState({ playBlocked: false });
-    Object.keys(this.remoteStreams).forEach((key) =>
-      window.watchparty.videoRefs[key]?.play().catch(() => {}),
-    );
+    Promise.all(
+      Object.keys(this.remoteStreams).map((key) => {
+        const el = window.watchparty.videoRefs[key];
+        return el
+          ? el.play().then(
+              () => true,
+              () => false,
+            )
+          : true;
+      }),
+    ).then((done) => {
+      if (done.every(Boolean)) {
+        GESTURE_EVENTS.forEach((type) =>
+          document.removeEventListener(type, this.retryPlay),
+        );
+        this.setState({ playBlocked: false });
+      }
+    });
   };
 
   // One "voice volume" for everyone else (the movie keeps its own slider).
@@ -530,6 +562,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     }
     document.removeEventListener("pointerdown", this.resumeAudio);
     document.removeEventListener("keydown", this.resumeAudio);
+    GESTURE_EVENTS.forEach((type) =>
+      document.removeEventListener(type, this.retryPlay),
+    );
+    clearTimeout(this.micNoticeTimer);
     this.dropAllVoiceNodes();
     if (this.audioCtx) {
       this.audioCtx.removeEventListener(
@@ -913,7 +949,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       return;
     }
     // A fresh capture: any device-loss hint is stale by definition
-    this.setState({ deviceHint: "" });
+    this.setState({ deviceHint: "", micNotice: "" });
     // The mic-on click is a user gesture: a saved boost (>100%) can start its
     // audio context now (before the awaits), it cannot at page load
     if (getVoiceVolume() > 1) {
@@ -1002,6 +1038,22 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     const others = this.props.participants.some(
       (p) => p.isVideoChat && p.id !== selfId,
     );
+    if (fromEnded) {
+      // The tile hint is invisible with the People panel closed, and gone once
+      // the call is left below: say it on the page for a few seconds (round 188)
+      this.setState({
+        micNotice: `Microphone disconnected. ${
+          !ourStream || !others || this.props.deaf
+            ? "Voice chat is off"
+            : "You are still listening"
+        }`,
+      });
+      clearTimeout(this.micNoticeTimer);
+      this.micNoticeTimer = setTimeout(
+        () => this.setState({ micNotice: "" }),
+        MIC_NOTICE_MS,
+      );
+    }
     if (!ourStream || !others || this.props.deaf) {
       this.stopWebRTC();
       return;
@@ -1489,6 +1541,31 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
           padding: "4px",
         }}
       >
+        {this.state.micNotice &&
+          createPortal(
+            <div
+              role="status"
+              style={{
+                position: "fixed",
+                top: 12,
+                left: "50%",
+                transform: "translateX(-50%)",
+                maxWidth: "calc(100vw - 32px)",
+                padding: "6px 14px",
+                borderRadius: "8px",
+                backgroundColor: "rgba(0,0,0,0.85)",
+                color: "#ff8787",
+                fontSize: "14px",
+                fontWeight: 700,
+                textAlign: "center",
+                zIndex: 1000,
+                pointerEvents: "none",
+              }}
+            >
+              {this.state.micNotice}
+            </div>,
+            document.body,
+          )}
         {this.state.playBlocked &&
           // The People panel can be collapsed, so this sits on the page itself
           createPortal(
