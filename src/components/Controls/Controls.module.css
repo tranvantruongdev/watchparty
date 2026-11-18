@@ -51,6 +51,26 @@
   .controls button {
     min-height: 32px;
   }
+
+  /* The ActIcon buttons are 24px wide (the icon's own box): min-height alone
+     leaves a 24px-wide tap target, under the platform's 32px minimum. Letting
+     the box grow to 32px would wrap the bar to a third row on a 390px phone,
+     so the hit area grows invisibly instead — the same ::before band the seek
+     and volume tracks got. 4px per side exactly fills the bar's 8px flex gap,
+     so neighbouring bands abut without overlapping. The visible icon keeps its
+     exact box and the desktop mouse layout is untouched (pointer:coarse only) */
+  .controls .actBtn {
+    position: relative;
+  }
+
+  .controls .actBtn::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    right: -4px;
+  }
 }
 
 /* Mantine's drag handler lives on the track container, so the band must be
