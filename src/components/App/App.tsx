@@ -2975,9 +2975,12 @@ export class App extends React.Component<AppProps, AppState> {
       const pc = new RTCPeerConnection({ iceServers: iceServers() });
       this.consumerConn = pc;
       // A fresh copy starts unstalled (and un-counted), whatever an old one
-      // flagged before the rebuild
+      // flagged before the rebuild. shareStatsLast too: it still holds the
+      // dead PC's byte count, so the first poll on the new PC would diff
+      // against it and paint a negative Mbps on the pill (measured r212)
       this.shareStallTicks = 0;
       this.shareLastFrames = undefined;
+      this.shareStatsLast = undefined;
       this.setState({ shareStalled: false });
       window.clearInterval(this.shareStatsTimer);
       this.shareStatsTimer = window.setInterval(
