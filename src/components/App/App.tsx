@@ -167,6 +167,16 @@ const glassCardStyle: React.CSSProperties = {
 
 const clientId = getOrCreateClientId();
 
+// Round 197: when the browser blocks autoplay, localPlay mutes the player and
+// the room's sound (a screen share's audio, or the media) stays silent until
+// the viewer clicks the Unmute overlay. Voice chat already retries on any
+// gesture (VideoChat retryPlay, round 188), so one tap on the voice hint
+// brought voice while the share audio stayed muted behind its own button —
+// the late joiner needed a second click to hear the room. Unlock the player
+// on the first activation too, listening to the same events the voice retry
+// does (a touch only counts as activation at pointerup/touchend, round 188)
+const AUDIO_UNLOCK_EVENTS = ["pointerdown", "pointerup", "touchend", "keydown"];
+
 // Round 168: the player's volume survives a reload / a new tab, like the voice
 // volume does (watchparty-voice-volume). "0".."1"; anything unparsable falls
 // back to full volume
@@ -510,6 +520,9 @@ export class App extends React.Component<AppProps, AppState> {
 
   chatRef = React.createRef<Chat>();
   videoChatRef = React.createRef<VideoChat>();
+  // The autoplay-blocked unlock listens on document gestures once (see
+  // AUDIO_UNLOCK_EVENTS); the flag keeps a re-arm from stacking listeners
+  audioUnlockArmed = false;
   // Per-second position reports, kept out of state: storing them in state
   // re-rendered the whole tree twice a second while a video plays. Sync logic
   // reads this field; state.tsMap is only refreshed for the ts badges while
@@ -603,6 +616,9 @@ export class App extends React.Component<AppProps, AppState> {
     // way; removeEventListener would not match them
     document.onfullscreenchange = null;
     document.onkeydown = null;
+    AUDIO_UNLOCK_EVENTS.forEach((type) =>
+      document.removeEventListener(type, this.audioUnlock),
+    );
     document.removeEventListener("visibilitychange", this.pageVisibility);
     document.removeEventListener("resume", this.pageWake);
     window.removeEventListener("pageshow", this.pageShow);
@@ -3356,6 +3372,9 @@ export class App extends React.Component<AppProps, AppState> {
         ) {
           console.log("auto-muting to allow autoplay or screenshare host");
           this.localSetMute(true);
+          if (!this.state.isAutoPlayable) {
+            this.armAudioUnlock();
+          }
         } else {
           this.localSetMute(false);
         }
@@ -3418,6 +3437,47 @@ export class App extends React.Component<AppProps, AppState> {
   localSetMute = (muted: boolean) => {
     this.Player().setMute(muted);
     this.refreshControls();
+  };
+
+  // The gesture-side twin of the Unmute overlay button (same setState, same
+  // volume restore). The sharer is excluded: their leftVideo only mirrors
+  // the muted preview, and unmuting it echoes their own capture (round 111)
+  audioUnlock = () => {
+    // A touch's pointerdown arrives before the browser grants activation:
+    // unmuting then would pause the player, so stay armed for its touchend
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      return;
+    }
+    AUDIO_UNLOCK_EVENTS.forEach((type) =>
+      document.removeEventListener(type, this.audioUnlock),
+    );
+    this.audioUnlockArmed = false;
+    if (
+      this.state.isAutoPlayable ||
+      !this.state.roomMedia ||
+      this.isSharingScreen()
+    ) {
+      return;
+    }
+    this.setState({ isAutoPlayable: true, playbackBlocked: false }, () => {
+      this.localSetMute(false);
+      // The gesture means "give me sound", not "full blast": keep the
+      // user's saved volume (round 168), don't stomp it with 1
+      this.localSetVolume(parseStoredVolume(localStorage.getItem(VOLUME_KEY)));
+      if (!this.state.roomPaused) {
+        this.localPlay();
+      }
+    });
+  };
+
+  armAudioUnlock = () => {
+    if (this.audioUnlockArmed) {
+      return;
+    }
+    this.audioUnlockArmed = true;
+    AUDIO_UNLOCK_EVENTS.forEach((type) =>
+      document.addEventListener(type, this.audioUnlock),
+    );
   };
 
   localSetVolume = (volume: number) => {
