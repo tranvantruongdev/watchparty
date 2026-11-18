@@ -251,8 +251,12 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
-  // next click or key press; until it runs, applyVoiceOutput keeps the voice
-  // on the element so a suspended context can never silence anyone
+  // next click, touch or key press. A touch tap fires pointerdown BEFORE the
+  // browser counts it as user activation (that lands on touchend/pointerup),
+  // so a one-shot pointerdown retry fired refused, was consumed and left the
+  // boost dead no matter how many taps followed (round 195, round 188's fix);
+  // until it runs, applyVoiceOutput keeps the voice on the element so a
+  // suspended context can never silence anyone
   ensureAudioContext = () => {
     if (!this.audioCtx) {
       if (typeof AudioContext === "undefined") {
@@ -263,10 +267,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     }
     if (this.audioCtx.state !== "running") {
       this.audioCtx.resume().catch(() => {});
-      document.addEventListener("pointerdown", this.resumeAudio, {
-        once: true,
-      });
-      document.addEventListener("keydown", this.resumeAudio, { once: true });
+      GESTURE_EVENTS.forEach((type) =>
+        document.addEventListener(type, this.resumeAudio, { once: true }),
+      );
     }
     return this.audioCtx;
   };
@@ -560,8 +563,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     if (this.speakTimer) {
       clearInterval(this.speakTimer);
     }
-    document.removeEventListener("pointerdown", this.resumeAudio);
-    document.removeEventListener("keydown", this.resumeAudio);
+    GESTURE_EVENTS.forEach((type) =>
+      document.removeEventListener(type, this.resumeAudio),
+    );
     GESTURE_EVENTS.forEach((type) =>
       document.removeEventListener(type, this.retryPlay),
     );
