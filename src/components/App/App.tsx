@@ -701,6 +701,25 @@ export class App extends React.Component<AppProps, AppState> {
         successMessage: "",
         warningMessage: "",
       });
+      // A disconnect this page slept through (frozen tab, suspended machine)
+      // leaves publisher PCs nobody closed: the viewer's own copy is torn down
+      // while we hold the stale entry, and that entry defeats the
+      // !this.publisherConns[id] guard below — no fresh offer is ever built, so
+      // the pill says "not reaching 1 viewer" and the viewer's picture never
+      // returns (measured round 202: S frozen 60 s, share dead 75 s after
+      // resume, voice fine). Drop the unhealthy ones; after a short blip they
+      // are all connected, so the normal no-renegotiation path is untouched
+      Object.entries(this.publisherConns).forEach(([id, pc]) => {
+        if (
+          pc.connectionState === "disconnected" ||
+          pc.connectionState === "failed" ||
+          pc.connectionState === "closed"
+        ) {
+          pc.close();
+          delete this.publisherConns[id];
+        }
+      });
+      this.setupRTCConnections();
       // Re-announce our screen/file share if the capture survived the socket
       // gap: short blips never cleared it (server grace window), long ones
       // did and this puts it back without re-picking the screen. Before the
@@ -2922,6 +2941,25 @@ export class App extends React.Component<AppProps, AppState> {
             await pc.setLocalDescription(offer);
             this.sendSignalSS(id, { sdp: pc.localDescription }, true);
           };
+          // A dropped offer is a permanent black share: the viewer-side retry
+          // (round 54) only rebuilds OUR pc when an offer lands, and the
+          // sharer never re-offers. Round 202 measured the resume race: a
+          // sharer waking from a long freeze offers before CMD:resumeShare
+          // re-registers it server-side (socket.io flushes the send buffer
+          // before the reconnect's 'connect' handler emits), the relay drops
+          // every signalSS while the room has no sharer id, and this pc sits
+          // have-local-offer forever while the pill reads "not reaching 1
+          // viewer". One resend 3 s in covers it — by then resumeShare has
+          // landed; a connected pc (stable) sends nothing
+          window.setTimeout(() => {
+            if (
+              this.publisherConns[id] === pc &&
+              pc.signalingState === "have-local-offer" &&
+              pc.localDescription
+            ) {
+              this.sendSignalSS(id, { sdp: pc.localDescription }, true);
+            }
+          }, 3000);
         }
       });
       // The sharer shows what their own encoder does (pollSendStats) instead
