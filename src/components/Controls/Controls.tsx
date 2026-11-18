@@ -329,7 +329,10 @@ export const Controls = (props: ControlsProps) => {
         aria-disabled={disabled || undefined}
         onKeyDown={onSeekKeyDown}
         onClick={(e: any) => {
-          if (!disabled) {
+          // No finite duration (live share, DASH before the seekable range):
+          // getLength() is Infinity and the seek would set a non-finite
+          // currentTime; stay inert like the keyboard path above
+          if (!disabled && hasFiniteDuration) {
             // Read the time from the click event
             if (e) {
               const rect = e.target.getBoundingClientRect();
