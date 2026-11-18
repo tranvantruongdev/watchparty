@@ -513,6 +513,38 @@ export class App extends React.Component<AppProps, AppState> {
   // the people column is open, and Controls polls the player itself (pollLive)
   // because its position display is computed at render time.
   tsMapData: NumberDict = {};
+  // Round 192: true while the chat column is collapsed by the screen share
+  // (not by the person). A hand toggle of the chevron clears it, so a person
+  // who re-opened the chat is never collapsed again for that share, and a
+  // chat they collapsed themselves before the share is not re-opened after it
+  chatAutoCollapsed = false;
+
+  componentDidUpdate(_prevProps: AppProps, prevState: AppState) {
+    const wasShare = isScreenShare(prevState.roomMedia);
+    const isShare = isScreenShare(this.state.roomMedia);
+    if (isShare && !wasShare) {
+      // Entering a screen share: the picture gets the chat's width. Same
+      // breakpoint as the CSS that sizes the open chat; narrower windows keep
+      // the stacked layout and their chat. Not written to localStorage: that
+      // key holds the person's own choice, which the share must not change
+      if (
+        this.state.showChatColumn &&
+        window.matchMedia("(min-width: 901px)").matches
+      ) {
+        this.chatAutoCollapsed = true;
+        this.setState({ showChatColumn: false });
+      }
+    } else if (
+      !isShare &&
+      this.chatAutoCollapsed &&
+      // The sharer's reconnect passes through a "" snapshot before its share
+      // resumes (REC:host, shareResuming): not an end, keep the chat collapsed
+      !this.resumeShareInFlight
+    ) {
+      this.chatAutoCollapsed = false;
+      this.setState({ showChatColumn: true });
+    }
+  }
 
   async componentDidMount() {
     document.onfullscreenchange = this.onFullScreenChange;
@@ -5144,6 +5176,7 @@ export class App extends React.Component<AppProps, AppState> {
                     <ActionIcon
                       onClick={() => {
                         const newVal = !this.state.showChatColumn;
+                        this.chatAutoCollapsed = false;
                         this.setState({
                           showChatColumn: newVal,
                         });
