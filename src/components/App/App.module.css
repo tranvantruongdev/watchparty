@@ -805,3 +805,82 @@
     object-fit: contain;
   }
 }
+
+/* Phone keyboard (round 208). The viewport meta carries
+   interactive-widget=resizes-content, so when the keyboard opens on an
+   Android phone the layout viewport shrinks (390x844 -> ~390x500) and the
+   focus scroll then pushes the page down ~370px to reveal the input — the
+   share picture ends up entirely off screen (measured: picVisible 0px,
+   scrollY 370). Fit the stacked layout into the shrunken viewport instead:
+   the media/URL row and the share/action row hide (they sit behind the
+   keyboard while typing), the video caps at 180px, and the chat column takes
+   the leftover height with the message list scrolling inside it — rightColumn
+   becomes the flex column that Chat's inline flexGrow:1/minHeight:0 already
+   assumes. The page then fits the shrunken viewport exactly, so the browser's
+   focus scroll is a no-op and picture, input and latest message all stay
+   visible. Matches a keyboard-open portrait phone only: portrait + <=900px
+   wide + <=600px tall + the chat input focused (a small phone with the
+   keyboard closed, e.g. 375x548 in Safari, is also <=600px tall). Landscape phones (844x390) and every keyboard-closed
+   size measured here (390x844, 360x740, 1440x900) fall outside it, and
+   desktop (>=901px) is unaffected. 44px = the measured top bar height. */
+@media only screen and (max-width: 900px) and (orientation: portrait) and (max-height: 600px) {
+  .mobileStack:has(> .fullHeightColumn.leftColumn):has(
+      .fullHeightColumn.rightColumn input:focus
+    ) {
+    height: calc(100dvh - 44px);
+  }
+
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    .fullHeightColumn.rightColumn {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    flex: 1 1 0px;
+    min-height: 0;
+  }
+
+  /* both columns default to flex-grow: 1, which would split the leftover
+     ~50/50 and starve the chat list again — the picture keeps only its
+     content height, the chat list takes every pixel left over */
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    .fullHeightColumn.leftColumn {
+    flex-grow: 0;
+  }
+
+  /* the sized stack bounds the picture box; 48vh would overflow it */
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus) .playerContainer {
+    min-height: 0;
+  }
+
+  /* beats the inline calc(100vh - 180px) cap; :not(:fullscreen) keeps the
+     video-only fullscreen (App.tsx localFullScreen) at full size */
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    :global(#leftVideo):not(:fullscreen),
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    :global(#leftYt):not(:fullscreen) {
+    max-height: 180px !important;
+  }
+
+  /* Media URL row + share/action row inside playerColumn (rendered below the
+     picture via the order rules above), the controls bar (~92px, two rows),
+     and the room-name / People-Settings rows above the chat list: all sit
+     behind the keyboard while typing (today the focus scroll pushes them off
+     screen together with everything else). Measured budget at 390x500:
+     picture 188 + controls 92 + name/seg 74 + input dock 106 + one message 93
+     = 553 > 456 — without shedding these the chat list collapses to 0 and the
+     latest message disappears. With them hidden: picture 188 + chat ~244.
+     The player column keeps flex-grow on its picture wrapper, so it takes its
+     content height first and the chat list takes every pixel left over. */
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    :global(#playerColumn)
+    > .mobileStack,
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    :global(#playerColumn)
+    > div[class*="_controls_"],
+  .mobileStack:has(.fullHeightColumn.rightColumn input:focus)
+    .fullHeightColumn.rightColumn
+    > div:nth-child(-n + 2) {
+    /* !important: the room-name row carries an inline display:flex */
+    display: none !important;
+  }
+}
