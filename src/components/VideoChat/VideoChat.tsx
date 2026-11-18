@@ -597,7 +597,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // AudioContext, no permissions and no capture. Browsers without the API
   // just never light up. A source must have sent a packet recently too: a
   // muted peer stops (or silences) its packets, but the entry lingers with
-  // its last audioLevel (s.timestamp is on the performance.now() clock).
+  // its last audioLevel (round 198 measured Edge's s.timestamp on the epoch
+  // wall clock, not performance.now() — accept a timestamp only inside
+  // [0, 2000] ms behind either clock, or a stale entry's old wall-clock
+  // timestamp would look "recent" through pageNow - ts < 2000 being
+  // vacuously negative and the ring would stick on a frozen peer).
   // A ring stays on ~600ms after the level drops so it doesn't flicker
   // between words. Our own mic is not shown; the mic button already shows
   // its own state
@@ -627,13 +631,18 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
             }[];
           };
           if (
-            withSources
-              .getSynchronizationSources?.()
-              .some(
-                (s) =>
-                  (s.audioLevel ?? 0) > 0.01 &&
-                  pageNow - (s.timestamp ?? -Infinity) < 2000,
-              )
+            withSources.getSynchronizationSources?.().some((s) => {
+              const ts = s.timestamp;
+              if (ts == null || (s.audioLevel ?? 0) <= 0.01) return false;
+              // Fresh on either clock, lower-bounded so a wall-clock
+              // timestamp can't slip through the performance.now() arm
+              const agePage = pageNow - ts;
+              const ageWall = Date.now() - ts;
+              return (
+                (agePage >= 0 && agePage < 2000) ||
+                (ageWall >= 0 && ageWall < 2000)
+              );
+            })
           ) {
             active = true;
             break;
