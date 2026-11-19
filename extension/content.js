@@ -33,6 +33,7 @@
   let buffering = false; // last CMD:buffering state we reported (true = asked the room to pause)
   let members = null; // roster ids from the last 'roster' event; null = nothing received yet
   let collapsed = false;
+  let unread = 0; // chat lines from others that arrived while the panel was collapsed
   let sync = null; // { host, tsMap, done } for the current connection
   let pendingHost = null; // joiner state waiting for a <video> to appear
   let remoteSeek = null; // { t, at }
@@ -40,6 +41,12 @@
   let resetReapplied = false;
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
+
+  // #wpx=<room> deep link: read once at script start, before the site's router can strip the hash
+  const hashRoom = (() => {
+    const m = /[#&]wpx=([^&]+)/.exec(location.hash || "");
+    return m ? parseRoom(m[1]) : "";
+  })();
 
   // chrome.storage only exists for an installed extension; the bookmarklet (page world)
   // falls back to localStorage under a "wpx:" prefix.
@@ -145,7 +152,7 @@
     </style>
     <div class="panel" id="panel">
       <div class="head">
-        <span><span class="dot" id="dot"></span>WatchParty</span>
+        <span><span class="dot" id="dot"></span>WatchParty<span id="unread"></span></span>
         <button id="toggle" title="Collapse / expand">&ndash;</button>
       </div>
       <div class="body">
@@ -157,6 +164,10 @@
         <div class="status" id="status">Not connected</div>
         <div class="members" id="members"></div>
         <div class="rates" id="rates"></div>
+        <div class="row">
+          <button id="synctome" title="Move everyone to your position, speed and play state">Sync everyone to me</button>
+          <button id="copyinvite" hidden title="Copy a link that opens this page with the room prefilled">Copy invite</button>
+        </div>
         <div class="rx" id="rx"></div>
         <div class="log" id="log"></div>
         <input id="chatinput" placeholder="Message (Enter to send)" maxlength="500" autocomplete="off" />
@@ -174,6 +185,9 @@
     status: $("status"),
     members: $("members"),
     rates: $("rates"),
+    unread: $("unread"),
+    synctome: $("synctome"),
+    copyinvite: $("copyinvite"),
     rx: $("rx"),
     log: $("log"),
     chatinput: $("chatinput"),
@@ -222,6 +236,12 @@
 
   function updateJoinButton() {
     el.join.textContent = socket ? "Leave" : "Join";
+    el.copyinvite.hidden = !socket;
+  }
+
+  function renderUnread() {
+    host.dataset.unread = String(unread);
+    el.unread.textContent = unread ? " • " + unread : "";
   }
 
   function updateRates() {
@@ -527,6 +547,8 @@
     store.set({ room: el.room.value.trim(), name });
     leave(true);
     chat = [];
+    unread = 0;
+    renderUnread();
     renderChat();
     setStatus("Connecting...");
     host.dataset.room = room;
@@ -602,7 +624,16 @@
       chat = Array.isArray(arr) ? arr.slice(-MAX_CHAT) : [];
       renderChat();
     });
-    s.on("REC:chat", (m) => m && pushChat(m));
+    s.on("REC:chat", (m) => {
+      if (!m) return;
+      pushChat(m);
+      // unread badge: real chat from someone else while the panel is closed
+      // (cmd and system lines are activity notes, reactions never come through chat)
+      if (collapsed && !m.cmd && !m.sysJoin && !m.sysLeave && m.id && m.id !== clientId) {
+        unread++;
+        renderUnread();
+      }
+    });
     s.on("REC:play", () => roomMedia || applyPlay());
     s.on("REC:pause", () => roomMedia || applyPause());
     s.on("REC:seek", (t) => roomMedia || applySeek(Number(t)));
@@ -641,18 +672,41 @@
     emit("CMD:chat", text);
     el.chatinput.value = "";
   });
+  el.synctome.addEventListener("click", () => {
+    if (!joined || roomMedia || !video) return;
+    if (!confirm("Move everyone to your position?")) return;
+    emit("CMD:seek", video.currentTime);
+    if (Math.abs(video.playbackRate - roomRate) > 1e-6) emit("CMD:playbackRate", video.playbackRate);
+    emit(video.paused ? "CMD:pause" : "CMD:play");
+  });
+  el.copyinvite.addEventListener("click", () => {
+    const link = location.origin + location.pathname + "#wpx=" + (host.dataset.room || parseRoom(el.room.value));
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(
+        () => setStatus("Invite link copied", "on"),
+        () => setStatus("Copy failed — link: " + link, "err"),
+      );
+    } else {
+      setStatus("Copy failed — link: " + link, "err");
+    }
+  });
   el.toggle.addEventListener("click", () => setCollapsed(!collapsed));
   function setCollapsed(c) {
     collapsed = c;
     el.panel.classList.toggle("collapsed", c);
     el.toggle.innerHTML = c ? "+" : "&ndash;";
     store.set({ collapsed: c });
+    if (!c && unread) {
+      unread = 0;
+      renderUnread();
+    }
   }
 
   // bookmarklet: the link names the room it was made in, which beats an older saved room;
-  // fill it in, never auto-join
+  // fill it in, never auto-join. The #wpx= hash beats both and may auto-join below.
   function prefillRoom() {
-    if (window.__wpRoom) el.room.value = String(window.__wpRoom);
+    if (hashRoom) el.room.value = hashRoom;
+    else if (window.__wpRoom) el.room.value = String(window.__wpRoom);
   }
   // clicking the bookmarklet again lands here instead of building a second panel
   window.__wpExtShow = () => {
@@ -663,11 +717,15 @@
 
   // ---- start ----
   placeHost();
+  renderUnread();
   store.get(["room", "name", "collapsed"]).then((saved) => {
     if (saved.room) el.room.value = saved.room;
     prefillRoom();
     el.name.value = saved.name || "Viewer-" + Math.floor(1000 + Math.random() * 9000);
     if (saved.collapsed) setCollapsed(true);
+    // deep link: join right away when we know who we are, otherwise ask for the name
+    if (hashRoom && saved.name) join();
+    else if (hashRoom) el.name.focus();
   });
   refreshVideo();
   updateRates();

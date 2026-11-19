@@ -26,7 +26,12 @@ The panel also has a chat that shares the room's chat with the WatchParty web pa
 video buffers while the room is playing, the room pauses until everyone can play again. It
 shows who is watching ("N watching: ...") with join / leave notes in its log, and a row of
 emoji reactions that float over the video — shared with the web app in both directions. The
-`-` button collapses the panel; it follows the player into fullscreen.
+`-` button collapses the panel; it follows the player into fullscreen, and while collapsed a
+"• N" badge in the header counts chat messages that arrived from the others (opening the
+panel clears it). **Sync everyone to me** (under the speed row) moves the whole room to your
+position, speed and play state after a confirmation. Opening a page with `#wpx=<room>` in its
+URL prefills the room and joins at once when your name is already saved, and **Copy invite**
+copies such a link for the page you are on.
 
 ## Bookmarklet (no install)
 
