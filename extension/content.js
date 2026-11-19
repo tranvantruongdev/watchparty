@@ -39,6 +39,14 @@
   let remoteSeek = null; // { t, at }
   let siteResetUntil = 0;
   let resetReapplied = false;
+  let typingPeers = {}; // id -> expiry (REC:typing true; 6 s safety timeout)
+  let typingActive = false; // we sent CMD:typing true and no false yet
+  let typingLastTrue = 0;
+  let typingOffTimer = null;
+  let myUrl = null; // the title url page.js last posted (null = not on a title)
+  let announcedUrl = null; // last url we announced to the room
+  let roomSiteUrl = null; // latest url seen in the room (any REC:siteUrl)
+  let followUrl = null; // url the follow bar points at while shown
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
 
@@ -137,6 +145,11 @@
       .log div { margin-bottom: 3px; word-wrap: anywhere; }
       .members { font-size: 11px; color: #8892a8; min-height: 14px; white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis; }
+      .follow { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #ffd88a;
+        background: #3a3226; border: 1px solid #665533; border-radius: 6px; padding: 4px 6px; }
+      .follow[hidden] { display: none; }
+      .follow span { flex: 1; word-wrap: anywhere; }
+      .typing { font-size: 11px; color: #98a; min-height: 14px; font-style: italic; }
       .rx { display: flex; gap: 4px; }
       .rx button { flex: 1; padding: 4px 0; font-size: 15px; }
       #floats { position: fixed; right: 20px; bottom: 30vh; display: flex; flex-direction: column;
@@ -163,6 +176,11 @@
         </div>
         <div class="status" id="status">Not connected</div>
         <div class="members" id="members"></div>
+        <div class="follow" id="follow" hidden>
+          <span id="followtext"></span>
+          <button id="followgo">Follow</button>
+          <button id="followx" title="Dismiss">&times;</button>
+        </div>
         <div class="rates" id="rates"></div>
         <div class="row">
           <button id="synctome" title="Move everyone to your position, speed and play state">Sync everyone to me</button>
@@ -170,6 +188,7 @@
         </div>
         <div class="rx" id="rx"></div>
         <div class="log" id="log"></div>
+        <div class="typing" id="typing"></div>
         <input id="chatinput" placeholder="Message (Enter to send)" maxlength="500" autocomplete="off" />
       </div>
     </div>
@@ -184,6 +203,11 @@
     join: $("join"),
     status: $("status"),
     members: $("members"),
+    follow: $("follow"),
+    followtext: $("followtext"),
+    followgo: $("followgo"),
+    followx: $("followx"),
+    typing: $("typing"),
     rates: $("rates"),
     unread: $("unread"),
     synctome: $("synctome"),
@@ -268,6 +292,79 @@
       ? members.length + " watching: " + members.map(nameOf).join(", ")
       : "";
   }
+
+  // ---- typing indicator ----
+  function renderTyping() {
+    const now = Date.now();
+    for (const id of Object.keys(typingPeers)) if (typingPeers[id] <= now) delete typingPeers[id];
+    const live = Object.keys(typingPeers);
+    host.dataset.typing = live.join(",");
+    el.typing.textContent =
+      live.length === 1
+        ? nameOf(live[0]) + " is typing…"
+        : live.length === 2
+          ? live.map(nameOf).join(" and ") + " are typing…"
+          : live.length > 2
+            ? live.length + " people are typing…"
+            : "";
+  }
+
+  const typingStop = () => {
+    clearTimeout(typingOffTimer);
+    typingOffTimer = null;
+    if (!typingActive) return;
+    typingActive = false;
+    emit("CMD:typing", false);
+  };
+  const onTypeInput = () => {
+    if (!joined) return;
+    const now = Date.now();
+    if (!typingActive || now - typingLastTrue >= 2000) {
+      typingActive = true;
+      typingLastTrue = now;
+      emit("CMD:typing", true);
+    }
+    clearTimeout(typingOffTimer);
+    typingOffTimer = setTimeout(typingStop, 3000); // false 3 s after the last keystroke
+  };
+
+  // ---- follow the episode (page.js announces the title via wp-ext-page messages) ----
+  function hideFollow() {
+    followUrl = null;
+    el.follow.hidden = true;
+    delete host.dataset.follow;
+  }
+  function showFollow(id, url) {
+    followUrl = url;
+    el.followtext.textContent = nameOf(id) + " is watching another title";
+    el.follow.hidden = false;
+    host.dataset.follow = url;
+  }
+  function announceUrl() {
+    if (!joined || roomMedia || !myUrl || myUrl === announcedUrl) return;
+    announcedUrl = myUrl;
+    emit("CMD:siteUrl", myUrl);
+  }
+  window.addEventListener("message", (e) => {
+    if (e.source !== window) return;
+    const d = e.data;
+    if (!d || d.source !== "wp-ext-page" || d.type !== "siteUrl") return;
+    myUrl = typeof d.url === "string" && d.url ? d.url : null;
+    announceUrl();
+    if (myUrl && myUrl === roomSiteUrl) hideFollow(); // we caught up with the room
+  });
+  el.followgo.addEventListener("click", () => {
+    if (!followUrl) return;
+    let u = null;
+    try {
+      u = new URL(followUrl);
+    } catch {
+      // not a parseable url: never navigate on one
+    }
+    if (u && u.hostname === location.hostname) location.href = followUrl;
+    else el.followtext.textContent = "Open it on that site: " + followUrl;
+  });
+  el.followx.addEventListener("click", hideFollow);
 
   function renderChat() {
     el.log.textContent = "";
@@ -530,6 +627,13 @@
     names = {};
     buffering = false;
     members = null;
+    typingPeers = {};
+    typingActive = false;
+    clearTimeout(typingOffTimer);
+    typingOffTimer = null;
+    roomSiteUrl = null;
+    hideFollow();
+    renderTyping();
     renderMembers();
     delete host.dataset.synced;
     delete host.dataset.room;
@@ -566,6 +670,11 @@
       delete host.dataset.synced;
       setStatus("Connected to " + room, "on");
       emit("CMD:name", name);
+      // announce the title we are on (fresh room session), and ask page.js to
+      // re-post in case its earlier siteUrl message came before we listened
+      announcedUrl = null;
+      announceUrl();
+      window.postMessage({ source: "wp-ext", type: "getSiteUrl" }, "*");
     });
     s.on("connect_error", (err) => {
       joined = false;
@@ -620,6 +729,23 @@
       el.floats.appendChild(f);
       setTimeout(() => f.remove(), 2500);
     });
+    s.on("REC:typing", (d) => {
+      if (!d || typeof d.id !== "string" || !d.id) return;
+      if (d.typing) typingPeers[d.id] = Date.now() + 6000; // safety timeout
+      else delete typingPeers[d.id];
+      renderTyping();
+    });
+    s.on("REC:siteUrl", (d) => {
+      if (!d || typeof d.id !== "string" || typeof d.url !== "string") return;
+      roomSiteUrl = d.url;
+      if (d.id === clientId) {
+        // our own announcement echoed back: nothing to follow
+        if (myUrl === d.url) hideFollow();
+        return;
+      }
+      if (d.url === myUrl) hideFollow(); // they caught up with us
+      else showFollow(d.id, d.url);
+    });
     s.on("chatinit", (arr) => {
       chat = Array.isArray(arr) ? arr.slice(-MAX_CHAT) : [];
       renderChat();
@@ -665,10 +791,13 @@
     store.set({ name });
     emit("CMD:name", name);
   });
+  el.chatinput.addEventListener("input", onTypeInput);
+  el.chatinput.addEventListener("blur", typingStop);
   el.chatinput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     const text = el.chatinput.value.trim();
     if (!text) return;
+    typingStop(); // sending is not typing
     emit("CMD:chat", text);
     el.chatinput.value = "";
   });
@@ -735,6 +864,7 @@
     if (!host.isConnected) placeHost();
     refreshVideo();
     updateRates();
+    renderTyping(); // prune typing entries whose 6 s safety timeout ran out
     if (joined && video && Number.isFinite(video.currentTime)) {
       emit("CMD:ts", video.currentTime);
     }

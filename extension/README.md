@@ -31,7 +31,10 @@ emoji reactions that float over the video — shared with the web app in both di
 panel clears it). **Sync everyone to me** (under the speed row) moves the whole room to your
 position, speed and play state after a confirmation. Opening a page with `#wpx=<room>` in its
 URL prefills the room and joins at once when your name is already saved, and **Copy invite**
-copies such a link for the page you are on.
+copies such a link for the page you are on. While you type in the chat box a line above the
+input shows who else is typing, and when another member is on a different streaming title
+(page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
+site, otherwise it shows the link to open on that site.
 
 ## Bookmarklet (no install)
 
