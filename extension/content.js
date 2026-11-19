@@ -30,6 +30,8 @@
   let roomRate = 1;
   let names = {};
   let chat = [];
+  let buffering = false; // last CMD:buffering state we reported (true = asked the room to pause)
+  let members = null; // roster ids from the last 'roster' event; null = nothing received yet
   let collapsed = false;
   let sync = null; // { host, tsMap, done } for the current connection
   let pendingHost = null; // joiner state waiting for a <video> to appear
@@ -126,6 +128,20 @@
       .log .sys { color: #98a; font-style: italic; }
       .log .who { color: #9db0ff; font-weight: 600; }
       .log div { margin-bottom: 3px; word-wrap: anywhere; }
+      .members { font-size: 11px; color: #8892a8; min-height: 14px; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis; }
+      .rx { display: flex; gap: 4px; }
+      .rx button { flex: 1; padding: 4px 0; font-size: 15px; }
+      #floats { position: fixed; right: 20px; bottom: 30vh; display: flex; flex-direction: column;
+        align-items: flex-end; gap: 4px; pointer-events: none; }
+      #floats .float { font-size: 26px; color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+        animation: wpx-float 2.5s ease-out forwards; }
+      @keyframes wpx-float {
+        0% { transform: translateY(0); opacity: 0; }
+        12% { opacity: 1; }
+        75% { opacity: 1; }
+        100% { transform: translateY(-140px); opacity: 0; }
+      }
     </style>
     <div class="panel" id="panel">
       <div class="head">
@@ -139,11 +155,14 @@
           <button id="join" class="primary" style="flex:0 0 70px">Join</button>
         </div>
         <div class="status" id="status">Not connected</div>
+        <div class="members" id="members"></div>
         <div class="rates" id="rates"></div>
+        <div class="rx" id="rx"></div>
         <div class="log" id="log"></div>
         <input id="chatinput" placeholder="Message (Enter to send)" maxlength="500" autocomplete="off" />
       </div>
-    </div>`;
+    </div>
+    <div id="floats"></div>`;
   const $ = (id) => root.getElementById(id);
   const el = {
     panel: $("panel"),
@@ -153,9 +172,12 @@
     name: $("name"),
     join: $("join"),
     status: $("status"),
+    members: $("members"),
     rates: $("rates"),
+    rx: $("rx"),
     log: $("log"),
     chatinput: $("chatinput"),
+    floats: $("floats"),
   };
 
   RATES.forEach((r) => {
@@ -164,6 +186,15 @@
     b.dataset.rate = String(r);
     b.addEventListener("click", () => setRate(r));
     el.rates.appendChild(b);
+  });
+
+  // Same list the server validates (FLOAT_REACTIONS in server/room.ts)
+  ["😂", "❤️", "😮", "😢", "👏", "🔥"].forEach((emoji) => {
+    const b = document.createElement("button");
+    b.textContent = emoji;
+    b.title = "React " + emoji;
+    b.addEventListener("click", () => emit("CMD:floatReaction", emoji));
+    el.rx.appendChild(b);
   });
 
   // Netflix binds player shortcuts (space, f, m, arrows) and click-to-pause on its container,
@@ -210,12 +241,26 @@
     return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
   };
 
+  const nameOf = (id) => names[id] || (id ? String(id).slice(0, 6) : "?");
+
+  function renderMembers() {
+    el.members.textContent = members
+      ? members.length + " watching: " + members.map(nameOf).join(", ")
+      : "";
+  }
+
   function renderChat() {
     el.log.textContent = "";
     for (const m of chat) {
-      const who = names[m.id] || (m.id ? String(m.id).slice(0, 6) : "?");
+      const who = nameOf(m.id);
       const line = document.createElement("div");
-      if (m.cmd) {
+      if (m.sysJoin || m.sysLeave) {
+        // Resolved at render time: the name may arrive (REC:nameMap) after the notice
+        line.className = "sys";
+        line.textContent = m.sysJoin
+          ? nameOf(m.sysJoin) + " joined"
+          : nameOf(m.sysLeave) + " left";
+      } else if (m.cmd) {
         const text =
           {
             play: "played",
@@ -243,6 +288,8 @@
     if (chat.length > MAX_CHAT) chat = chat.slice(-MAX_CHAT);
     renderChat();
   }
+
+  const pushSys = (id, left) => pushChat(left ? { sysLeave: id } : { sysJoin: id });
 
   // ---- socket helpers ----
   // The web app applies REC:play/pause/seek/playbackRate to whatever the room is playing
@@ -327,11 +374,33 @@
     resetReapplied = false;
   };
 
+  // Buffering wait: a stall while the room plays asks the server to pause everyone
+  // (setBuffering takes a plain boolean; its armBufferPause adds a ~2.5 s grace before
+  // REC:pause, so short blips never pause the room). Only on change; a remote REC:pause
+  // cannot loop back into a CMD:pause because applyPause masks the local 'pause' event,
+  // and a 'waiting' while paused is ignored, so the resume cannot ping-pong either.
+  const reportBuffering = (on) => {
+    if (on === buffering) return;
+    buffering = on;
+    emit("CMD:buffering", on);
+  };
+  const onWaiting = () => {
+    if (!joined || roomMedia || !video || video.paused) return;
+    reportBuffering(true);
+  };
+  const onBufferRecover = () => {
+    if (roomMedia) return;
+    reportBuffering(false);
+  };
+
   const VIDEO_EVENTS = {
     play: onPlay,
     pause: onPause,
     seeked: onSeeked,
     ratechange: onRateChange,
+    waiting: onWaiting,
+    playing: onBufferRecover,
+    canplay: onBufferRecover,
     loadstart: markSiteReset,
     loadedmetadata: markSiteReset,
     emptied: markSiteReset,
@@ -439,6 +508,9 @@
     sync = null;
     pendingHost = null;
     names = {};
+    buffering = false;
+    members = null;
+    renderMembers();
     delete host.dataset.synced;
     delete host.dataset.room;
     updateJoinButton();
@@ -504,6 +576,27 @@
     s.on("REC:nameMap", (m) => {
       names = m || {};
       renderChat();
+      renderMembers();
+    });
+    s.on("roster", (list) => {
+      const ids = (Array.isArray(list) ? list : [])
+        .map((u) => u && u.id)
+        .filter((id) => typeof id === "string" && id);
+      if (members) {
+        // Notices only for changes after our own initial roster (local only, never emitted)
+        for (const id of ids) if (!members.includes(id)) pushSys(id, false);
+        for (const id of members) if (!ids.includes(id)) pushSys(id, true);
+      }
+      members = ids;
+      renderMembers();
+    });
+    s.on("REC:floatReaction", (d) => {
+      if (!d || typeof d.value !== "string" || !d.value) return;
+      const f = document.createElement("div");
+      f.className = "float";
+      f.textContent = d.value + " " + nameOf(d.user);
+      el.floats.appendChild(f);
+      setTimeout(() => f.remove(), 2500);
     });
     s.on("chatinit", (arr) => {
       chat = Array.isArray(arr) ? arr.slice(-MAX_CHAT) : [];
