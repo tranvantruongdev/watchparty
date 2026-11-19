@@ -1152,8 +1152,9 @@ async function main() {
   // ---------------- r. round 7A: survive a network drop (auto-reconnect) ----------------
   // CDP offline emulation does not cut an established WebSocket, so the drop is forced
   // directly: close the socket.io engine WebSocket in the world content.js runs in
-  // (isolated world for the extension, page world for the bookmarklet) while offline
-  // emulation blocks the reconnect attempts. socket.io then retries on its own.
+  // (isolated world for the extension, page world for the bookmarklet) while the
+  // reconnect handshake is blocked at the request layer (see startOutage). socket.io
+  // then retries on its own until the outage ends.
   const connOf = (p) => ev(p, PANEL(`return h.dataset.conn || '';`));
   const countLines = (p) => ev(p, PANEL(`return r.querySelectorAll('#log div').length;`));
   const joinLeaveLines = (p) =>
@@ -1197,6 +1198,24 @@ async function main() {
     );
   };
 
+  // r1/r2/t5 shared outage helper. CDP offline emulation alone races: the socket.io
+  // reconnect handshake sometimes completes before the emulation bites, so no outage
+  // is observed. Network.setBlockedURLs fails every socket.io request — the WebSocket
+  // upgrade included — with ERR_BLOCKED_BY_CLIENT until it is cleared, so the outage
+  // lasts exactly as long as the block is held: set it BEFORE closing the WS, clear it
+  // to end the outage (offline emulation stays on top for the rest of the page).
+  const startOutage = async (p) => {
+    await netOffline(p, true);
+    await p.s("Network.setBlockedURLs", { urls: ["*localhost:8080/socket.io/*"] });
+    const closed = await closeSocketIoWs(p);
+    const recMs = await waitFor(() => ev(p, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    return { closed, recMs };
+  };
+  const endOutage = async (p) => {
+    await p.s("Network.setBlockedURLs", { urls: [] });
+    await netOffline(p, false);
+  };
+
   // r1: B drops off the network for ~4 s while A pauses, seeks to 40 and sets rate 1.25.
   // After the reconnect B re-syncs like a joiner (room state wins), the chat history is
   // not duplicated, A and C were not moved, and B emitted no playback commands.
@@ -1210,9 +1229,7 @@ async function main() {
     const bJl0 = await joinLeaveLines(B);
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
-    await netOffline(B, true);
-    const closed = await closeSocketIoWs(B);
-    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    const { closed, recMs } = await startOutage(B);
     const recStatus = (await statusOf(B)).text;
     dropWsNoise(B, bErr0);
     // while B is offline: A pauses, seeks to 40, sets rate 1.25 (C follows live)
@@ -1224,7 +1241,7 @@ async function main() {
     await waitFor(async () => { const s = await vstate(C); return s && s.r === 1.25; }, 3000);
     const aPre = await vstate(A), cPre = await vstate(C);
     await sleep(3000); // the outage holds ~4 s; socket.io retries with backoff meanwhile
-    await netOffline(B, false);
+    await endOutage(B);
     const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
     dropWsNoise(B, bErr0);
     const landMs = await waitFor(async () => {
@@ -1261,16 +1278,14 @@ async function main() {
     await sleep(800);
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
-    await netOffline(B, true);
-    const closed = await closeSocketIoWs(B);
-    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    const { closed, recMs } = await startOutage(B);
     dropWsNoise(B, bErr0);
     await sleep(500);
     await ev(B, `document.querySelector('video').pause(); true`);
     const bPausedOffline = await ev(B, `document.querySelector('video').paused`);
     await sleep(2800); // the room keeps playing while B sits paused, offline
     const aMid = await vstate(A);
-    await netOffline(B, false);
+    await endOutage(B);
     const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
     dropWsNoise(B, bErr0);
     const landMs = await waitFor(async () => {
@@ -1520,17 +1535,10 @@ async function main() {
     await tNormalize(20);
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
-    await netOffline(B, true);
-    let closed = await closeSocketIoWs(B);
-    let recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
-    if (recMs === null) {
-      // harness flake: the engine socket sometimes reconnects before offline emulation bites; drop it once more
-      closed += await closeSocketIoWs(B);
-      recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
-    }
+    const { closed, recMs } = await startOutage(B);
     dropWsNoise(B, bErr0);
     await sleep(3000); // B keeps playing through the outage on the stale anchor
-    await netOffline(B, false);
+    await endOutage(B);
     const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
     dropWsNoise(B, bErr0);
     const landMs = await waitFor(async () => {
