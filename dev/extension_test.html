@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WatchParty extension test page</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body {
+        margin: 0;
+        background: #111;
+        color: #ddd;
+        font-family: sans-serif;
+      }
+      video {
+        display: block;
+        width: 640px;
+        max-width: 100%;
+        margin: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <p style="margin: 16px">
+      Dev page for extension/ (the extension also matches http://localhost/dev/*).
+    </p>
+    <video id="v" controls preload="auto" src="/dev/extension_test.webm"></video>
+  </body>
+</html>

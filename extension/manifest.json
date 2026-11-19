@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "WatchParty Sync",
+  "version": "0.1.0",
+  "description": "Watch Netflix together: every person uses their own account, the extension keeps play, pause, seek and playback speed in sync through a WatchParty room.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.netflix.com/*", "http://localhost/dev/*"],
+      "js": ["vendor/socket.io.min.js", "content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.netflix.com/*", "http://localhost/dev/*"],
+      "js": ["page.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ]
+}
