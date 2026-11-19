@@ -150,6 +150,7 @@
         border: 1px solid #33333c; border-radius: 6px; padding: 6px; font-size: 12px; line-height: 1.4; }
       .log .sys { color: #98a; font-style: italic; }
       .log .who { color: #9db0ff; font-weight: 600; }
+      .log .ts { color: #66728a; font-size: 10px; font-style: normal; }
       .log div { margin-bottom: 3px; word-wrap: anywhere; }
       .members { font-size: 11px; color: #8892a8; min-height: 14px; white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis; }
@@ -297,12 +298,35 @@
     return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
   };
 
+  // viewer-local "HH:MM" for a chat line's timestamp (server ISO string, or our own)
+  const hhmm = (ts) => {
+    const d = ts ? new Date(ts) : null;
+    return d && !isNaN(d) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+  };
+
   const nameOf = (id) => names[id] || (id ? String(id).slice(0, 6) : "?");
 
+  // stable per-member colour from the clientId (readable shades on the dark panel;
+  // the .who CSS default is deliberately not in the list so an applied colour always
+  // differs from it)
+  const COLORS = ["#7fd4a8", "#ffd88a", "#ff9db0", "#c9a7ff", "#8ad8f0", "#f0b98a", "#a8e07f", "#ff8ad8", "#d4d47f", "#f0a0f0"];
+  const colorOf = (id) => {
+    const s = String(id || "");
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return COLORS[h % COLORS.length];
+  };
+
   function renderMembers() {
-    el.members.textContent = members
-      ? members.length + " watching: " + members.map(nameOf).join(", ")
-      : "";
+    el.members.textContent = members ? members.length + " watching: " : "";
+    if (members)
+      members.forEach((id, i) => {
+        if (i) el.members.appendChild(document.createTextNode(", "));
+        const s = document.createElement("span");
+        s.style.color = colorOf(id);
+        s.textContent = nameOf(id) + (id === clientId ? " (you)" : "");
+        el.members.appendChild(s);
+      });
   }
 
   // ---- one person drives (CMD:extControl / REC:extControl) ----
@@ -418,12 +442,20 @@
     for (const m of chat) {
       const who = nameOf(m.id);
       const line = document.createElement("div");
+      const ts = hhmm(m.timestamp);
+      if (ts) {
+        const t = document.createElement("span");
+        t.className = "ts";
+        t.textContent = ts;
+        line.appendChild(t);
+        line.appendChild(document.createTextNode(" "));
+      }
       if (m.sysJoin || m.sysLeave) {
         // Resolved at render time: the name may arrive (REC:nameMap) after the notice
         line.className = "sys";
-        line.textContent = m.sysJoin
-          ? nameOf(m.sysJoin) + " joined"
-          : nameOf(m.sysLeave) + " left";
+        line.appendChild(
+          document.createTextNode(m.sysJoin ? nameOf(m.sysJoin) + " joined" : nameOf(m.sysLeave) + " left"),
+        );
       } else if (m.cmd) {
         const text =
           {
@@ -434,10 +466,11 @@
             host: "started a video",
           }[m.cmd] || m.cmd;
         line.className = "sys";
-        line.textContent = who + " " + text;
+        line.appendChild(document.createTextNode(who + " " + text));
       } else {
         const w = document.createElement("span");
         w.className = "who";
+        w.style.color = colorOf(m.id);
         w.textContent = who;
         line.appendChild(w);
         line.appendChild(document.createTextNode(": " + (m.msg || "")));
@@ -453,7 +486,14 @@
     renderChat();
   }
 
-  const pushSys = (id, left) => pushChat(left ? { sysLeave: id } : { sysJoin: id });
+  // local-only notices: stamped with the local clock when created (rendering can
+  // happen later, when the name arrives via REC:nameMap)
+  const pushSys = (id, left) =>
+    pushChat(
+      left
+        ? { sysLeave: id, timestamp: new Date().toISOString() }
+        : { sysJoin: id, timestamp: new Date().toISOString() },
+    );
 
   // ---- socket helpers ----
   // The web app applies REC:play/pause/seek/playbackRate to whatever the room is playing

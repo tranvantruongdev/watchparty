@@ -22,7 +22,11 @@ WatchParty room. No video is re-streamed and DRM is never touched.
 Speed: the **0.5x 0.75x 1x 1.25x 1.5x 2x** buttons change the speed for everyone. A change made
 in Netflix's own speed menu is shared the same way.
 
-The panel also has a chat that shares the room's chat with the WatchParty web page. If your
+The panel also has a chat that shares the room's chat with the WatchParty web page. Chat lines
+carry a small dim HH:MM stamp in your local time (the sender's send time for room chat, your
+own clock for the join / leave notes), and each member's name is shown in a stable colour
+derived from their id — the same shade in every panel — with a "(you)" marker next to your
+own name in the members line. If your
 video buffers while the room is playing, the room pauses until everyone can play again. It
 shows who is watching ("N watching: ...") with join / leave notes in its log, and a row of
 emoji reactions that float over the video — shared with the web app in both directions. The
