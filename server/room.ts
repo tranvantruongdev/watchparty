@@ -37,6 +37,17 @@ const MAX_VBROWSERS_PER_USER = 2;
 // The only emojis accepted for CMD:floatReaction, anything else is dropped
 const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 
+// The only hostnames a CMD:siteUrl may announce: the streaming sites members'
+// extensions watch, so the room can offer others "follow". Subdomains count
+// (www.netflix.com); lookalike suffixes (evillnetflix.com) don't
+const SITE_URL_HOSTS = [
+  "netflix.com",
+  "youtube.com",
+  "disneyplus.com",
+  "primevideo.com",
+  "amazon.com",
+];
+
 // How long a dropped sharer's socket keeps the room's share alive before it
 // counts as dead (tab closed / crash). Covers a network blip: the client
 // reconnects within seconds of the link returning and re-announces
@@ -131,6 +142,14 @@ export class Room {
   // clientId -> timestamps of relayed WebRTC signaling in the last second.
   // Own, higher budget: connection setup trickles dozens of candidates
   private signalTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of accepted typing notices in the last second
+  private typingTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of accepted site-url announcements in the last 5s.
+  // A legit extension announces when its member opens a new title, not a stream
+  private siteUrlTimes: { [clientId: string]: number[] } = {};
+  // The last announced streaming title (CMD:siteUrl): who sent it and the url,
+  // so a new joiner can be offered "follow". In-memory only, like intermission
+  public siteUrl: { by: string; url: string } | null = null;
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
@@ -436,6 +455,12 @@ export class Room {
       socket.emit("REC:sleep", this.sleepTimer);
       socket.emit("chatinit", this.chat);
       socket.emit("playlist", this.playlist);
+      if (this.siteUrl) {
+        socket.emit("REC:siteUrl", {
+          id: this.siteUrl.by,
+          url: this.siteUrl.url,
+        });
+      }
       this.getRoomState(socket);
       io.of(roomId).emit("roster", this.getRosterForApp());
 
@@ -614,6 +639,49 @@ export class Room {
         (hasLock || isOwner) && allowRelay() && this.lockRoom(socket, data);
       });
       on("CMD:buffering", (data: unknown) => this.setBuffering(socket, data));
+      // Typing indicator from the browser extension: relayed to the other
+      // members only, never stored, no chat line
+      on("CMD:typing", (data: unknown) => {
+        if (typeof data !== "boolean") {
+          return;
+        }
+        if (allowRelay(3, this.typingTimes, 1000)) {
+          socket.broadcast.emit("REC:typing", {
+            id: socket.clientId,
+            typing: data,
+          });
+        }
+      });
+      // The streaming title a member's extension is on (e.g.
+      // https://www.netflix.com/watch/81234567), so the room can offer others
+      // "follow". Validated against SITE_URL_HOSTS, stored on the room for
+      // late joiners, broadcast to the whole namespace (sender included)
+      on("CMD:siteUrl", (data: unknown) => {
+        if (typeof data !== "string" || data.length > 300) {
+          return;
+        }
+        let parsed: URL;
+        try {
+          parsed = new URL(data);
+        } catch {
+          return;
+        }
+        if (
+          parsed.protocol !== "https:" ||
+          !SITE_URL_HOSTS.some(
+            (host) =>
+              parsed.hostname === host ||
+              parsed.hostname.endsWith("." + host),
+          )
+        ) {
+          return;
+        }
+        if (!allowRelay(2, this.siteUrlTimes, 5000)) {
+          return;
+        }
+        this.siteUrl = { by: socket.clientId, url: data };
+        io.of(roomId).emit("REC:siteUrl", { id: socket.clientId, url: data });
+      });
       on("CMD:askHost", () => {
         socket.emit("REC:host", this.getHostState());
       });
@@ -2259,6 +2327,8 @@ export class Room {
       delete this.relayTimes[clientId];
       delete this.pictureTimes[clientId];
       delete this.signalTimes[clientId];
+      delete this.typingTimes[clientId];
+      delete this.siteUrlTimes[clientId];
       // Prune name/picture entries nobody renders anymore. Chat history is
       // the only reason to keep a departed visitor's name/picture (the same
       // rule serialize() uses), and the roster keeps live seats labeled.
