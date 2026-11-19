@@ -29,6 +29,7 @@
   // ---- state ----
   let socket = null;
   let joined = false; // socket connected
+  let everConnected = false; // this socket connected at least once (auto-reconnect, not a first attempt)
   let video = null;
   let roomRate = 1;
   let names = {};
@@ -774,6 +775,8 @@
     }
     socket = null;
     joined = false;
+    everConnected = false;
+    host.dataset.conn = "off";
     sync = null;
     pendingHost = null;
     names = {};
@@ -811,6 +814,7 @@
     renderUnread();
     renderChat();
     setStatus("Connecting...");
+    host.dataset.conn = "off";
     host.dataset.room = room;
     const s = io(SERVER + "/" + room, {
       transports: ["websocket"],
@@ -822,8 +826,10 @@
 
     s.on("connect", () => {
       joined = true;
+      everConnected = true;
       sync = { host: null, tsMap: null, done: false };
       delete host.dataset.synced;
+      host.dataset.conn = "on";
       setStatus("Connected to " + room, "on");
       emit("CMD:name", name);
       // announce the title we are on (fresh room session), and ask page.js to
@@ -834,11 +840,27 @@
     });
     s.on("connect_error", (err) => {
       joined = false;
+      if (everConnected) {
+        // a working connection dropped and the retry failed: socket.io keeps trying,
+        // so show progress instead of an error dead end
+        host.dataset.conn = "reconnecting";
+        setStatus("Reconnecting…");
+        return;
+      }
+      host.dataset.conn = "off";
       setStatus("Cannot connect: " + (err && err.message ? err.message : err), "err");
     });
     s.on("disconnect", (reason) => {
       joined = false;
-      setStatus("Disconnected (" + reason + ")", "err");
+      // the only reason socket.io does not retry on its own ("kicked" above tears the
+      // panel down first): every other drop auto-reconnects
+      if (reason === "io server disconnect") {
+        host.dataset.conn = "off";
+        setStatus("Disconnected (" + reason + ")", "err");
+        return;
+      }
+      host.dataset.conn = "reconnecting";
+      setStatus("Reconnecting…");
     });
     s.on("kicked", () => {
       leave(true);

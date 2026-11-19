@@ -40,7 +40,11 @@ input shows who else is typing, and when another member is on a different stream
 (page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
 site, otherwise it shows the link to open on that site. When your own title changes in-page
 (next episode) the room's speed is kept, and if the room is already on that title its
-position and play state are pulled once the new video is ready.
+position and play state are pulled once the new video is ready. If the connection drops, the
+status shows "Reconnecting…" (with `data-conn="reconnecting"` on the panel host) while
+socket.io retries on its own; when it comes back the room's state is applied again like a
+late joiner's (the room wins), the chat history is not duplicated, and local actions made
+while offline are not replayed.
 
 **Take control**: the button under the speed row turns on "one person drives" — only the
 controller's play / pause / seek / speed changes are relayed, everyone else's (web app

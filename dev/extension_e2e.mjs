@@ -1137,6 +1137,141 @@ async function main() {
     );
   }
 
+  // ---------------- r. round 7A: survive a network drop (auto-reconnect) ----------------
+  // CDP offline emulation does not cut an established WebSocket, so the drop is forced
+  // directly: close the socket.io engine WebSocket in the world content.js runs in
+  // (isolated world for the extension, page world for the bookmarklet) while offline
+  // emulation blocks the reconnect attempts. socket.io then retries on its own.
+  const connOf = (p) => ev(p, PANEL(`return h.dataset.conn || '';`));
+  const countLines = (p) => ev(p, PANEL(`return r.querySelectorAll('#log div').length;`));
+  const joinLeaveLines = (p) =>
+    ev(p, PANEL(`return Array.from(r.querySelectorAll('#log .sys')).filter((d) => / (joined|left)$/.test(d.textContent)).length;`));
+  const netOffline = async (p, offline) => {
+    await p.s("Network.enable");
+    await p.s("Network.emulateNetworkConditions", {
+      offline,
+      latency: 0,
+      downloadThroughput: offline ? 0 : -1,
+      uploadThroughput: offline ? 0 : -1,
+    });
+  };
+  const closeSocketIoWs = async (p) => {
+    let closed = 0;
+    for (const c of p.ctxById.values()) {
+      const type = c.auxData && c.auxData.type;
+      if (type !== "default" && type !== "isolated") continue;
+      try {
+        const proto = await p.s("Runtime.evaluate", { expression: "WebSocket.prototype", contextId: c.id });
+        if (!proto.result.objectId) continue;
+        const objs = await p.s("Runtime.queryObjects", { prototypeObjectId: proto.result.objectId });
+        if (!objs.objects || !objs.objects.objectId) continue;
+        const r = await p.s("Runtime.callFunctionOn", {
+          objectId: objs.objects.objectId,
+          functionDeclaration:
+            "function () { const hit = this.filter((w) => /socket\\.io/.test(w.url || '') && w.readyState <= 1); hit.forEach((w) => w.close()); return hit.length; }",
+          returnByValue: true,
+        });
+        closed += r.result.value || 0;
+      } catch {}
+    }
+    return closed;
+  };
+  // the blocked reconnect handshakes are logged as console errors by the page itself:
+  // expected during the outage, not extension defects — keep real errors, drop these
+  const dropWsNoise = (p, before) => {
+    p.errors = p.errors.filter((e, i) => i < before || !/WebSocket connection to .* failed/.test(e));
+  };
+
+  // r1: B drops off the network for ~4 s while A pauses, seeks to 40 and sets rate 1.25.
+  // After the reconnect B re-syncs like a joiner (room state wins), the chat history is
+  // not duplicated, A and C were not moved, and B emitted no playback commands.
+  {
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
+    await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
+    await ev(A, `document.querySelector('video').play().then(() => true)`);
+    await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+    await sleep(800);
+    const bLines0 = await countLines(B);
+    const bJl0 = await joinLeaveLines(B);
+    const bEmits0 = await emits(B);
+    const bErr0 = B.errors.length;
+    await netOffline(B, true);
+    const closed = await closeSocketIoWs(B);
+    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    const recStatus = (await statusOf(B)).text;
+    dropWsNoise(B, bErr0);
+    // while B is offline: A pauses, seeks to 40, sets rate 1.25 (C follows live)
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await waitFor(async () => { const s = await vstate(C); return s && s.paused; }, 3000);
+    await ev(A, `document.querySelector('video').currentTime = 40; true`);
+    await waitFor(async () => Math.abs((await vstate(C)).t - 40) < 1.5, 3000);
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1.25"]').click(); return true;`));
+    await waitFor(async () => { const s = await vstate(C); return s && s.r === 1.25; }, 3000);
+    const aPre = await vstate(A), cPre = await vstate(C);
+    await sleep(3000); // the outage holds ~4 s; socket.io retries with backoff meanwhile
+    await netOffline(B, false);
+    const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
+    dropWsNoise(B, bErr0);
+    const landMs = await waitFor(async () => {
+      const s = await vstate(B);
+      return s && s.paused && s.r === 1.25 && Math.abs(s.t - 40) < 1.5 ? true : null;
+    }, 3000);
+    const aPost = await vstate(A), cPost = await vstate(C);
+    const bLines1 = await countLines(B);
+    const helloCount = ((await logText(B)).match(/Alice: hello from A/g) || []).length;
+    const dB = nonTs(bEmits0, await emits(B));
+    check(
+      "r1. B's drop shows 'Reconnecting…' (conn='reconnecting') then 'on'; re-syncs like a joiner (paused 40±1.5 s @1.25 within 3 s); chat history not duplicated; A/C unmoved; no stray CMD:seek/play/pause from B",
+      closed >= 1 && recMs !== null && recStatus === "Reconnecting…" && onMs !== null && landMs !== null
+        && aPost && cPost && aPost.paused && cPost.paused && aPost.r === 1.25 && cPost.r === 1.25
+        && Math.abs(aPost.t - aPre.t) < 0.7 && Math.abs(cPost.t - cPre.t) < 0.7
+        && bLines1 === bLines0 + 3 - bJl0 && helloCount === 1
+        && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"]
+        && (await statusOf(B)).text === `Connected to ${roomName}`,
+      `closed=${closed}; reconnecting after ${recMs} ms ('${recStatus}'), 'on' after ${onMs} ms; B ${JSON.stringify(await vstate(B))} landed after ${landMs} ms; A ${JSON.stringify(aPre)}->${JSON.stringify(aPost)} C ${JSON.stringify(cPre)}->${JSON.stringify(cPost)}; chat lines ${bLines0}->${bLines1} (+3 = A's pause/seek/rate notices missed while offline, -${bJl0} = local join/leave notes replaced by the fresh chatinit), 'hello from A' x${helloCount}; B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'`,
+    );
+  }
+
+  // r2: B pauses locally while offline -> after the reconnect the room state wins (the
+  // room kept playing) and B emitted no stale CMD:pause.
+  {
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
+    await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
+    // play from well before the 60 s end: the outage + reconnect backoff window is long
+    // and the file does not loop — reaching the end would pause the room mid-check
+    await ev(A, `document.querySelector('video').currentTime = 20; true`);
+    await waitFor(async () => Math.abs((await vstate(B)).t - 20) < 1.5, 3000);
+    await ev(A, `document.querySelector('video').play().then(() => true)`);
+    await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+    await sleep(800);
+    const bEmits0 = await emits(B);
+    const bErr0 = B.errors.length;
+    await netOffline(B, true);
+    const closed = await closeSocketIoWs(B);
+    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    dropWsNoise(B, bErr0);
+    await sleep(500);
+    await ev(B, `document.querySelector('video').pause(); true`);
+    const bPausedOffline = await ev(B, `document.querySelector('video').paused`);
+    await sleep(2800); // the room keeps playing while B sits paused, offline
+    const aMid = await vstate(A);
+    await netOffline(B, false);
+    const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
+    dropWsNoise(B, bErr0);
+    const landMs = await waitFor(async () => {
+      const s = await vstate(B), a = await vstate(A);
+      return s && a && !s.paused && Math.abs(s.t - a.t) < 3 ? true : null;
+    }, 4000);
+    const dB = nonTs(bEmits0, await emits(B));
+    check(
+      "r2. B pauses locally while offline: no stale CMD:pause emitted; after the reconnect the room state wins (B playing near A) and conn is back to 'on'",
+      closed >= 1 && recMs !== null && bPausedOffline === true && onMs !== null && landMs !== null
+        && !dB["CMD:pause"] && !dB["CMD:play"] && !dB["CMD:seek"] && !dB["CMD:playbackRate"]
+        && (await statusOf(B)).text === `Connected to ${roomName}`,
+      `closed=${closed}; reconnecting after ${recMs} ms; local pause applied=${bPausedOffline}; room kept playing (A t=${aMid.t.toFixed(1)}); 'on' after ${onMs} ms; B playing near A after ${landMs} ms (B ${JSON.stringify(await vstate(B))} A ${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'`,
+    );
+  }
+
   // h. console errors
   console.log("\nconsole/runtime errors per page (extension isolated world included via Runtime.enable):");
   let any = false;
