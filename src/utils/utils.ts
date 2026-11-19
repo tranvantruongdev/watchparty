@@ -552,6 +552,29 @@ export const isEmojiString = (input?: string): boolean => {
   );
 };
 
+// Shared sticker format (matches the extension): a chat message whose WHOLE
+// text is "[sticker:<id>]" renders as one large emoji. Anything else
+// (unknown id, text around the tag) is an ordinary message.
+export const STICKER_EMOJI: Record<string, string> = {
+  laugh: "😂",
+  cry: "😭",
+  wow: "😮",
+  love: "😍",
+  fire: "🔥",
+  clap: "👏",
+  scared: "😱",
+  sleep: "😴",
+  facepalm: "🤦",
+  party: "🥳",
+};
+
+export const stickerEmoji = (input?: string): string | undefined => {
+  const match = /^\[sticker:([a-z]+)\]$/.exec(input ?? "");
+  return match && Object.hasOwn(STICKER_EMOJI, match[1])
+    ? STICKER_EMOJI[match[1]]
+    : undefined;
+};
+
 function uuidv4() {
   return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
     (

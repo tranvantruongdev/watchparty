@@ -5,6 +5,7 @@ import {
   Avatar,
   Button,
   HoverCard,
+  Popover,
   Text,
   TextInput,
 } from "@mantine/core";
@@ -20,6 +21,8 @@ import {
   getDefaultPicture,
   getOrCreateClientId,
   isEmojiString,
+  stickerEmoji,
+  STICKER_EMOJI,
 } from "../../utils/utils";
 import { UserMenu } from "../UserMenu/UserMenu";
 import { Socket } from "socket.io-client";
@@ -292,6 +295,12 @@ export class Chat extends React.Component<ChatProps> {
     }
     this.setState({ chatMsg: "", replyTo: undefined });
     this.props.socket.emit("CMD:chat", this.state.chatMsg);
+  };
+
+  // Sticker menu: put the tag into the input state and reuse the normal send
+  // path (length check, reply handling, CMD:chat)
+  sendSticker = (id: string) => {
+    this.setState({ chatMsg: `[sticker:${id}]` }, this.sendChatMsg);
   };
 
   setReplyTo = (id: string, timestamp: string, msg?: string) => {
@@ -645,10 +654,38 @@ export class Chat extends React.Component<ChatProps> {
                 ? "The chat was disabled by the room owner."
                 : "Enter a message..."
             }
-            rightSectionWidth={this.props.voiceButton ? 92 : undefined}
+            rightSectionWidth={this.props.voiceButton ? 124 : 64}
             rightSection={
               <div style={{ display: "flex", gap: 4 }}>
                 {this.props.voiceButton}
+                <Popover position="top-end" withinPortal shadow="md">
+                  <Popover.Target>
+                    <ActionIcon
+                      className={styles.stickerToggle}
+                      aria-label="Open sticker menu"
+                      disabled={this.props.isChatDisabled}
+                    >
+                      <span role="img" aria-label="Stickers">
+                        🎉
+                      </span>
+                    </ActionIcon>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {Object.entries(STICKER_EMOJI).map(([id, emoji]) => (
+                        <ActionIcon
+                          key={id}
+                          aria-label={`Send ${id} sticker`}
+                          onClick={() => this.sendSticker(id)}
+                        >
+                          <span role="img" aria-hidden>
+                            {emoji}
+                          </span>
+                        </ActionIcon>
+                      ))}
+                    </div>
+                  </Popover.Dropdown>
+                </Popover>
                 <ActionIcon
                   className={styles.emojiToggle}
                   aria-label="Open emoji picker"
@@ -765,6 +802,7 @@ const ChatMessage = React.memo(function ChatMessage({
     message;
   const spellFull = 5; // the number of people whose names should be written out in full in the reaction popup
   const imageMsg = renderImageString(msg);
+  const sticker = stickerEmoji(msg);
   const canManage = Boolean(owner && owner === user?.uid);
   return (
     <div
@@ -884,10 +922,10 @@ const ChatMessage = React.memo(function ChatMessage({
         >
           <div
             className={`${styles.light} ${
-              isEmojiString(msg) ? styles.emoji : ""
+              sticker ? styles.sticker : isEmojiString(msg) ? styles.emoji : ""
             }`}
           >
-            {!cmd && msg}
+            {!cmd && (sticker ?? msg)}
           </div>
         </Linkify>
         {imageMsg}

@@ -82,6 +82,12 @@
   font-size: 24px;
 }
 
+/* A [sticker:<id>] message renders the emoji alone at 2.2× the 14px
+   message font (round 10B) */
+.light.sticker {
+  font-size: 30.8px;
+}
+
 /* gray (#808080) measured 4.42:1 on the glass bubble — below WCAG AA */
 .dark {
   color: rgb(156, 156, 168);
@@ -111,7 +117,8 @@
   }
 
   .floatReactions :global(.mantine-ActionIcon-root),
-  .emojiToggle {
+  .emojiToggle,
+  .stickerToggle {
     width: 36px;
     height: 36px;
   }
