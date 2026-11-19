@@ -49,6 +49,20 @@
       const v = new URLSearchParams(loc.search).get("v");
       return v ? `https://www.youtube.com/watch?v=${v}` : null;
     }
+    if (loc.hostname.endsWith("disneyplus.com")) {
+      // watch pages: /video/<id> or legacy /play/<id>, sometimes after a locale
+      // prefix (en-gb/play/<id>, es-419/...); the locale, anything after the id
+      // and the query are dropped so members on different locales share a title
+      const m = loc.pathname.match(/\/(?:video|play)\/[a-z0-9-]+/i);
+      return m ? loc.origin + m[0] : loc.origin + loc.pathname;
+    }
+    if (loc.hostname.endsWith("primevideo.com") || loc.hostname.endsWith("amazon.com")) {
+      // watch pages: /detail/<id> (primevideo.com) or /gp/video/detail/<id>
+      // (amazon.com, which the manifest only injects under /gp/video/*); a
+      // /ref=... tracking segment can trail the id in the path — drop it too
+      const m = loc.pathname.match(/\/(?:gp\/video\/)?detail\/[a-z0-9.-]+/i);
+      return m ? loc.origin + m[0] : loc.origin + loc.pathname;
+    }
     return loc.origin + loc.pathname;
   };
   window.__wpExtPageCanon = canon; // tests only

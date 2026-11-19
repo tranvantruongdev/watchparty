@@ -16,6 +16,9 @@
   const SEEK_EPSILON = 0.5; // no point seeking when already this close
   const SITE_RESET_MS = 3000; // after a (re)load the site may reset playbackRate itself
   const MAX_CHAT = 200;
+  // youtube marks its ad player this way; while it shows, the ad owns the video
+  // and sync stays out of the way (no local emits, no remote applies)
+  const AD_SEL = "#movie_player.ad-showing, .html5-video-player.ad-showing";
 
   // One identity per page load. A second socket with the same clientId kicks the first,
   // so it is never shared between tabs and never stored.
@@ -47,6 +50,8 @@
   let announcedUrl = null; // last url we announced to the room
   let roomSiteUrl = null; // latest url seen in the room (any REC:siteUrl)
   let followUrl = null; // url the follow bar points at while shown
+  let adMode = false; // an ad was showing at the last 1 s check (drives status + re-sync)
+  let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
 
@@ -411,11 +416,14 @@
   // ---- socket helpers ----
   // The web app applies REC:play/pause/seek/playbackRate to whatever the room is playing
   // (a YouTube video, a screen share...), so only sync while the room has no media of its own.
+  // While a youtube ad shows, the ad owns the video: playback sync (incl. ts and buffering)
+  // stays silent in both directions; chat, names, reactions and typing keep flowing.
   let roomMedia = "";
   const PLAYBACK = ["CMD:play", "CMD:pause", "CMD:seek", "CMD:playbackRate", "CMD:ts"];
+  const adPlaying = () => !!document.querySelector(AD_SEL);
   function emit(ev, arg) {
     if (!socket || !socket.connected) return;
-    if (roomMedia && PLAYBACK.includes(ev)) return;
+    if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || ev === "CMD:buffering")) return;
     emitCounts[ev] = (emitCounts[ev] || 0) + 1;
     host.dataset.emits = JSON.stringify(emitCounts);
     if (arg === undefined) socket.emit(ev);
@@ -473,16 +481,20 @@
   };
   const onRateChange = () => {
     updateRates();
-    if (suppressed("ratechange") || !joined) return;
+    if (adPlaying()) return;
     const r = video.playbackRate;
     if (Math.abs(r - roomRate) < 1e-6) return;
     // Right after a (re)load the site may put its own default rate back. That is not
     // somebody choosing a speed: restore the room rate once instead of broadcasting it.
+    // (Checked before the suppress mask: a rate that disagrees with the room is never
+    // one of our own applies — those always set the room rate first — so a site reset
+    // landing inside the suppress window must still be undone.)
     if (Date.now() < siteResetUntil && !resetReapplied) {
       resetReapplied = true;
       applyRate(roomRate);
       return;
     }
+    if (suppressed("ratechange") || !joined) return;
     roomRate = r;
     emit("CMD:playbackRate", r);
   };
@@ -502,11 +514,11 @@
     emit("CMD:buffering", on);
   };
   const onWaiting = () => {
-    if (!joined || roomMedia || !video || video.paused) return;
+    if (!joined || roomMedia || adPlaying() || !video || video.paused) return;
     reportBuffering(true);
   };
   const onBufferRecover = () => {
-    if (roomMedia) return;
+    if (roomMedia || adPlaying()) return;
     reportBuffering(false);
   };
 
@@ -546,6 +558,11 @@
     for (const v of document.querySelectorAll("video")) {
       const r = v.getBoundingClientRect();
       const area = r.width * r.height;
+      // tiny hover previews / hidden nodes must never win: skip zero-size and
+      // invisible videos (a fixed-position video has no offsetParent); among the
+      // rest the largest wins, so a 160x90 preview loses to the real player
+      if (area <= 0) continue;
+      if (v.offsetParent === null && getComputedStyle(v).position !== "fixed") continue;
       if (area > bestArea) {
         best = v;
         bestArea = area;
@@ -556,7 +573,11 @@
 
   function refreshVideo() {
     const best = findVideo();
-    if (best !== video || (video && !video.isConnected)) bindVideo(best);
+    if (best === video) return;
+    // no visible candidate at all (a site briefly hiding the player): keep ours
+    // instead of unbinding and dropping events for a poll cycle
+    if (!best && video && video.isConnected) return;
+    bindVideo(best);
   }
 
   // ---- joining a room ----
@@ -632,6 +653,8 @@
     clearTimeout(typingOffTimer);
     typingOffTimer = null;
     roomSiteUrl = null;
+    adMode = false;
+    askedHost = false;
     hideFollow();
     renderTyping();
     renderMembers();
@@ -694,9 +717,14 @@
         setStatus("This room is playing something else - use an empty room", "err");
         return;
       }
-      setStatus("Connected to " + room, "on");
+      if (!adPlaying()) setStatus("Connected to " + room, "on");
       if (!sync) return;
       sync.host = h;
+      if (askedHost) {
+        // the reply to our post-ad CMD:askHost: apply the room state like a joiner
+        askedHost = false;
+        applyHostState(h);
+      }
       maybeSync();
     });
     s.on("REC:tsMap", (m) => {
@@ -760,11 +788,11 @@
         renderUnread();
       }
     });
-    s.on("REC:play", () => roomMedia || applyPlay());
-    s.on("REC:pause", () => roomMedia || applyPause());
-    s.on("REC:seek", (t) => roomMedia || applySeek(Number(t)));
+    s.on("REC:play", () => roomMedia || adPlaying() || applyPlay());
+    s.on("REC:pause", () => roomMedia || adPlaying() || applyPause());
+    s.on("REC:seek", (t) => roomMedia || adPlaying() || applySeek(Number(t)));
     s.on("REC:playbackRate", (r) => {
-      if (roomMedia) return;
+      if (roomMedia || adPlaying()) return;
       r = Number(r);
       if (!Number.isFinite(r)) return;
       roomRate = r;
@@ -802,7 +830,7 @@
     el.chatinput.value = "";
   });
   el.synctome.addEventListener("click", () => {
-    if (!joined || roomMedia || !video) return;
+    if (!joined || roomMedia || adPlaying() || !video) return;
     if (!confirm("Move everyone to your position?")) return;
     emit("CMD:seek", video.currentTime);
     if (Math.abs(video.playbackRate - roomRate) > 1e-6) emit("CMD:playbackRate", video.playbackRate);
@@ -865,6 +893,17 @@
     refreshVideo();
     updateRates();
     renderTyping(); // prune typing entries whose 6 s safety timeout ran out
+    const inAd = joined && adPlaying();
+    if (inAd !== adMode) {
+      adMode = inAd;
+      if (inAd) {
+        setStatus("Ad playing — sync paused", "err");
+      } else {
+        // the ad ended: pull the room state and apply it like a joiner would
+        askedHost = true;
+        emit("CMD:askHost");
+      }
+    }
     if (joined && video && Number.isFinite(video.currentTime)) {
       emit("CMD:ts", video.currentTime);
     }

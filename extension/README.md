@@ -36,6 +36,15 @@ input shows who else is typing, and when another member is on a different stream
 (page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
 site, otherwise it shows the link to open on that site.
 
+## Sites
+
+The panel runs on **Netflix**, **YouTube**, **Disney+**, **Prime Video** and Amazon video
+pages (`amazon.com/gp/video/...`), plus the dev test page. The content scripts only run in
+the top frame, so a site whose player lives inside an iframe is not supported. On YouTube,
+while an ad is playing the panel shows "Ad playing — sync paused" and nothing is sent or
+applied; when the ad ends the room's state is pulled again and applied like a late joiner's.
+Small preview / hover videos on a page are ignored: only the largest visible video syncs.
+
 ## Bookmarklet (no install)
 
 The same panel without installing anything:
