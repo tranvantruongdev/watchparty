@@ -15,6 +15,10 @@
   const SEEK_TARGET_MS = 5000; // a remote seek can finish (seeked) long after we asked
   const SEEK_EPSILON = 0.5; // no point seeking when already this close
   const SITE_RESET_MS = 3000; // after a (re)load the site may reset playbackRate itself
+  const DRIFT_TICK_S = 2; // slow-drift check cadence during playback
+  const DRIFT_NUDGE_S = 0.75; // drifts smaller than this are left alone
+  const DRIFT_SEEK_S = 5; // beyond this one silent seek beats a long nudge
+  const DRIFT_OK_S = 0.3; // close enough: restore the room rate
   const MAX_CHAT = 200;
   // youtube marks its ad player this way; while it shows, the ad owns the video
   // and sync stays out of the way (no local emits, no remote applies)
@@ -58,6 +62,11 @@
   let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
   let extController = null; // member currently holding playback control (null = free)
   let lastCtlAsk = 0; // last CMD:askHost sent because someone else controls (1 s rate limit)
+  let roomPos = null; // { t, at } — the room's expected position at wall-clock `at`
+  let nudging = false; // our rate is a temporary drift-correction nudge over roomRate
+  let nudgeBase = 0; // the roomRate the current nudge was computed from
+  let nudgeRate = 0; // the nudged rate itself
+  let driftCount = 0;
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
 
@@ -521,6 +530,27 @@
     else socket.emit(ev, arg);
   }
 
+  // ---- room position anchor (slow drift correction, round 8A) ----
+  // The join handshake is the only consumer of the room's position: nothing compares
+  // our currentTime with it during playback, so a decoder stall, a slow machine or a
+  // site that swallowed time drifts us away silently and we stay drifted. Anchor the
+  // room's expected position wherever the room's state is applied (host state, remote
+  // seek, rate changes, play/pause) and extrapolate it with the room rate in between.
+  const rebasePos = (t) => {
+    roomPos = { t: Number(t), at: Date.now() };
+  };
+  // advance the anchor to right now (rate change, play/pause transition) in place
+  const rebaseElapsed = () => {
+    const e = expectedPos();
+    rebasePos(e == null ? (video ? video.currentTime : 0) : e);
+  };
+  // the room's expected position now: the anchor advanced by the elapsed time at the
+  // room rate, frozen while our video is paused (the room paused with us)
+  const expectedPos = () => {
+    if (!roomPos || !Number.isFinite(roomPos.t)) return null;
+    return roomPos.t + (video && !video.paused ? (Date.now() - roomPos.at) / 1000 : 0) * roomRate;
+  };
+
   // ---- apply remote -> local (each one masks the local event it will cause) ----
   function applyRate(r) {
     if (!video || Math.abs(video.playbackRate - r) < 1e-6) return;
@@ -529,6 +559,7 @@
   }
   function applyPlay() {
     if (!video || !video.paused) return;
+    rebaseElapsed(); // resume extrapolating from the frozen pause position
     suppress("play");
     video.play().catch(() => {
       setStatus("Press play yourself (the browser blocked autoplay)", "on");
@@ -536,11 +567,13 @@
   }
   function applyPause() {
     if (!video || video.paused) return;
+    rebaseElapsed(); // freeze the anchor where the room paused
     suppress("pause");
     video.pause();
   }
   function applySeek(t) {
     if (!video || !Number.isFinite(t)) return;
+    rebasePos(t); // the room moved here (remote seek or host state): new anchor
     if (Math.abs(video.currentTime - t) < SEEK_EPSILON) return;
     remoteSeek = { t, at: Date.now() };
     suppress("seeked");
@@ -560,25 +593,29 @@
     // line everyone up on our position before they start
     emit("CMD:seek", video.currentTime);
     emit("CMD:play");
+    rebasePos(video.currentTime); // the room lines up on us: we are the anchor now
   };
   const onPause = () => {
     if (suppressed("pause") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     emit("CMD:pause");
+    rebaseElapsed(); // the room pauses with us: freeze the anchor here
   };
   const onSeeked = () => {
-    if (suppressed("seeked") || !joined) return;
     if (
       remoteSeek &&
       Date.now() - remoteSeek.at < SEEK_TARGET_MS &&
       Math.abs(video.currentTime - remoteSeek.t) < 1
     ) {
+      remoteSeek = null; // the applied remote seek landed: no longer in flight
       return;
     }
+    if (suppressed("seeked") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     emit("CMD:seek", video.currentTime);
+    rebasePos(video.currentTime); // the room lined up on us: we are the anchor now
   };
   const onRateChange = () => {
     updateRates();
@@ -597,6 +634,7 @@
     }
     if (suppressed("ratechange") || !joined) return;
     if (ctlBlocked()) return;
+    rebaseElapsed(); // advance the anchor to now before it advances at the new rate
     roomRate = r;
     emit("CMD:playbackRate", r);
   };
@@ -739,6 +777,8 @@
       pendingHost = h;
       return;
     }
+    const ts = Number(h && h.videoTS);
+    if (Number.isFinite(ts)) rebasePos(ts); // the room's stored position: new anchor
     roomRate = Number(h.playbackRate) || 1;
     applyRate(roomRate);
     applySeek(Number(h.videoTS));
@@ -761,6 +801,7 @@
       if (Math.abs(roomRate - (Number(h.playbackRate) || 1)) > 1e-6) emit("CMD:playbackRate", roomRate);
       if (Math.abs(video.currentTime - Number(h.videoTS)) > 1) emit("CMD:seek", video.currentTime);
       if (video.paused !== Boolean(h.paused)) emit(video.paused ? "CMD:pause" : "CMD:play");
+      rebasePos(video.currentTime); // we imposed our state: it is the room's now
     }
     host.dataset.synced = others.length ? "joiner" : "alone";
     // make the next joiner see us right away instead of after the first 1 s tick
@@ -779,6 +820,8 @@
     host.dataset.conn = "off";
     sync = null;
     pendingHost = null;
+    roomPos = null; // the next join re-anchors from the room state
+    nudging = false;
     names = {};
     buffering = false;
     members = null;
@@ -957,6 +1000,7 @@
       if (roomMedia || adPlaying()) return;
       r = Number(r);
       if (!Number.isFinite(r)) return;
+      rebaseElapsed(); // advance the anchor to now before it advances at the new rate
       roomRate = r;
       applyRate(r);
       updateRates();
@@ -965,6 +1009,7 @@
 
   function setRate(r) {
     if (ctlBlocked()) return;
+    rebaseElapsed(); // advance the anchor to now before it advances at the new rate
     roomRate = r;
     applyRate(r);
     emit("CMD:playbackRate", r);
@@ -1003,6 +1048,7 @@
     emit("CMD:seek", video.currentTime);
     if (Math.abs(video.playbackRate - roomRate) > 1e-6) emit("CMD:playbackRate", video.playbackRate);
     emit(video.paused ? "CMD:pause" : "CMD:play");
+    rebasePos(video.currentTime); // the room moved to us
   });
   el.copyinvite.addEventListener("click", () => {
     const link = location.origin + location.pathname + "#wpx=" + (host.dataset.room || parseRoom(el.room.value));
@@ -1038,6 +1084,48 @@
     placeHost();
     setCollapsed(false);
     prefillRoom();
+  };
+
+  // ---- slow drift correction (round 8A) ----
+  // Every 2 s of playback, compare our position with the extrapolated room anchor and
+  // correct locally — never emitting: < 0.75 s stays untouched, up to 5 s rides a
+  // temporary rate nudge (restored once within 0.3 s), beyond that one masked seek
+  // (the same path a remote seek uses). The room never learns about our drift.
+  const driftCheck = () => {
+    delete host.dataset.drift;
+    if (!joined || !video || video.paused || buffering || roomMedia || adPlaying()) return;
+    if (members && members.length < 2) return; // alone: nothing to drift from
+    if (Date.now() < siteResetUntil || Date.now() < titleResetUntil) return;
+    if (askedHost) return; // a REC:host reply with fresh room state is already on the way
+    if (video.seeking || (remoteSeek && Date.now() - remoteSeek.at < 2000)) return;
+    const expected = expectedPos();
+    if (expected == null || !Number.isFinite(video.currentTime)) return;
+    const drift = video.currentTime - expected;
+    host.dataset.drift = String(Math.round(drift * 10) / 10);
+    if (Math.abs(drift) >= DRIFT_SEEK_S) {
+      // too far to ride a rate nudge: one masked local seek to the expected position
+      if (nudging) {
+        nudging = false;
+        applyRate(roomRate);
+      }
+      applySeek(expected);
+      return;
+    }
+    if (Math.abs(drift) >= DRIFT_NUDGE_S) {
+      // close the gap with a temporary rate bump, scaled to the gap (0.75 s -> 1.05x)
+      if (!nudging || nudgeBase !== roomRate) {
+        nudging = true;
+        nudgeBase = roomRate;
+        const f = Math.max(0.05, Math.min(Math.abs(drift) / 8, 0.5));
+        nudgeRate = drift < 0 ? roomRate * (1 + f) : roomRate * (1 - f);
+      }
+      applyRate(nudgeRate);
+      return;
+    }
+    if (nudging && Math.abs(drift) < DRIFT_OK_S) {
+      nudging = false;
+      applyRate(roomRate);
+    }
   };
 
   // ---- start ----
@@ -1076,5 +1164,6 @@
     if (joined && video && Number.isFinite(video.currentTime)) {
       emit("CMD:ts", video.currentTime);
     }
+    if (++driftCount % DRIFT_TICK_S === 0) driftCheck();
   }, 1000);
 })();

@@ -298,12 +298,18 @@ async function main() {
     const text = await ev(W, `document.querySelector('[role=dialog]')?.innerText || ''`);
     check("bm0a. InviteModal shows the 'WatchParty Sync' link with a javascript: href", lm !== null && href.startsWith("javascript:"), `href length ${href.length} chars; modal text: ${JSON.stringify(text.slice(text.indexOf("Watch Netflix")))}`);
     console.log("   bookmarklet href:", href);
-    // clicking it inside WatchParty must do nothing: no navigation, no script injected
-    const before = await ev(W, `location.href + '|' + document.scripts.length + '|' + (typeof window.__wpExt)`);
+    // clicking it inside WatchParty must do nothing: no navigation, no bookmarklet
+    // payload injected (the payload's scripts all come from <server>/extension/ —
+    // counting those, not every <script>: the Vite dev app lazy-loads chunks and
+    // once measured one landed inside this window and broke the count)
+    const extScripts = `(Array.from(document.scripts).filter((s) => /\\/extension\\//.test(s.src || '')).length)`;
+    const before = await ev(W, `location.href + '|' + ${extScripts} + '|' + (typeof window.__wpExt)`);
+    const total0 = await ev(W, `document.scripts.length`);
     await ev(W, `Array.from(document.querySelectorAll('a')).find(a => a.textContent.trim() === 'WatchParty Sync').click(); true`);
     await sleep(700);
-    const after = await ev(W, `location.href + '|' + document.scripts.length + '|' + (typeof window.__wpExt) + '|' + (window.__wpServer === undefined)`);
-    check("bm0b. clicking the link inside the room page does nothing (url, <script> count, no globals)", after === before + "|true", `before=${before} after=${after}`);
+    const after = await ev(W, `location.href + '|' + ${extScripts} + '|' + (typeof window.__wpExt) + '|' + (window.__wpServer === undefined)`);
+    const total1 = await ev(W, `document.scripts.length`);
+    check("bm0b. clicking the link inside the room page does nothing (url, no /extension/ <script>, no globals)", after === before + "|true", `before=${before} after=${after}; total <script> count ${total0} -> ${total1} (vite chunks excluded)`);
     BM = decodeURIComponent(href.replace(/^javascript:/, ""));
     await ev(W, `document.querySelector('button[aria-label="Close"]')?.click(); true`);
   }
@@ -976,6 +982,12 @@ async function main() {
       status: r.getElementById('status').textContent };`));
   {
     // o1: A takes control; everyone shows A as the controller, B's button is disabled
+    // The room sits paused at ~46 s after n1b; o2 plays at 1.5x for up to ~9 s when the
+    // askHost replies lag — once measured A ending at 60 s mid-o2, which broke B's
+    // applyPlay cascade. Start o from 35 s so that window cannot reach the 60 s end.
+    await ev(A, `document.querySelector('video').currentTime = 35; true`);
+    await waitFor(async () => Math.abs((await vstate(B)).t - 35) < 1.5, 3000);
+    await sleep(400);
     await ev(A, PANEL(`r.getElementById('ctl').click(); return true;`));
     const take1 = await waitFor(async () => {
       const a = (await ctlOf(A)).id, b = (await ctlOf(B)).id, c = (await ctlOf(C)).id;
@@ -1178,8 +1190,11 @@ async function main() {
   };
   // the blocked reconnect handshakes are logged as console errors by the page itself:
   // expected during the outage, not extension defects — keep real errors, drop these
+  // (the second pattern: socket.io writing/closing onto the WS the harness just closed)
   const dropWsNoise = (p, before) => {
-    p.errors = p.errors.filter((e, i) => i < before || !/WebSocket connection to .* failed/.test(e));
+    p.errors = p.errors.filter(
+      (e, i) => i < before || !/WebSocket connection to .* failed|WebSocket is already in CLOSING or CLOSED state/.test(e),
+    );
   };
 
   // r1: B drops off the network for ~4 s while A pauses, seeks to 40 and sets rate 1.25.
@@ -1270,6 +1285,108 @@ async function main() {
         && (await statusOf(B)).text === `Connected to ${roomName}`,
       `closed=${closed}; reconnecting after ${recMs} ms; local pause applied=${bPausedOffline}; room kept playing (A t=${aMid.t.toFixed(1)}); 'on' after ${onMs} ms; B playing near A after ${landMs} ms (B ${JSON.stringify(await vstate(B))} A ${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'`,
     );
+  }
+
+  // ---------------- s. round 8A: slow drift (measure first, then correction) ----------------
+  // A silent drift = B's video moved through the panel's own remote-apply path. The
+  // panel masks 'seeked' for 700 ms while applying a remote seek (REC:seek or the
+  // CMD:askHost reply), so a listener that fires when the panel's own apply has
+  // settled can move the video again inside that window: no CMD:seek leaves B and
+  // the room keeps playing as if B had never been touched. delta < 0 = B falls
+  // behind. The inject waits for the apply's recovery ('playing', or 'seeked' when
+  // the room is paused) and then waits 30 ms more: measured (dev/probe round), a
+  // seek that interrupts the previous seek's recovery leaves a CMD:buffering true
+  // unclosed and the server's 2.5 s buffer-pause pauses the whole room mid-test.
+  const silentDrift = async (p, source, target, delta, watch = "playing") => {
+    const injected = ev(
+      p,
+      `(async () => {
+        const v = document.querySelector('video');
+        const t1 = ${target};
+        const done = new Promise((res) => {
+          const h = () => {
+            if (v.seeking) return;
+            v.removeEventListener(${JSON.stringify(watch)}, h);
+            setTimeout(() => {
+              v.currentTime = t1 + ${delta}; // still inside the panel's 700 ms 'seeked' mask
+              res({ applied: true, at: t1, driftedTo: v.currentTime });
+            }, 30);
+          };
+          v.addEventListener(${JSON.stringify(watch)}, h);
+        });
+        return Promise.race([done, new Promise((res) => setTimeout(() => res({ applied: false }), 6000))]);
+      })()`,
+    );
+    await sleep(150); // let the listener install before the seek
+    await ev(source, `document.querySelector('video').currentTime = ${target}; true`);
+    return injected;
+  };
+  {
+    // normalize: room rate 1, everyone playing (C follows the room like B)
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
+    await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
+    await ev(A, `document.querySelector('video').play().then(() => true)`);
+    await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+    // r2's tail left CMD:buffering changes inside the server's 5-per-1000 ms rate-limit
+    // window (room.ts setBuffering): without this pause the inject's recovery false is
+    // dropped, bufferingMap[B] stays true and every play/seek re-arms the 2.5 s
+    // buffer-pause — measured as "Bob bufferPause" pausing the room mid-s1.
+    await sleep(1300);
+
+    // s1: silent 2 s drift on B -> converge within 10 s, 0 playback emits, room rate restored
+    {
+      const b0 = await emits(B);
+      const inj = await silentDrift(B, A, 12, -2);
+      const convMs = await waitFor(async () => {
+        const a = await vstate(A), b = await vstate(B);
+        return a && b && !b.paused && Math.abs(b.t - a.t) < 0.5 ? true : null;
+      }, 10000);
+      const rateMs = await waitFor(async () => (await vstate(B)).r === 1, 6000);
+      const dB = nonTs(b0, await emits(B));
+      check(
+        "s1. silent 2 s drift on B (no CMD:seek left B): |B−A| < 0.5 s within 10 s, 0 playback emits, B's rate back to the room rate 1",
+        inj.applied && convMs !== null && rateMs !== null
+          && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"],
+        `injected=${JSON.stringify(inj)}; |B−A| < 0.5 after ${convMs} ms (host.dataset.drift='${await ev(B, PANEL(`return h.dataset.drift;`))}'); rate 1 again after +${rateMs} ms; B emit diff=${JSON.stringify(dB)} (CMD:ts allowed); A=${JSON.stringify(await vstate(A))} B=${JSON.stringify(await vstate(B))}`,
+      );
+    }
+
+    // s2: silent 8 s drift -> beyond the nudge range: one masked local seek, < 1 s within 4 s
+    {
+      await ev(A, `document.querySelector('video').play().then(() => true)`);
+      await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+      await sleep(400);
+      const b0 = await emits(B);
+      const inj = await silentDrift(B, A, 14, -8);
+      const convMs = await waitFor(async () => {
+        const a = await vstate(A), b = await vstate(B);
+        return a && b && !b.paused && Math.abs(b.t - a.t) < 1 ? true : null;
+      }, 4000);
+      const dB = nonTs(b0, await emits(B));
+      check(
+        "s2. silent 8 s drift on B: corrected within 4 s (|B−A| < 1 s) via one masked local seek, 0 playback emits",
+        inj.applied && convMs !== null && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"],
+        `injected=${JSON.stringify(inj)}; |B−A| < 1 after ${convMs} ms (host.dataset.drift='${await ev(B, PANEL(`return h.dataset.drift;`))}'); B emit diff=${JSON.stringify(dB)} (CMD:ts allowed); A=${JSON.stringify(await vstate(A))} B=${JSON.stringify(await vstate(B))}`,
+      );
+    }
+
+    // s3: room paused -> no correction: B keeps the drifted position, 0 playback emits
+    {
+      await ev(A, `document.querySelector('video').pause(); true`);
+      await waitFor(async () => (await vstate(B)).paused === true, 3000);
+      const b0 = await emits(B);
+      const inj = await silentDrift(B, A, 20, 2, "seeked"); // paused room: no 'playing' fires
+      await sleep(6000);
+      const bEnd = await vstate(B);
+      const dB = nonTs(b0, await emits(B));
+      check(
+        "s3. room paused: no drift correction — B keeps the injected +2 s position for 6 s, 0 playback emits, no host.dataset.drift",
+        inj.applied && bEnd && bEnd.paused && Math.abs(bEnd.t - 22) < 0.3
+          && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"]
+          && (await ev(B, PANEL(`return h.dataset.drift;`))) === undefined,
+        `injected=${JSON.stringify(inj)}; B after 6 s=${JSON.stringify(bEnd)} (want paused ≈ 22); B emit diff=${JSON.stringify(dB)} (CMD:ts allowed); drift dataset='${await ev(B, PANEL(`return h.dataset.drift;`))}'`,
+      );
+    }
   }
 
   // h. console errors

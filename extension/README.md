@@ -17,7 +17,7 @@ WatchParty room. No video is re-streamed and DRM is never touched.
 3. In the panel on the right of the page, paste the room URL (or just the room name), type your
    name and press **Join**.
 4. Press play / pause / seek as usual: everyone follows. Late joiners jump to the room's
-   position, pause state and speed.
+   position, pause state and speed. If a machine silently falls behind or ahead while the room plays (a stall, a slow machine — no seek involved), the panel catches up on its own within seconds: a temporary speed nudge for gaps up to 5 s, one silent local seek beyond, without sending anything to the room (the gap is exposed as `data-drift` on the panel host).
 
 Speed: the **0.5x 0.75x 1x 1.25x 1.5x 2x** buttons change the speed for everyone. A change made
 in Netflix's own speed menu is shared the same way.
