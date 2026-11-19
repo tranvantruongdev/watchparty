@@ -2863,6 +2863,21 @@ export class App extends React.Component<AppProps, AppState> {
               return;
             }
             if (track.kind === "video") {
+              // Round 226: a source larger than a 1440p display (a 4K monitor
+              // on a browser that skips the capture constraints, a 4K file
+              // share via captureStream) used to go on the wire whole.
+              // Measured: 3840x2160 on software VP9 fell to ~12.5 fps where
+              // 2560x1440 held ~24 fps, with no readability gain for a
+              // 1440p-height viewer (the same text, just more pixels to
+              // encode and decode). Cap the sender at 2560x1440 by scaling
+              // both dimensions down; a factor of 1 (any <=1440p source,
+              // incl. the usual 1080p capture) leaves the encodings untouched
+              const trackSettings = track.getSettings();
+              const shareScaleDown = Math.max(
+                (trackSettings.width || 0) / 2560,
+                (trackSettings.height || 0) / 1440,
+                1,
+              );
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more
               const tr = pc.addTransceiver(track, {
                 streams: [this.localStreamToPublish],
@@ -2875,6 +2890,9 @@ export class App extends React.Component<AppProps, AppState> {
                     maxBitrate:
                       getShareCapMbps(this.state.participants.length - 1) *
                       1_000_000,
+                    ...(shareScaleDown > 1
+                      ? { scaleResolutionDownBy: shareScaleDown }
+                      : {}),
                   },
                 ],
               });
