@@ -1001,6 +1001,13 @@ app.get("/proxy/*splat", async (req, res) => {
   }
 });
 
+// The bookmarklet (src/utils/bookmarklet.ts) loads the browser extension's scripts from here
+app.use(
+  "/extension",
+  express.static(path.resolve(import.meta.dirname, "../extension"), {
+    setHeaders: (res) => void res.setHeader("Cache-Control", "no-cache"),
+  }),
+);
 // Vite emits content-hashed filenames under /assets/, so those are safe to cache
 // for a year: a new deploy changes the hashes (and index.html, which always
 // revalidates) so nothing can ever be served stale. Everything else (index.html,

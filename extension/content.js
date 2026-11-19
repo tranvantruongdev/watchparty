@@ -7,7 +7,9 @@
   if (window.__wpExt) return;
   window.__wpExt = true;
 
-  const SERVER = "http://localhost:8080";
+  // The bookmarklet (src/utils/bookmarklet.ts) runs this same file in the page's own world
+  // and sets window.__wpServer / window.__wpRoom first; the extension never does.
+  const SERVER = window.__wpServer || "http://localhost:8080";
   const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
   const SUPPRESS_MS = 700; // ignore the local events our own remote-apply causes
   const SEEK_TARGET_MS = 5000; // a remote seek can finish (seeked) long after we asked
@@ -37,9 +39,25 @@
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
 
+  // chrome.storage only exists for an installed extension; the bookmarklet (page world)
+  // falls back to localStorage under a "wpx:" prefix.
+  const useChromeStore = typeof chrome !== "undefined" && !!chrome.storage;
   const store = {
     get: (keys) =>
       new Promise((resolve) => {
+        if (!useChromeStore) {
+          const r = {};
+          for (const k of keys) {
+            try {
+              const raw = localStorage.getItem("wpx:" + k);
+              if (raw !== null) r[k] = JSON.parse(raw);
+            } catch {
+              // storage blocked or value not ours: treat as unset
+            }
+          }
+          resolve(r);
+          return;
+        }
         try {
           chrome.storage.local.get(keys, (r) => resolve(r || {}));
         } catch {
@@ -47,6 +65,16 @@
         }
       }),
     set: (obj) => {
+      if (!useChromeStore) {
+        for (const [k, v] of Object.entries(obj)) {
+          try {
+            localStorage.setItem("wpx:" + k, JSON.stringify(v));
+          } catch {
+            // storage blocked
+          }
+        }
+        return;
+      }
       try {
         chrome.storage.local.set(obj);
       } catch {
@@ -528,10 +556,23 @@
     store.set({ collapsed: c });
   }
 
+  // bookmarklet: the link names the room it was made in, which beats an older saved room;
+  // fill it in, never auto-join
+  function prefillRoom() {
+    if (window.__wpRoom) el.room.value = String(window.__wpRoom);
+  }
+  // clicking the bookmarklet again lands here instead of building a second panel
+  window.__wpExtShow = () => {
+    placeHost();
+    setCollapsed(false);
+    prefillRoom();
+  };
+
   // ---- start ----
   placeHost();
   store.get(["room", "name", "collapsed"]).then((saved) => {
     if (saved.room) el.room.value = saved.room;
+    prefillRoom();
     el.name.value = saved.name || "Viewer-" + Math.floor(1000 + Math.random() * 9000);
     if (saved.collapsed) setCollapsed(true);
   });

@@ -25,10 +25,25 @@ in Netflix's own speed menu is shared the same way.
 The panel also has a chat that shares the room's chat with the WatchParty web page. The `-`
 button collapses the panel; it follows the player into fullscreen.
 
+## Bookmarklet (no install)
+
+The same panel without installing anything:
+
+1. Open a WatchParty room, click **Invite** and drag the **WatchParty Sync** link from the
+   dialog to your bookmarks bar.
+2. Open the Netflix title and click that bookmark. The panel appears with the room already
+   filled in; press **Join**. Clicking the bookmark again just reopens the panel.
+
+The bookmark only loads `/extension/vendor/socket.io.min.js`, `page.js` and `content.js` from
+the WatchParty server (`server/server.ts` serves this folder at `/extension`), so it always runs
+the same code as the extension. It works because Netflix sends only a report-only
+Content-Security-Policy; if that ever becomes enforcing, use the extension instead. The saved
+room and name live in the page's `localStorage` (`wpx:` keys) instead of `chrome.storage`.
+
 ## Server address
 
-The socket server is the `SERVER` constant at the top of `content.js` (`http://localhost:8080`).
-Change it to your deployed server (use `wss`/`https` for Netflix, an `https` page cannot open a
+The socket server is the `SERVER` constant at the top of `content.js` (`http://localhost:8080`;
+the bookmarklet overrides it through `window.__wpServer`). Change it to your deployed server (use `wss`/`https` for Netflix, an `https` page cannot open a
 plain `ws://` socket to a remote host).
 
 ## Dev test page
