@@ -444,6 +444,25 @@
   background: rgba(43, 24, 74, 0.92);
 }
 
+/* "One person drives" (round 15B): the who-drives pill and the take/release
+   button sit together over the video, anchored like the catch-up chip */
+.extControlRow {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.extControlRow button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* Fullscreen chat overlay: newest messages over the player, fading out ~8s
    after each arrives. pointer-events none so the player/controls stay clickable;
    the input opts back in. */

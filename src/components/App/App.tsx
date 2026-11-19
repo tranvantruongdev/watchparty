@@ -403,8 +403,8 @@ export class App extends React.Component<AppProps, AppState> {
     isSubtitleModalOpen: false,
     isMultiSelectModalOpen: false,
     roomLock: "",
-  extController: null,
-  extSiteUrl: null,
+    extController: null,
+    extSiteUrl: null,
     controller: "",
     roomId: "",
     savedPasswords: {},
@@ -4652,16 +4652,71 @@ export class App extends React.Component<AppProps, AppState> {
                     up
                   </button>
                 )}
-                {this.state.extController &&
-                  this.state.extController !== clientId && (
-                    <div
-                      className={styles.catchUpChip}
-                      style={{ cursor: "default" }}
-                    >
-                      {(this.state.nameMap[this.state.extController] ??
-                        "Someone") + " controls playback (WatchParty Sync)"}
-                    </div>
-                  )}
+                {/* "One person drives" (round 15B): a web member can take and
+                    release playback control too — same CMD:extControl as the
+                    extension. While someone else drives, the server drops our
+                    CMD:play/pause/seek/playbackRate, so taking is disabled
+                    with the reason. Only shown where the extension is in
+                    use (someone drives, or a member announced a title) */}
+                {(this.state.extController || this.state.extSiteUrl) && (
+                  <div className={styles.extControlRow}>
+                    {this.state.extController && (
+                      <div
+                        className={styles.catchUpChip}
+                        style={{
+                          position: "static",
+                          transform: "none",
+                          cursor: "default",
+                        }}
+                      >
+                        {this.state.extController === clientId
+                          ? "You control playback"
+                          : (this.state.nameMap[this.state.extController] ??
+                              "Someone") +
+                            " controls playback (WatchParty Sync)"}
+                      </div>
+                    )}
+                    {this.state.extController &&
+                    this.state.extController !== clientId ? (
+                      <Tooltip
+                        label={
+                          (this.state.nameMap[this.state.extController] ??
+                            "Someone") + " is driving playback"
+                        }
+                        withArrow
+                      >
+                        <span style={{ display: "inline-flex" }}>
+                          <button
+                            className={styles.catchUpChip}
+                            disabled
+                            aria-label={`Take control — ${
+                              this.state.nameMap[this.state.extController] ??
+                              "Someone"
+                            } is driving playback`}
+                          >
+                            Take control
+                          </button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <button
+                        className={styles.catchUpChip}
+                        onClick={() =>
+                          this.socket.emit(
+                            "CMD:extControl",
+                            this.state.extController === clientId
+                              ? false
+                              : true,
+                          )
+                        }
+                      >
+                        {this.state.extController === clientId
+                          ? "Release control"
+                          : "Take control"}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {!this.state.fullScreen && (
                   <React.Fragment>
                     <div
