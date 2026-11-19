@@ -3,7 +3,7 @@ import { ActionIcon } from "@mantine/core";
 import { InviteModal } from "../Modal/InviteModal";
 import { IconUserPlus } from "@tabler/icons-react";
 
-export const InviteButton = () => {
+export const InviteButton = ({ siteUrl }: { siteUrl: string | null }) => {
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // The modal is mounted conditionally, so closing it unmounts the whole
   // Mantine Modal and its built-in returnFocus never runs — focus falls to
@@ -21,7 +21,9 @@ export const InviteButton = () => {
 
   return (
     <>
-      {inviteModalOpen && <InviteModal closeInviteModal={closeInviteModal} />}
+      {inviteModalOpen && (
+        <InviteModal closeInviteModal={closeInviteModal} siteUrl={siteUrl} />
+      )}
       <ActionIcon
         ref={triggerRef}
         size="36px"

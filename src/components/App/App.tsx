@@ -294,6 +294,9 @@ interface AppState {
   // the server drops CMD:play/pause/seek/playbackRate from this socket, so the
   // app skips those emits and shows who drives
   extController: string | null;
+  // Latest REC:siteUrl url: a streaming title an extension member announced;
+  // InviteModal turns it into a #wpx= deep link
+  extSiteUrl: string | null;
   controller?: string;
   savedPasswords: StringDict;
   roomId: string;
@@ -401,6 +404,7 @@ export class App extends React.Component<AppProps, AppState> {
     isMultiSelectModalOpen: false,
     roomLock: "",
   extController: null,
+  extSiteUrl: null,
     controller: "",
     roomId: "",
     savedPasswords: {},
@@ -1453,6 +1457,9 @@ export class App extends React.Component<AppProps, AppState> {
     });
     socket.on("REC:extControl", (data: { id: string | null }) => {
       this.setState({ extController: data ? data.id : null });
+    });
+    socket.on("REC:siteUrl", (data: { id: string; url: string }) => {
+      this.setState({ extSiteUrl: data.url });
     });
     socket.on("roster", (data: User[]) => {
       this.setState({ participants: data, rosterUpdateTS: Date.now() }, () => {
@@ -5491,7 +5498,7 @@ export class App extends React.Component<AppProps, AppState> {
                     </Button>
                   }
                 />
-                <InviteButton />
+                <InviteButton siteUrl={this.state.extSiteUrl} />
               </div>
               <div className={styles.segGroup}>
                 <Button
