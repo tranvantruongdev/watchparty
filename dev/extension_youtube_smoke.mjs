@@ -8,6 +8,8 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// the real payload, straight from the app's source (Node 24 strips the .ts types)
+import { getBookmarklet } from "../src/utils/bookmarklet.ts";
 
 const EDGE = process.env.EDGE || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 const EXT = path.resolve(import.meta.dirname, "../extension");
@@ -82,16 +84,16 @@ class Cdp {
 let browser, proc, userDir;
 
 // blockLna=true (the default run) disables LocalNetworkAccessChecks so the localhost
-// socket works; --lna passes false to keep the check ON (the socket is then blocked — the point)
-async function launch(variant, blockLna = true) {
+// socket works; --lna passes false to keep the check ON (the socket is then blocked — the point).
+// loadExt=false (--bookmarklet phase) launches Edge WITHOUT the extension.
+async function launch(variant, blockLna = true, loadExt = true) {
   userDir = fs.mkdtempSync(path.join(os.tmpdir(), "wpyt-"));
   const port = 9900 + Math.floor(Math.random() * 500);
   const feats = blockLna ? [LNA_FEATURE, ...(variant.features || [])] : variant.features || [];
   const args = [
     `--user-data-dir=${userDir}`,
     `--remote-debugging-port=${port}`,
-    `--load-extension=${EXT}`,
-    `--disable-extensions-except=${EXT}`,
+    ...(loadExt ? [`--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`] : ["--disable-extensions"]),
     `--disable-features=${feats.join(",")}`,
     ...BASE_FLAGS,
     ...variant.extra,
@@ -266,6 +268,7 @@ function check(label, ok, detail) {
 }
 let exitCode = 0;
 let finished = false;
+let summaryTag = "extension-youtube";
 const timer = setTimeout(() => {
   console.log("\nGLOBAL TIMEOUT (5 min) — killing the browser, printing results so far");
   exitCode = 1;
@@ -277,7 +280,7 @@ function finish() {
   finished = true;
   clearTimeout(timer);
   const failed = results.filter((r) => !r.ok);
-  console.log(`\nSUMMARY [extension-youtube]: ${results.length - failed.length}/${results.length} PASS` + (failed.length ? "  FAILED: " + failed.map((f) => f.label).join(" | ") : ""));
+  console.log(`\nSUMMARY [${summaryTag}]: ${results.length - failed.length}/${results.length} PASS` + (failed.length ? "  FAILED: " + failed.map((f) => f.label).join(" | ") : ""));
   killEdge();
   process.exit(exitCode || (failed.length ? 1 : 0));
 }
@@ -347,9 +350,109 @@ async function runLna() {
   finish();
 }
 
+// ---------------- --bookmarklet phase ----------------
+// Round 13A: the bookmarklet from src/utils/bookmarklet.ts getBookmarklet(serverOrigin,
+// roomName) on the same real YouTube watch page, in Edge WITHOUT the extension. YouTube
+// serves CSP with an enforced `require-trusted-types-for 'script'` and script-src
+// allowlists (https-only hosts + a nonce/'strict-dynamic' policy), so the loader's
+// <script src=http://localhost:8080/…> injection is expected to be blocked by design.
+// The payload is imported straight from bookmarklet.ts (Node strips its types; the
+// InviteModal wiring that ships it is the e2e's bm0 checks — :8080 only serves a build).
+// It is run in A and B the same way dev/extension_e2e.mjs bookmarklet mode does
+// (Runtime.evaluate of the javascript: body) and asserts the honest outcome — either the
+// scripts load and sync works, or the bookmarklet fails VISIBLY (alert naming the site's
+// security policy) with no half-loaded state and the exact console reason.
+// Run: node dev/extension_youtube_smoke.mjs --bookmarklet
+const runBm = (p, BM) => ev(p, BM + "; true");
+async function runBmPhase() {
+  summaryTag = "bookmarklet-youtube";
+  // room first, then the payload with that room's name baked in (like the InviteModal does)
+  const rr = await (await fetch(SERVER + "/createRoom", { method: "POST" })).json();
+  const roomName = String(rr.name || "").replace(/^\//, "");
+  const roomUrl = SERVER + "/watch/" + roomName;
+  console.log("room:", roomUrl);
+  const BM = getBookmarklet(SERVER, roomName).replace(/^javascript:/, "");
+  check("bm1. bookmarklet payload built from src/utils/bookmarklet.ts", BM.startsWith("(function(o,r){") && BM.includes(JSON.stringify(SERVER)) && BM.includes(JSON.stringify(roomName)), `${BM.length} chars; __wpServer=${JSON.stringify(SERVER)} __wpRoom=${JSON.stringify(roomName)}`);
+
+  // launch Edge WITHOUT the extension (LNA checks still disabled — round 12A owns that gate)
+  let launched = false;
+  for (const variant of VARIANTS) {
+    try {
+      await launch(variant, true, false);
+      launched = true;
+      console.log(`launched "${variant.name}" without the extension`);
+      break;
+    } catch (e) {
+      console.log(`launch failed (${variant.name}): ${e.message}`);
+      killEdge();
+    }
+  }
+  if (!launched) {
+    check("bm2. bookmarklet run on A and B ends in the designed outcome", false, "no launch variant worked");
+    exitCode = 1;
+    return finish();
+  }
+
+  // A and B on the watch page (no extension: the bookmarklet is the only loader)
+  const tab = {};
+  for (const tag of ["A", "B"]) {
+    const p = await newPage(tag, YT_URL);
+    const settle = await settleOnWatch(p, tag);
+    console.log(`${tag} settled=${settle.ok} in ${settle.ms} ms (rejects=${settle.rejects}${settle.bot ? ", BOT-WALL TEXT PRESENT" : ""})`);
+    tab[tag] = settle.ok ? p : null;
+  }
+  if (!tab.A || !tab.B) {
+    check("bm2. bookmarklet run on A and B ends in the designed outcome", false, "YouTube never settled the watch page in one of the tabs");
+    exitCode = 1;
+    return finish();
+  }
+
+  // run the bookmarklet in both, exactly like the e2e's bookmarklet mode does
+  const outcome = {};
+  for (const tag of ["A", "B"]) {
+    const p = tab[tag];
+    let evalErr = null;
+    try {
+      await runBm(p, BM);
+    } catch (e) {
+      evalErr = e.message;
+    }
+    const panelMs = await waitFor(() => hasPanel(p), 8000, 200);
+    const globals = await ev(p, `(() => ({ ext: window.__wpExt ?? null, server: window.__wpServer ?? null, io: typeof window.io, extScripts: Array.from(document.scripts).filter((s) => /\\/extension\\//.test(s.src || "")).length }))()`);
+    outcome[tag] = { evalErr, panel: panelMs !== null, globals };
+    console.log(`${tag}: evalErr=${JSON.stringify(evalErr)} panel=${panelMs !== null} globals=${JSON.stringify(globals)}`);
+  }
+
+  // measured round 13A: youtube.com enforces require-trusted-types-for 'script' and serves
+  // https-only script-src allowlists ('strict-dynamic'), so the loader's <script src=
+  // http://localhost:8080/…> injection is blocked by design — Trusted Types throws on the
+  // first s.src assignment, and even a TrustedScriptURL policy could not pass the script-src
+  // check. The designed outcome to assert: NO working sync, the failure is VISIBLE (the
+  // fixed security-policy alert), nothing half-loaded, and the console names the reason.
+  check("bm2. the bookmarklet does not produce a panel on YouTube (no sync can start)", !outcome.A.panel && !outcome.B.panel, `panel A=${outcome.A.panel} B=${outcome.B.panel}`);
+  const MSG = /WatchParty Sync can't load on this site \(its security policy blocks scripts\)/i;
+  check(
+    "bm3. the failure is visible: the loader alerts the fixed security-policy message in both tabs",
+    tab.A.dialogs.some((m) => MSG.test(m || "")) && tab.B.dialogs.some((m) => MSG.test(m || "")),
+    `dialogs A=${JSON.stringify(tab.A.dialogs)} B=${JSON.stringify(tab.B.dialogs)}`,
+  );
+  check(
+    "bm4. no half-loaded state: no /extension/ script element or global survived in either tab",
+    outcome.A.globals.ext === null && outcome.A.globals.extScripts === 0 && outcome.B.globals.ext === null && outcome.B.globals.extScripts === 0,
+    `globals A=${JSON.stringify(outcome.A.globals)} B=${JSON.stringify(outcome.B.globals)}`,
+  );
+  check(
+    "bm5. the console names the exact reason (TrustedScriptURL required, action blocked)",
+    tab.A.errors.some((e) => /TrustedScriptURL/i.test(e)) && tab.B.errors.some((e) => /TrustedScriptURL/i.test(e)),
+    `A: ${tab.A.errors.slice(0, 2).join(" ;; ") || "(no errors)"} | B: ${tab.B.errors.slice(0, 2).join(" ;; ") || "(no errors)"}`,
+  );
+  finish();
+}
+
 // ---------------- main ----------------
 async function main() {
   if (process.argv.includes("--lna")) return runLna();
+  if (process.argv.includes("--bookmarklet")) return runBmPhase();
   // 0. launch, find a variant where the extension loads on YouTube
   let used = null;
   let browserVer;

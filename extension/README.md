@@ -77,7 +77,8 @@ The same panel without installing anything:
 The bookmark only loads `/extension/vendor/socket.io.min.js`, `page.js` and `content.js` from
 the WatchParty server (`server/server.ts` serves this folder at `/extension`), so it always runs
 the same code as the extension. It works because Netflix sends only a report-only
-Content-Security-Policy; if that ever becomes enforcing, use the extension instead. The saved
+Content-Security-Policy; on sites whose policy enforces (see Known limits) the bookmark alerts
+instead of loading, and the extension is the only way there. The saved
 room and name live in the page's `localStorage` (`wpx:` keys) instead of `chrome.storage`.
 
 ## Server address
@@ -95,6 +96,16 @@ be synced without a Netflix account.
 Automated test: with `npm run dev` and `npm run ui` running, `node dev/extension_e2e.mjs` drives headless Edge over CDP through every feature, once with the extension loaded and once as the bookmarklet (`EDGE=<browser path>` to use another Chromium).
 
 ## Known limits
+
+- **The bookmarklet cannot load on YouTube** (and any site that enforces its
+  Content-Security-Policy): youtube.com sends `require-trusted-types-for 'script'` plus
+  https-only `script-src` allowlists, so the loader's `<script src=http://localhost:8080/…>`
+  injection is blocked by design — Trusted Types reject the `script.src` assignment with
+  `TypeError: … requires 'TrustedScriptURL' assignment`, and even a Trusted Types policy
+  could not pass the script-src check (a default policy would weaken the site's own guard,
+  so none is created). The loader catches this and alerts "WatchParty Sync can't load on
+  this site (its security policy blocks scripts) — use the extension" instead of dying
+  silently; nothing half-loads. Measured on a real youtube.com watch page (round 13A).
 
 - The Netflix seek path (`page.js`, Netflix player API) and Netflix's play / pause behaviour are
   not covered by the automated test: it needs a logged-in account.

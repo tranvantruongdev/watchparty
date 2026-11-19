@@ -2,6 +2,9 @@
 // extension's own scripts (served by the server at /extension) into the page, so the
 // extension and the bookmarklet share one code base. Netflix sends only a
 // report-only CSP, which is why scripts and a websocket from our origin are allowed.
+// Sites that enforce Trusted Types + script-src allowlists (youtube.com, measured round 13A)
+// cannot load the loader at all; there the bookmarklet alerts the fixed security-policy
+// message instead of dying silently.
 export function getBookmarklet(serverOrigin: string, roomName: string): string {
   const origin = serverOrigin.replace(/\/+$/, "");
   // No "%" anywhere: the browser percent-decodes a javascript: URL before running it.
@@ -15,7 +18,13 @@ k.forEach(function(n){if(n in w){S[n]=w[n];try{w[n]=void 0}catch(e){}}});
 function R(){k.forEach(function(n){if(n in S)try{w[n]=S[n]}catch(e){}})}
 function L(p,f){
 var s=document.createElement("script");
+try{
 s.src=o+"/extension/"+p;
+}catch(e){
+R();
+alert("WatchParty Sync can't load on this site (its security policy blocks scripts) — use the extension");
+return
+}
 s.onload=f;
 s.onerror=function(){R();alert("WatchParty Sync: cannot load "+s.src)};
 document.head.appendChild(s)
