@@ -2866,10 +2866,10 @@ export class App extends React.Component<AppProps, AppState> {
               // Round 226: a source larger than a 1440p display (a 4K monitor
               // on a browser that skips the capture constraints, a 4K file
               // share via captureStream) used to go on the wire whole.
-              // Measured: 3840x2160 on software VP9 fell to ~12.5 fps where
-              // 2560x1440 held ~24 fps, with no readability gain for a
-              // 1440p-height viewer (the same text, just more pixels to
-              // encode and decode). Cap the sender at 2560x1440 by scaling
+              // Measured: 3840x2160 on software VP9 sent ~12.5 fps at 3.2 Mbps;
+              // scaled to 2560x1440 it sent ~15.7 fps at 7.9 Mbps with 12 px
+              // text still readable for a desktop or phone viewer, who never
+              // shows more than 1440p anyway. Cap the sender at 2560x1440 by scaling
               // both dimensions down; a factor of 1 (any <=1440p source,
               // incl. the usual 1080p capture) leaves the encodings untouched
               const trackSettings = track.getSettings();
