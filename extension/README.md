@@ -64,6 +64,7 @@ the top frame, so a site whose player lives inside an iframe is not supported. O
 while an ad is playing the panel shows "Ad playing — sync paused" and nothing is sent or
 applied; when the ad ends the room's state is pulled again and applied like a late joiner's.
 Small preview / hover videos on a page are ignored: only the largest visible video syncs.
+Alt+Shift+W hides or shows the whole panel (a small "W" pill stays at its corner to bring it back); the hidden / shown state is remembered per site.
 
 ## Bookmarklet (no install)
 

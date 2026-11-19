@@ -56,6 +56,7 @@
   let panel = null;
   let head = null;
   let chatBtn = null;
+  let pill = null; // tiny "W" button shown while the panel is hidden
   let placed = false; // inline left/top set (dragged or restored); false = content.js top/right default
   let drag = null; // { x, y, left, top, w, h, moved }
 
@@ -126,6 +127,22 @@
     store.set({ nochat: hide });
   }
 
+  // whole-panel visibility (not content.js's collapsed state): hidden leaves the 24px "W" pill
+  // at the panel's corner to click it back; remembered like pos/nochat
+  function setHidden(hide) {
+    panel.classList.toggle("wpx-off", hide);
+    pill.style.display = hide ? "" : "none";
+    store.set({ hidden: hide });
+  }
+
+  // Alt+Shift+W anywhere on the page, capture-phase so it also fires for keys typed inside the
+  // panel (content.js stops keydown at the host, which would swallow a bubble-phase listener).
+  // Never stopped or default-prevented, so the site's own shortcuts keep working.
+  function onKey(e) {
+    if (e.isComposing || e.repeat) return;
+    if (e.code === "KeyW" && e.altKey && e.shiftKey) setHidden(!panel.classList.contains("wpx-off"));
+  }
+
   function init(h) {
     host = h;
     root = h.shadowRoot;
@@ -141,6 +158,9 @@
       .head > span { margin-right: auto; }
       .head button + button { margin-left: 4px; }
       .panel.nochat .log, .panel.nochat #chatinput { display: none !important; }
+      .panel.wpx-off { display: none !important; }
+      #wpx-pill { position: absolute; top: 0; right: 0; width: 24px; height: 24px; min-width: 0;
+        min-height: 0; padding: 0; border-radius: 12px; font-size: 13px; font-weight: 700; line-height: 1; }
     `;
     root.appendChild(style);
 
@@ -152,6 +172,15 @@
     head.insertBefore(chatBtn, toggleBtn);
     chatBtn.addEventListener("click", () => setNoChat(!panel.classList.contains("nochat")));
 
+    pill = document.createElement("button");
+    pill.id = "wpx-pill";
+    pill.type = "button";
+    pill.textContent = "W";
+    pill.title = "Show WatchParty Sync (Alt+Shift+W)";
+    pill.style.display = "none";
+    pill.addEventListener("click", () => setHidden(false));
+    root.appendChild(pill);
+
     head.addEventListener("pointerdown", onDown);
     root.addEventListener("pointermove", onMove);
     root.addEventListener("pointerup", onUp);
@@ -160,9 +189,11 @@
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("resize", reclamp);
+    window.addEventListener("keydown", onKey, true);
 
-    store.get(["pos", "nochat"]).then((saved) => {
+    store.get(["pos", "nochat", "hidden"]).then((saved) => {
       if (!host.isConnected) return;
+      if (saved.hidden === true) setHidden(true);
       if (saved.nochat) setNoChat(true);
       const p = saved.pos;
       if (p && Number.isFinite(p.left) && Number.isFinite(p.top)) {
@@ -174,7 +205,12 @@
     });
   }
 
-  window.__wpUi = { reset };
+  window.__wpUi = {
+    reset,
+    get hidden() {
+      return !!panel && panel.classList.contains("wpx-off");
+    },
+  };
 
   // content.js may run before or after us; poll until its panel exists
   const t0 = Date.now();
