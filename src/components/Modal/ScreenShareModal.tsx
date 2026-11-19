@@ -64,6 +64,11 @@ export const ScreenShareModal = ({
         <Alert color="red" mb="sm">
           This browser can't share a screen. Open WatchParty in Chrome or Edge
           on a computer to share.
+          <br />
+          iPhone/iPad browsers can't share their screen at all. To show an
+          iPhone screen, mirror it to a computer first (Mac: QuickTime Player →
+          New Movie Recording → pick the iPhone as camera; Windows: an AirPlay
+          receiver app), then share that window from Chrome or Edge.
         </Alert>
       )}
       <div>
