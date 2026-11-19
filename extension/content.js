@@ -52,6 +52,8 @@
   let followUrl = null; // url the follow bar points at while shown
   let adMode = false; // an ad was showing at the last 1 s check (drives status + re-sync)
   let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
+  let extController = null; // member currently holding playback control (null = free)
+  let lastCtlAsk = 0; // last CMD:askHost sent because someone else controls (1 s rate limit)
   const until = { play: 0, pause: 0, seeked: 0, ratechange: 0 };
   const emitCounts = {};
 
@@ -142,6 +144,7 @@
       .row > * { flex: 1; }
       .rates { display: flex; gap: 4px; }
       .rates button { flex: 1; padding: 5px 0; }
+      .ctl { font-size: 11px; color: #ffd88a; min-height: 14px; }
       .status { font-size: 12px; color: #aab; min-height: 16px; }
       .log { flex: 1; min-height: 110px; max-height: 260px; overflow-y: auto; background: #1b1b21;
         border: 1px solid #33333c; border-radius: 6px; padding: 6px; font-size: 12px; line-height: 1.4; }
@@ -187,6 +190,8 @@
           <button id="followx" title="Dismiss">&times;</button>
         </div>
         <div class="rates" id="rates"></div>
+        <button id="ctl" title="Only the controller can play, pause, seek and change speed">Take control</button>
+        <div class="ctl" id="ctltext"></div>
         <div class="row">
           <button id="synctome" title="Move everyone to your position, speed and play state">Sync everyone to me</button>
           <button id="copyinvite" hidden title="Copy a link that opens this page with the room prefilled">Copy invite</button>
@@ -214,6 +219,8 @@
     followx: $("followx"),
     typing: $("typing"),
     rates: $("rates"),
+    ctl: $("ctl"),
+    ctltext: $("ctltext"),
     unread: $("unread"),
     synctome: $("synctome"),
     copyinvite: $("copyinvite"),
@@ -297,6 +304,41 @@
       ? members.length + " watching: " + members.map(nameOf).join(", ")
       : "";
   }
+
+  // ---- one person drives (CMD:extControl / REC:extControl) ----
+  // Status line that knows the control mode: while another member drives, the
+  // playback state is theirs, so the panel says so instead of "Connected to ..."
+  function statusConnected() {
+    if (joined && extController && extController !== clientId) {
+      setStatus("Only " + nameOf(extController) + " controls playback", "on");
+    } else {
+      setStatus("Connected to " + (host.dataset.room || ""), "on");
+    }
+  }
+
+  function renderControl() {
+    const other = Boolean(joined && extController && extController !== clientId);
+    el.ctl.disabled = other;
+    el.ctl.textContent = extController === clientId ? "Release control" : "Take control";
+    el.ctl.classList.toggle("active", extController === clientId);
+    el.ctltext.textContent = other ? nameOf(extController) + " controls playback" : "";
+    host.dataset.controller = extController || "";
+    if (other || el.status.textContent.startsWith("Only ")) statusConnected();
+  }
+
+  // A local playback change while someone else drives would be dropped by the server
+  // anyway: undo it by re-applying the room state (same flow as the post-ad re-sync),
+  // rate-limited to one CMD:askHost per second. While an ad owns the video nothing
+  // is undone either — the ad-end re-sync pulls the room state again
+  const ctlBlocked = () => {
+    if (!joined || adPlaying() || !extController || extController === clientId) return false;
+    if (Date.now() - lastCtlAsk > 1000) {
+      lastCtlAsk = Date.now();
+      askedHost = true;
+      emit("CMD:askHost");
+    }
+    return true;
+  };
 
   // ---- typing indicator ----
   function renderTyping() {
@@ -460,12 +502,14 @@
   // ---- local -> room ----
   const onPlay = () => {
     if (suppressed("play") || !joined) return;
+    if (ctlBlocked()) return;
     // line everyone up on our position before they start
     emit("CMD:seek", video.currentTime);
     emit("CMD:play");
   };
   const onPause = () => {
     if (suppressed("pause") || !joined) return;
+    if (ctlBlocked()) return;
     emit("CMD:pause");
   };
   const onSeeked = () => {
@@ -477,6 +521,7 @@
     ) {
       return;
     }
+    if (ctlBlocked()) return;
     emit("CMD:seek", video.currentTime);
   };
   const onRateChange = () => {
@@ -495,6 +540,7 @@
       return;
     }
     if (suppressed("ratechange") || !joined) return;
+    if (ctlBlocked()) return;
     roomRate = r;
     emit("CMD:playbackRate", r);
   };
@@ -655,9 +701,11 @@
     roomSiteUrl = null;
     adMode = false;
     askedHost = false;
+    extController = null;
     hideFollow();
     renderTyping();
     renderMembers();
+    renderControl();
     delete host.dataset.synced;
     delete host.dataset.room;
     updateJoinButton();
@@ -717,7 +765,7 @@
         setStatus("This room is playing something else - use an empty room", "err");
         return;
       }
-      if (!adPlaying()) setStatus("Connected to " + room, "on");
+      if (!adPlaying()) statusConnected();
       if (!sync) return;
       sync.host = h;
       if (askedHost) {
@@ -736,6 +784,11 @@
       names = m || {};
       renderChat();
       renderMembers();
+      renderControl(); // the controller's name may have arrived with it
+    });
+    s.on("REC:extControl", (d) => {
+      extController = d && typeof d.id === "string" && d.id ? d.id : null;
+      renderControl();
     });
     s.on("roster", (list) => {
       const ids = (Array.isArray(list) ? list : [])
@@ -802,6 +855,7 @@
   }
 
   function setRate(r) {
+    if (ctlBlocked()) return;
     roomRate = r;
     applyRate(r);
     emit("CMD:playbackRate", r);
@@ -809,6 +863,10 @@
   }
 
   // ---- panel wiring ----
+  el.ctl.addEventListener("click", () => {
+    if (!joined) return;
+    emit("CMD:extControl", extController === clientId ? false : true);
+  });
   el.join.addEventListener("click", () => (socket ? leave(false) : join()));
   el.room.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !socket) join();
@@ -831,6 +889,7 @@
   });
   el.synctome.addEventListener("click", () => {
     if (!joined || roomMedia || adPlaying() || !video) return;
+    if (ctlBlocked()) return;
     if (!confirm("Move everyone to your position?")) return;
     emit("CMD:seek", video.currentTime);
     if (Math.abs(video.playbackRate - roomRate) > 1e-6) emit("CMD:playbackRate", video.playbackRate);
@@ -875,6 +934,7 @@
   // ---- start ----
   placeHost();
   renderUnread();
+  renderControl();
   store.get(["room", "name", "collapsed"]).then((saved) => {
     if (saved.room) el.room.value = saved.room;
     prefillRoom();

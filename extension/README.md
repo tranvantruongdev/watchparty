@@ -36,6 +36,14 @@ input shows who else is typing, and when another member is on a different stream
 (page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
 site, otherwise it shows the link to open on that site.
 
+**Take control**: the button under the speed row turns on "one person drives" — only the
+controller's play / pause / seek / speed changes are relayed, everyone else's (web app
+members included) are dropped by the server. While another member controls, the button is
+disabled, a line shows "<name> controls playback", and a local play / pause / seek / speed
+change is undone: the panel re-applies the room's state (pulled once per second at most) and
+the status reads "Only <name> controls playback". **Release control** hands it back; control
+cannot be taken away from the controller, and it clears at once when their tab leaves.
+
 ## Sites
 
 The panel runs on **Netflix**, **YouTube**, **Disney+**, **Prime Video** and Amazon video

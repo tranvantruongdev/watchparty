@@ -150,6 +150,11 @@ export class Room {
   // The last announced streaming title (CMD:siteUrl): who sent it and the url,
   // so a new joiner can be offered "follow". In-memory only, like intermission
   public siteUrl: { by: string; url: string } | null = null;
+  // "One person drives" mode (CMD:extControl): the clientId currently holding
+  // playback control, or null when it is free. In-memory only, like siteUrl
+  public extController: string | null = null;
+  // clientId -> timestamps of accepted control take/release toggles in the last second
+  private extControlTimes: { [clientId: string]: number[] } = {};
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
@@ -451,6 +456,9 @@ export class Room {
       socket.emit("REC:pictureMap", this.pictureMap);
       socket.emit("REC:tsMap", this.tsMap);
       socket.emit("REC:lock", this.lock);
+      if (this.extController) {
+        socket.emit("REC:extControl", { id: this.extController });
+      }
       socket.emit("REC:intermission", this.intermission);
       socket.emit("REC:sleep", this.sleepTimer);
       socket.emit("chatinit", this.chat);
@@ -472,6 +480,12 @@ export class Room {
       const validateLock = () => {
         return !this.lock || socket.uid === this.lock;
       };
+
+      // "One person drives" mode (CMD:extControl): while a controller is set, only their
+      // play / pause / seek / speed commands pass; everyone else's are dropped, web app
+      // members included — one person drives. CMD:ts and CMD:buffering stay open to all
+      const extCtlAllows = () =>
+        !this.extController || socket.clientId === this.extController;
 
       // Check if this socket matches the room owner UID
       const validateOwner = async () => {
@@ -558,16 +572,16 @@ export class Room {
           this.startHosting(socket, String(data));
       });
       on("CMD:play", () => {
-        validateLock() && allowRelay() && this.playVideo(socket);
+        validateLock() && extCtlAllows() && allowRelay() && this.playVideo(socket);
       });
       on("CMD:pause", () => {
-        validateLock() && allowRelay() && this.pauseVideo(socket);
+        validateLock() && extCtlAllows() && allowRelay() && this.pauseVideo(socket);
       });
       on("CMD:seek", (data: unknown) => {
-        validateLock() && allowRelay() && this.seekVideo(socket, data);
+        validateLock() && extCtlAllows() && allowRelay() && this.seekVideo(socket, data);
       });
       on("CMD:playbackRate", (data: unknown) => {
-        validateLock() && allowRelay() && this.setPlaybackRate(socket, data);
+        validateLock() && extCtlAllows() && allowRelay() && this.setPlaybackRate(socket, data);
       });
       on("CMD:loop", (data: unknown) => {
         validateLock() && allowRelay() && this.setLoop(data);
@@ -681,6 +695,37 @@ export class Room {
         }
         this.siteUrl = { by: socket.clientId, url: data };
         io.of(roomId).emit("REC:siteUrl", { id: socket.clientId, url: data });
+      });
+      // "One person drives" toggle (extension round 4B): true = I take playback control,
+      // false = I release it. No stealing — control can only be taken when it is free
+      // (or when the current holder is no longer in the roster); releasing only works
+      // for the controller. Broadcast to the whole namespace on change, so every panel
+      // shows who drives and mutes its own playback emits; sent to new connections too
+      on("CMD:extControl", (data: unknown) => {
+        if (typeof data !== "boolean") {
+          return;
+        }
+        if (!allowRelay(3, this.extControlTimes, 1000)) {
+          return;
+        }
+        if (data) {
+          const held = this.extController;
+          if (
+            held &&
+            held !== socket.clientId &&
+            this.roster.some((user) => user.id === held)
+          ) {
+            return;
+          }
+        } else if (this.extController !== socket.clientId) {
+          return;
+        }
+        const next = data ? socket.clientId : null;
+        if (this.extController === next) {
+          return;
+        }
+        this.extController = next;
+        io.of(roomId).emit("REC:extControl", { id: this.extController });
       });
       on("CMD:askHost", () => {
         socket.emit("REC:host", this.getHostState());
@@ -2316,6 +2361,13 @@ export class Room {
         }, SHARER_GRACE_MS);
       }
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
+      // A controller who dropped the socket can't send the release; free the room
+      // at once so someone else can take over (no grace needed: control isn't
+      // state anyone waits on)
+      if (this.extController === clientId) {
+        this.extController = null;
+        this.io.of(this.roomId).emit("REC:extControl", { id: null });
+      }
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
       delete this.bufferingChangeTimes[clientId];
@@ -2329,6 +2381,7 @@ export class Room {
       delete this.signalTimes[clientId];
       delete this.typingTimes[clientId];
       delete this.siteUrlTimes[clientId];
+      delete this.extControlTimes[clientId];
       // Prune name/picture entries nobody renders anymore. Chat history is
       // the only reason to keep a departed visitor's name/picture (the same
       // rule serialize() uses), and the roster keeps live seats labeled.
