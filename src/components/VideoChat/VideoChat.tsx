@@ -229,6 +229,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // Above 100% a peer's voice plays through Web Audio (one shared context, a
   // source + gain per peer); at or below 100% none of this exists
   audioCtx: AudioContext | undefined = undefined;
+  // The summing bus for routed voice: every peer's gain feeds one limiter
+  // before the destination, so several near-full-scale voices sum to a
+  // limited mix instead of hard-clipping the output (round 225). Rebuilt if
+  // the context changes (close/reopen)
+  voiceBus?: { ctx: AudioContext; input: GainNode };
   voiceNodes: {
     [id: string]: {
       track: MediaStreamTrack;
@@ -276,6 +281,30 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
 
   resumeAudio = () => {
     this.audioCtx?.resume().catch(() => {});
+  };
+
+  // Bus input: routed peer gains connect here instead of ctx.destination. One
+  // DynamicsCompressor as a limiter (threshold -3 dBFS, fast attack) keeps the
+  // summed mix below full scale no matter how many loud voices join; Chrome's
+  // automatic compressor makeup gain is undone by the post gain, so a voice
+  // below the threshold passes at unity
+  voiceBusInput = (ctx: AudioContext) => {
+    if (!this.voiceBus || this.voiceBus.ctx !== ctx) {
+      const input = ctx.createGain();
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -3;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.25;
+      const post = ctx.createGain();
+      post.gain.value = 0.821; // 1/1.218: undoes Edge's compressor makeup gain
+      input.connect(limiter);
+      limiter.connect(post);
+      post.connect(ctx.destination);
+      this.voiceBus = { ctx, input };
+    }
+    return this.voiceBus.input;
   };
 
   dropVoiceNode = (id: string) => {
@@ -331,7 +360,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         const source = ctx.createMediaStreamSource(stream);
         const gain = ctx.createGain();
         source.connect(gain);
-        gain.connect(ctx.destination);
+        gain.connect(this.voiceBusInput(ctx));
         this.voiceNodes[id] = { track, source, gain };
       }
       this.voiceNodes[id].gain.gain.value = out.gain;
@@ -578,6 +607,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       );
       this.audioCtx.close().catch(() => {});
       this.audioCtx = undefined;
+      this.voiceBus = undefined;
     }
   }
 
