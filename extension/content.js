@@ -48,7 +48,10 @@
   let typingOffTimer = null;
   let myUrl = null; // the title url page.js last posted (null = not on a title)
   let announcedUrl = null; // last url we announced to the room
-  let roomSiteUrl = null; // latest url seen in the room (any REC:siteUrl)
+  let roomSiteUrl = null; // latest title url another member announced (what we would follow)
+  let titleResetUntil = 0; // after an in-page title change the site's own play/pause/seek resets stay local
+  let titleSyncAt = 0; // last CMD:askHost sent for a title change (2 s rate limit)
+  let titleSyncUntil = 0; // poll deadline for the new episode's video to become ready
   let followUrl = null; // url the follow bar points at while shown
   let adMode = false; // an ad was showing at the last 1 s check (drives status + re-sync)
   let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
@@ -420,9 +423,14 @@
     if (e.source !== window) return;
     const d = e.data;
     if (!d || d.source !== "wp-ext-page" || d.type !== "siteUrl") return;
+    const prev = myUrl;
     myUrl = typeof d.url === "string" && d.url ? d.url : null;
     announceUrl();
     if (myUrl && myUrl === roomSiteUrl) hideFollow(); // we caught up with the room
+    // an in-page title change (next episode): the new video starts at the site's own
+    // defaults and the element may swap without loadstart, so arm the site-reset
+    // window here too; when the room is on this title, pull the room state like a joiner
+    if (myUrl && myUrl !== prev && joined && !roomMedia && !adPlaying()) onTitleChange(prev);
   });
   el.followgo.addEventListener("click", () => {
     if (!followUrl) return;
@@ -540,8 +548,13 @@
   }
 
   // ---- local -> room ----
+  // A title-change window (titleResetUntil, armed by onTitleChange) keeps the site's
+  // own play/pause/seek noise after an in-page episode change from broadcasting:
+  // a follower's autoplay must not drag the room to 0 — the room state comes via
+  // CMD:askHost instead (or stays put when we moved ahead on our own).
   const onPlay = () => {
     if (suppressed("play") || !joined) return;
+    if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     // line everyone up on our position before they start
     emit("CMD:seek", video.currentTime);
@@ -549,6 +562,7 @@
   };
   const onPause = () => {
     if (suppressed("pause") || !joined) return;
+    if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     emit("CMD:pause");
   };
@@ -561,6 +575,7 @@
     ) {
       return;
     }
+    if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     emit("CMD:seek", video.currentTime);
   };
@@ -588,6 +603,36 @@
     siteResetUntil = Date.now() + SITE_RESET_MS;
     resetReapplied = false;
   };
+
+  // In-page title change (myUrl moved to a new non-null title while joined): the site
+  // starts the next episode at its own defaults (rate 1, position 0) and may swap the
+  // video element without firing loadstart/emptied, so the site-reset window is armed
+  // here too — but only for title->title hops (a null->title move is the connect-time
+  // re-post or a browse->watch nav, where a fresh element fires loadstart anyway).
+  // When the room is already on this title (I followed it), pull the room state like a
+  // joiner once the new video is ready; when I moved ahead on my own, nothing beyond
+  // the announce (already sent) and the kept rate.
+  function onTitleChange(prev) {
+    if (prev) {
+      markSiteReset();
+      titleResetUntil = Date.now() + SITE_RESET_MS;
+    }
+    if (myUrl !== roomSiteUrl) return; // not the room's title: nothing to pull
+    if (Date.now() - titleSyncAt < 2000) return; // one room pull per title hop
+    titleSyncUntil = Date.now() + 5000;
+    pollTitleReady();
+  }
+  function pollTitleReady() {
+    if (!joined || roomMedia || adPlaying()) return;
+    if (myUrl !== roomSiteUrl || Date.now() > titleSyncUntil) return;
+    if (!video || video.readyState < 1) {
+      setTimeout(pollTitleReady, 300);
+      return;
+    }
+    titleSyncAt = Date.now();
+    askedHost = true;
+    emit("CMD:askHost"); // the REC:host reply applies via applyHostState (post-ad path)
+  }
 
   // Buffering wait: a stall while the room plays asks the server to pause everyone
   // (setBuffering takes a plain boolean; its armBufferPause adds a ~2.5 s grace before
@@ -858,12 +903,14 @@
     });
     s.on("REC:siteUrl", (d) => {
       if (!d || typeof d.id !== "string" || typeof d.url !== "string") return;
-      roomSiteUrl = d.url;
       if (d.id === clientId) {
-        // our own announcement echoed back: nothing to follow
+        // our own announcement echoed back: nothing to follow, and the room's "latest
+        // url" stays whatever another member announced last (it decides whether a
+        // title change of ours counts as following the room)
         if (myUrl === d.url) hideFollow();
         return;
       }
+      roomSiteUrl = d.url;
       if (d.url === myUrl) hideFollow(); // they caught up with us
       else showFollow(d.id, d.url);
     });

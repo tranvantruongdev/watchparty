@@ -38,7 +38,9 @@ URL prefills the room and joins at once when your name is already saved, and **C
 copies such a link for the page you are on. While you type in the chat box a line above the
 input shows who else is typing, and when another member is on a different streaming title
 (page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
-site, otherwise it shows the link to open on that site.
+site, otherwise it shows the link to open on that site. When your own title changes in-page
+(next episode) the room's speed is kept, and if the room is already on that title its
+position and play state are pulled once the new video is ready.
 
 **Take control**: the button under the speed row turns on "one person drives" — only the
 controller's play / pause / seek / speed changes are relayed, everyone else's (web app
