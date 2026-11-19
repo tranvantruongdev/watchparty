@@ -594,6 +594,10 @@
     emit("CMD:seek", video.currentTime);
     emit("CMD:play");
     rebasePos(video.currentTime); // the room lines up on us: we are the anchor now
+    if (nudging) {
+      nudging = false; // the drift we were closing is now imposed on everyone
+      applyRate(roomRate);
+    }
   };
   const onPause = () => {
     if (suppressed("pause") || !joined) return;
@@ -616,6 +620,10 @@
     if (ctlBlocked()) return;
     emit("CMD:seek", video.currentTime);
     rebasePos(video.currentTime); // the room lined up on us: we are the anchor now
+    if (nudging) {
+      nudging = false;
+      applyRate(roomRate);
+    }
   };
   const onRateChange = () => {
     updateRates();
@@ -655,6 +663,7 @@
     if (prev) {
       markSiteReset();
       titleResetUntil = Date.now() + SITE_RESET_MS;
+      roomPos = null; // the anchor described the old title: no drift correction until a fresh room apply
     }
     if (myUrl !== roomSiteUrl) return; // not the room's title: nothing to pull
     if (Date.now() - titleSyncAt < 2000) return; // one room pull per title hop
@@ -1045,6 +1054,10 @@
     if (!joined || roomMedia || adPlaying() || !video) return;
     if (ctlBlocked()) return;
     if (!confirm("Move everyone to your position?")) return;
+    if (nudging) {
+      nudging = false; // the room lines up on us: the drift correction is obsolete
+      applyRate(roomRate);
+    }
     emit("CMD:seek", video.currentTime);
     if (Math.abs(video.playbackRate - roomRate) > 1e-6) emit("CMD:playbackRate", video.playbackRate);
     emit(video.paused ? "CMD:pause" : "CMD:play");

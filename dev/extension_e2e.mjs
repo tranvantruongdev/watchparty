@@ -1389,6 +1389,241 @@ async function main() {
     }
   }
 
+  // ---------------- t. round 9A: cross-feature interactions ----------------
+  // Features that were only ever tested alone, driven together here. t1-t3 pair two
+  // features into a real bug (they FAIL on the pre-fix code); t4-t8 are candidates
+  // that checked out clean and must keep passing.
+  const N555 = "https://www.netflix.com/watch/555";
+  // known state: rate 1 everywhere, paused together at `pos`, then playing
+  const tNormalize = async (pos) => {
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
+    await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await waitFor(async () => (await vstate(B)).paused === true, 2500);
+    await sleep(400);
+    await ev(A, `document.querySelector('video').currentTime = ${pos}; true`);
+    await waitFor(async () => Math.abs((await vstate(B)).t - pos) < 1.5 && Math.abs((await vstate(C)).t - pos) < 1.5, 3000);
+    await sleep(1200);
+    await ev(A, `document.querySelector('video').play().then(() => true)`);
+    await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+  };
+
+  // t1: drift nudge × "Sync everyone to me". While nudging, B's video runs at the
+  // temporary nudge rate; the sync must hand the room the room rate, not the nudge.
+  {
+    await tNormalize(8);
+    const inj = await silentDrift(B, A, 10, -2);
+    const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
+    const b0 = await emits(B);
+    let clickErr = null;
+    try {
+      await Promise.race([
+        ev(B, PANEL(`r.getElementById('synctome').click(); return true;`)),
+        sleep(6000).then(() => { throw new Error("confirm() never returned (dialog not handled?)"); }),
+      ]);
+    } catch (e) {
+      clickErr = e.message;
+    }
+    await sleep(1500);
+    const aF = await vstate(A), bF = await vstate(B), cF = await vstate(C);
+    const dB = nonTs(b0, await emits(B));
+    check(
+      "t1. B nudging (drift correction) clicks Sync-to-me: the room rate is what gets applied — A/C stay at 1x, B's nudge ends at 1x, everyone lands on B, no CMD:playbackRate leaves B",
+      inj.applied && nudgeMs !== null && clickErr === null && B.lastDialog === "Move everyone to your position?"
+        && aF && bF && cF && aF.r === 1 && cF.r === 1 && bF.r === 1
+        && Math.abs(aF.t - bF.t) < 1.5 && Math.abs(cF.t - bF.t) < 1.5
+        && !dB["CMD:playbackRate"],
+      `nudging after ${nudgeMs} ms (inj=${JSON.stringify(inj)}); dialog='${B.lastDialog}' clickErr=${clickErr || "none"}; B emit diff=${JSON.stringify(dB)}; A=${JSON.stringify(aF)} B=${JSON.stringify(bF)} C=${JSON.stringify(cF)}`,
+    );
+  }
+
+  // t2: drift nudge × local pause+play. onPlay makes the room line up on B (CMD:seek
+  // + re-anchor), so the nudge being corrected is obsolete — a stale one keeps 1.25x
+  // running and B walks away from the room it just aligned.
+  {
+    await tNormalize(12);
+    const inj = await silentDrift(B, A, 14, -2);
+    const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
+    await ev(B, `document.querySelector('video').pause(); true`);
+    await waitFor(async () => (await vstate(B)).paused === true, 2500);
+    await sleep(300);
+    const b0 = await emits(B);
+    await ev(B, `document.querySelector('video').play().then(() => true)`);
+    const landMs = await waitFor(async () => {
+      const a = await vstate(A), b = await vstate(B);
+      return a && b && !a.paused && !b.paused && Math.abs(a.t - b.t) < 1.5 ? true : null;
+    }, 4000);
+    const rateBackMs = await waitFor(async () => (await vstate(B)).r === 1, 6000);
+    await sleep(3000);
+    const aF = await vstate(A), bF = await vstate(B);
+    const dB = nonTs(b0, await emits(B));
+    check(
+      "t2. B pauses+plays while nudging (room lines up on B): B's rate returns to the room rate 1 and stays aligned 3 s later; the stale nudge must not keep pushing B ahead",
+      inj.applied && nudgeMs !== null && landMs !== null && rateBackMs !== null
+        && aF && bF && !bF.paused && bF.r === 1 && Math.abs(aF.t - bF.t) < 1.5
+        && !dB["CMD:playbackRate"],
+      `nudging after ${nudgeMs} ms (inj=${JSON.stringify(inj)}); room landed on B after ${landMs} ms; rate back to 1 after ${rateBackMs} ms; +3 s: A=${JSON.stringify(aF)} B=${JSON.stringify(bF)}; B emit diff=${JSON.stringify(dB)} (CMD:seek/play expected)`,
+    );
+  }
+
+  // t3: title change × drift anchor. An in-page hop to a title the room is NOT on
+  // leaves the drift anchor describing the old title; correction must wait for a
+  // fresh room apply, not seek the new episode to the old title's position.
+  {
+    await tNormalize(14);
+    const b0 = await emits(B);
+    const bPre = await vstate(B);
+    await postSite(B, N555);
+    await sleep(500);
+    // the new episode starts at 0; 'playing' keeps the seek's transient buffering
+    // report from arming the server's room pause
+    await ev(B, `(() => { const v = document.querySelector('video'); v.currentTime = 0; v.dispatchEvent(new Event('playing')); return true; })()`);
+    await sleep(6000);
+    const bF = await vstate(B);
+    const dB = nonTs(b0, await emits(B));
+    check(
+      "t3. B hops to a fresh title (new episode at 0) while the room keeps the old one: no drift seek pulls B to the old title's position — B stays near 0 playing at the room rate",
+      bPre && bF && !bF.paused && bF.t < 10 && bF.r === 1 && !dB["CMD:seek"] && !dB["CMD:playbackRate"],
+      `B before=${JSON.stringify(bPre)} after 6 s=${JSON.stringify(bF)}; B emit diff=${JSON.stringify(dB)} (CMD:siteUrl/ts allowed)`,
+    );
+  }
+
+  // t4 (checked, not a bug): remote rate change mid-nudge. The nudge must rebase
+  // onto the new room rate and the old nudged rate must never leak anywhere.
+  {
+    await tNormalize(16);
+    const inj = await silentDrift(B, A, 18, -2);
+    const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
+    const b0 = await emits(B);
+    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1.5"]').click(); return true;`));
+    const r15 = await waitFor(async () => (await vstate(B)).r >= 1.5, 3000);
+    const convMs = await waitFor(async () => {
+      const a = await vstate(A), b = await vstate(B);
+      return a && b && !b.paused && Math.abs(a.t - b.t) < 1 ? true : null;
+    }, 12000);
+    // the re-armed nudge legitimately runs until the gap is under 0.3 s: wait for the
+    // restore instead of sampling on a fixed timer
+    const rateBackMs = await waitFor(async () => (await vstate(B)).r === 1.5, 8000);
+    const bF = await vstate(B);
+    const dB = nonTs(b0, await emits(B));
+    check(
+      "t4. remote rate 1.5 mid-nudge: B takes the new rate, converges to the room, ends at 1.5, and never emits the old nudged rate",
+      inj.applied && nudgeMs !== null && r15 !== null && convMs !== null && rateBackMs !== null && bF && bF.r === 1.5 && !dB["CMD:playbackRate"],
+      `nudging after ${nudgeMs} ms (inj=${JSON.stringify(inj)}); rate 1.5 taken after ${r15} ms; converged after ${convMs} ms; rate back to 1.5 after ${rateBackMs} ms; B=${JSON.stringify(bF)}; B emit diff=${JSON.stringify(dB)} (CMD:ts allowed)`,
+    );
+  }
+
+  // t5 (checked, not a bug): reconnect × drift anchor. A 4 s outage while everyone
+  // keeps playing: the stale anchor must not fire a bogus seek before REC:host
+  // re-anchors on the reconnect.
+  {
+    await tNormalize(20);
+    const bEmits0 = await emits(B);
+    const bErr0 = B.errors.length;
+    await netOffline(B, true);
+    const closed = await closeSocketIoWs(B);
+    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    dropWsNoise(B, bErr0);
+    await sleep(3000); // B keeps playing through the outage on the stale anchor
+    await netOffline(B, false);
+    const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
+    dropWsNoise(B, bErr0);
+    const landMs = await waitFor(async () => {
+      const s = await vstate(B), a = await vstate(A);
+      return s && a && !s.paused && Math.abs(s.t - a.t) < 1.5 ? true : null;
+    }, 4000);
+    const dB = nonTs(bEmits0, await emits(B));
+    check(
+      "t5. 4 s outage while everyone keeps playing: no bogus drift seek from the stale anchor (0 playback emits from B), reconnect re-syncs B near the room",
+      closed >= 1 && recMs !== null && onMs !== null && landMs !== null
+        && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"],
+      `closed=${closed}; reconnecting after ${recMs} ms, 'on' after ${onMs} ms; B near A after ${landMs} ms (B=${JSON.stringify(await vstate(B))} A=${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed)`,
+    );
+  }
+
+  // t6 (checked, not a bug): ad guard × drift nudge. The correction freezes under
+  // the ad; the ad-end re-sync (CMD:askHost → REC:host → applyHostState) restores
+  // rate and position.
+  {
+    await tNormalize(24);
+    const inj = await silentDrift(B, A, 26, -2);
+    const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
+    const b0 = await emits(B);
+    await ev(B, `(() => { const d = document.createElement('div'); d.id = 'movie_player'; d.className = 'ad-showing'; document.body.appendChild(d); return true; })()`);
+    const adMs = await waitFor(async () => (await statusOf(B)).text === "Ad playing — sync paused", 2500);
+    await sleep(2000); // driftCheck ticks are skipped under the ad
+    await ev(B, `document.getElementById('movie_player').remove(); true`);
+    const backMs = await waitFor(async () => {
+      const s = await vstate(B), a = await vstate(A);
+      return s && a && s.r === 1 && Math.abs(s.t - a.t) < 2 ? true : null;
+    }, 4000);
+    const dB = nonTs(b0, await emits(B));
+    check(
+      "t6. ad starts while B is nudging, then ends: B re-syncs from the room (rate 1, near the room position); the nudge never leaks (0 playback emits)",
+      inj.applied && nudgeMs !== null && adMs !== null && backMs !== null
+        && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"],
+      `nudging after ${nudgeMs} ms (inj=${JSON.stringify(inj)}); ad status after ${adMs} ms; re-synced after ${backMs} ms; B=${JSON.stringify(await vstate(B))} A=${JSON.stringify(await vstate(A))}; B emit diff=${JSON.stringify(dB)} (CMD:askHost/ts allowed)`,
+    );
+  }
+
+  // t7 (checked, not a bug): drift correction × control mode. Another member drives;
+  // B still aligns locally and silently (no CMD:askHost, no playback emits).
+  {
+    await tNormalize(28);
+    await ev(A, PANEL(`r.getElementById('ctl').click(); return true;`));
+    const ctlId = await waitFor(async () => {
+      const a = await ctlOf(A), b = await ctlOf(B);
+      return a.id && a.id === b.id ? a.id : null;
+    }, 3000);
+    const inj = await silentDrift(B, A, 30, -2);
+    const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
+    const b0 = await emits(B);
+    const convMs = await waitFor(async () => {
+      const a = await vstate(A), b = await vstate(B);
+      return a && b && !b.paused && Math.abs(a.t - b.t) < 1 ? true : null;
+    }, 12000);
+    const rateBackMs = await waitFor(async () => (await vstate(B)).r === 1, 8000);
+    const bF = await vstate(B);
+    const dB = nonTs(b0, await emits(B));
+    await ev(A, PANEL(`r.getElementById('ctl').click(); return true;`));
+    await waitFor(async () => (await ctlOf(A)).id === "", 3000);
+    check(
+      "t7. drift correction while A controls playback: B converges locally (0 playback emits, no CMD:askHost), rate back to the room rate 1",
+      ctlId !== null && inj.applied && nudgeMs !== null && convMs !== null && rateBackMs !== null && bF && bF.r === 1
+        && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"] && !dB["CMD:askHost"],
+      `controller=${ctlId}; nudging after ${nudgeMs} ms (inj=${JSON.stringify(inj)}); converged after ${convMs} ms; rate back to 1 after ${rateBackMs} ms; B=${JSON.stringify(bF)}; B emit diff=${JSON.stringify(dB)} (CMD:ts allowed)`,
+    );
+  }
+
+  // t8 (checked, not a bug): buffering wait × leave. A reports buffering true then
+  // leaves at once: the server drops the claim on disconnect, so the room is not
+  // auto-paused by a ghost 2.5 s later; the rejoin lands clean.
+  {
+    await tNormalize(34);
+    const a0 = await emits(A);
+    await ev(A, `document.querySelector('video').dispatchEvent(new Event('waiting')); true`);
+    const bufMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (a0["CMD:buffering"] || 0) + 1, 1500);
+    await ev(A, PANEL(`r.getElementById('join').click(); return true;`)); // Leave
+    const leftMs = await waitFor(async () => (await statusOf(A)).ds !== "on", 4000);
+    await sleep(3500); // past the server's 2.5 s buffer-pause grace
+    const bF = await vstate(B), cF = await vstate(C);
+    check(
+      "t8. A reports buffering then immediately leaves: the room is NOT auto-paused by the ghost claim (B/C keep playing)",
+      bufMs !== null && leftMs !== null && bF && cF && !bF.paused && !cF.paused,
+      `buffering true emitted after ${bufMs} ms; A left after ${leftMs} ms; 3.5 s later B=${JSON.stringify(bF)} C=${JSON.stringify(cF)}`,
+    );
+    const aR0 = await emits(A);
+    console.log("   A rejoins:", await joinRoom(A, roomUrl, "Alice"), "ms");
+    await sleep(2500);
+    const aF = await vstate(A);
+    const dA8 = nonTs(aR0, await emits(A));
+    check(
+      "t8b. rejoining after the buffering-leave: A lands clean (playing at the room rate near the room, no playback emits) — leave() cleared the pending state",
+      aF && aF.r === 1 && !aF.paused && Math.abs(aF.t - (await vstate(B)).t) < 2 && !dA8["CMD:playbackRate"] && !dA8["CMD:seek"],
+      `A=${JSON.stringify(aF)} B=${JSON.stringify(await vstate(B))}; A emit diff=${JSON.stringify(dA8)} (ts/name/siteUrl allowed)`,
+    );
+  }
+
   // h. console errors
   console.log("\nconsole/runtime errors per page (extension isolated world included via Runtime.enable):");
   let any = false;
