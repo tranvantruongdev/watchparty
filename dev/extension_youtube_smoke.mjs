@@ -81,15 +81,18 @@ class Cdp {
 
 let browser, proc, userDir;
 
-async function launch(variant) {
+// blockLna=true (the default run) disables LocalNetworkAccessChecks so the localhost
+// socket works; --lna passes false to keep the check ON (the socket is then blocked — the point)
+async function launch(variant, blockLna = true) {
   userDir = fs.mkdtempSync(path.join(os.tmpdir(), "wpyt-"));
   const port = 9900 + Math.floor(Math.random() * 500);
+  const feats = blockLna ? [LNA_FEATURE, ...(variant.features || [])] : variant.features || [];
   const args = [
     `--user-data-dir=${userDir}`,
     `--remote-debugging-port=${port}`,
     `--load-extension=${EXT}`,
     `--disable-extensions-except=${EXT}`,
-    `--disable-features=${[LNA_FEATURE, ...(variant.features || [])].join(",")}`,
+    `--disable-features=${feats.join(",")}`,
     ...BASE_FLAGS,
     ...variant.extra,
     "about:blank",
@@ -212,6 +215,8 @@ const collectSiteUrls = (p) =>
     window.postMessage({ source: 'wp-ext', type: 'getSiteUrl' }, '*'); return 'ok'; })()`);
 
 const BODY_TXT = `(document.body && document.body.innerText) || ''`;
+// errors attributable to the extension (same filter as the y8 check)
+const EXT_ERR = /chrome-extension:\/\/|\/content\.js|\/page\.js|\[wp-ext\]|wp-ext-page/i;
 // land on the watch page: a cookie/consent wall (own host or embedded dialog) is DECLINED
 // ("Reject all"), never accepted; returns { ok, bot, ms, rejects }
 async function settleOnWatch(p, label) {
@@ -277,8 +282,74 @@ function finish() {
   process.exit(exitCode || (failed.length ? 1 : 0));
 }
 
+// ---------------- --lna phase ----------------
+// Round 12A: with LocalNetworkAccessChecks ON (no disable flag), the panel's socket to the
+// local server is blocked on the public https page. The panel must say so (status names the
+// local network check, dataset.lna=1) instead of the bare "Cannot connect" dead end.
+// Run: node dev/extension_youtube_smoke.mjs --lna
+async function runLna() {
+  // launch variants as usual but WITHOUT disabling the LNA feature
+  let A = null;
+  for (const variant of VARIANTS) {
+    try {
+      await launch(variant, false);
+    } catch (e) {
+      console.log(`launch failed (${variant.name}): ${e.message}`);
+      killEdge();
+      continue;
+    }
+    A = await newPage("A", YT_URL);
+    const settle = await settleOnWatch(A, "A");
+    console.log(`variant "${variant.name}" -> watch page ${settle.ok ? "settled" : "NOT settled"} in ${settle.ms} ms`);
+    const ms = settle.ok ? await waitFor(() => hasPanel(A), 10000, 200) : null;
+    if (settle.ok && ms !== null) break;
+    killEdge();
+    pages.clear();
+    A = null;
+  }
+  if (!A) {
+    check("z1. blocked socket on https -> the panel names the local network check (lna=1)", false, "no launch variant produced the panel");
+    exitCode = 1;
+    return finish();
+  }
+
+  const rr = await (await fetch(SERVER + "/createRoom", { method: "POST" })).json();
+  const roomName = String(rr.name || "").replace(/^\//, "");
+  const roomUrl = SERVER + "/watch/" + roomName;
+  console.log("room:", roomUrl, "(the socket to the local server is expected to be blocked)");
+
+  await ev(
+    A,
+    PANEL(`
+      r.getElementById('room').value = ${JSON.stringify(roomUrl)};
+      r.getElementById('name').value = 'Alice';
+      r.getElementById('join').click(); return true;`),
+  );
+  const ms1 = await waitFor(
+    async () => (await dset(A, "lna")) === "1" && /local network/i.test(await statusText(A)),
+    10000,
+    100,
+  );
+  check(
+    "z1. blocked socket on https -> the panel names the local network check (lna=1)",
+    ms1 !== null,
+    `dataset.lna=${await dset(A, "lna")} status='${await statusText(A)}' after ${ms1 ?? "NEVER"} ms`,
+  );
+
+  // z2: no extension-attributed errors besides the blocked-socket noise itself
+  const SOCKET_NOISE = /local network|websocket|ERR_BLOCKED|WebSocket connection/i;
+  const ext = A.errors.filter((e) => EXT_ERR.test(e) && !SOCKET_NOISE.test(e));
+  check(
+    "z2. no extension console errors besides the blocked-socket errors",
+    ext.length === 0,
+    ext.length ? ext.slice(0, 8).join(" ;; ") : `${A.errors.length} raw error(s), all blocked-socket/site noise`,
+  );
+  finish();
+}
+
 // ---------------- main ----------------
 async function main() {
+  if (process.argv.includes("--lna")) return runLna();
   // 0. launch, find a variant where the extension loads on YouTube
   let used = null;
   let browserVer;
@@ -488,7 +559,6 @@ async function main() {
   );
 
   // y8: console errors from the extension vs YouTube's own
-  const EXT_ERR = /chrome-extension:\/\/|\/content\.js|\/page\.js|\[wp-ext\]|wp-ext-page/i;
   for (const [tag, p] of [["A", A], ["B", B]]) {
     const ext = p.errors.filter((e) => EXT_ERR.test(e));
     const yt = p.errors.filter((e) => !EXT_ERR.test(e));

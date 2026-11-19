@@ -103,3 +103,10 @@ Automated test: with `npm run dev` and `npm run ui` running, `node dev/extension
 - In a locked room the server drops play / pause / seek / speed from members that are not the
   lock owner; extension members are never logged in, so only chat works there.
 - The room's sleep timer and intermission pause everyone, extension members included.
+- **Local Network Access (LNA)**: Chrome/Edge block a page's connection to a local/private
+  server. On a public https site (e.g. youtube.com) with the panel pointed at
+  `http://localhost:8080`, the socket is refused; headed browsers show a "local network
+  access" permission prompt for the site. If it was dismissed, re-enable it later in the
+  site settings (icon in the address bar → Site settings → Local network access → Allow)
+  and press Join again. The panel detects this and says so instead of a bare "Cannot
+  connect". Hosting the server itself on https (a public host) avoids the check entirely.

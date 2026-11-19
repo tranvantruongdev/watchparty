@@ -914,8 +914,25 @@
     renderControl();
     delete host.dataset.synced;
     delete host.dataset.room;
+    delete host.dataset.lna;
     updateJoinButton();
     if (!silent) setStatus("Not connected");
+  }
+
+  // is the server we connect to local/private (the Local Network Access check applies)?
+  function isLocalServer() {
+    try {
+      const h = new URL(SERVER).hostname.toLowerCase();
+      if (h === "localhost" || h === "::1" || h === "[::1]" || h.endsWith(".local")) return true;
+      const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+      if (!m) return false;
+      const o = m.slice(1).map(Number);
+      if (o.some((n) => n > 255)) return false;
+      if (o[0] === 127 || o[0] === 10 || (o[0] === 192 && o[1] === 168)) return true;
+      return o[0] === 172 && o[1] >= 16 && o[1] <= 31;
+    } catch {
+      return false;
+    }
   }
 
   function join() {
@@ -947,6 +964,7 @@
       everConnected = true;
       sync = { host: null, tsMap: null, done: false };
       delete host.dataset.synced;
+      delete host.dataset.lna;
       host.dataset.conn = "on";
       setStatus("Connected to " + room, "on");
       emit("CMD:name", name);
@@ -966,6 +984,14 @@
         return;
       }
       host.dataset.conn = "off";
+      if (location.protocol === "https:" && isLocalServer()) {
+        // the browser's Local Network Access check blocks a ws to a local/private server
+        // from a public https page; headed builds show a permission prompt, headless
+        // blocks silently. socket.io keeps retrying, so this is the way out once allowed.
+        host.dataset.lna = "1";
+        setStatus("Blocked by the browser's local network check — allow 'local network access' for this site (icon in the address bar), then press Join again", "err");
+        return;
+      }
       setStatus("Cannot connect: " + (err && err.message ? err.message : err), "err");
     });
     s.on("disconnect", (reason) => {
