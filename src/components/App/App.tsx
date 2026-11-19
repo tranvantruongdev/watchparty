@@ -3112,7 +3112,12 @@ export class App extends React.Component<AppProps, AppState> {
     const mbps =
       ((video.bytesReceived - last.bytes) * 8) / (now - last.ts) / 1000;
     const codec = stats.get(video.codecId)?.mimeType?.split("/")[1] ?? "";
-    const shareStats = `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0} ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`;
+    // A healthy static screen sends no frames and no bytes (rounds 95/218),
+    // so the old text read "0fps · 0.0 Mbps" and looked like an error. Two
+    // polls without a new frame while ICE is happy = still image, not a
+    // stall; the banner above stays the sole unhealthy signal.
+    const still = !iceBad && this.shareStallTicks >= 2;
+    const shareStats = `${relay ? "relay (TURN)" : "direct"} · ${video.frameWidth ?? 0}x${video.frameHeight ?? 0}${still ? ` · still image ${codec}` : ` ${Math.round(video.framesPerSecond ?? 0)}fps · ${mbps.toFixed(1)} Mbps ${codec}`}`;
     shareStatsStore.setStats(shareStats);
   };
 
