@@ -289,6 +289,11 @@ interface AppState {
   isSubtitleModalOpen: boolean;
   isMultiSelectModalOpen: boolean;
   roomLock: string;
+  // "One person drives" (WatchParty Sync extension, round 5C): the clientId
+  // currently holding playback control, or null. While someone else holds it
+  // the server drops CMD:play/pause/seek/playbackRate from this socket, so the
+  // app skips those emits and shows who drives
+  extController: string | null;
   controller?: string;
   savedPasswords: StringDict;
   roomId: string;
@@ -395,6 +400,7 @@ export class App extends React.Component<AppProps, AppState> {
     isSubtitleModalOpen: false,
     isMultiSelectModalOpen: false,
     roomLock: "",
+  extController: null,
     controller: "",
     roomId: "",
     savedPasswords: {},
@@ -1445,6 +1451,9 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on("REC:lock", (data: string) => {
       this.setState({ roomLock: data });
     });
+    socket.on("REC:extControl", (data: { id: string | null }) => {
+      this.setState({ extController: data ? data.id : null });
+    });
     socket.on("roster", (data: User[]) => {
       this.setState({ participants: data, rosterUpdateTS: Date.now() }, () => {
         this.setupRTCConnections();
@@ -1711,7 +1720,15 @@ export class App extends React.Component<AppProps, AppState> {
                   !this.state.roomPaused))
             ) {
               this.ytDebounce = false;
-              if (e.data === window.YT?.PlayerState?.PLAYING) {
+              if (this.otherControlsPlayback()) {
+                // An extension member drives: don't follow the click made in
+                // the YouTube iframe, snap back to the room state instead
+                if (e.data === window.YT?.PlayerState?.PLAYING) {
+                  this.localPause();
+                } else {
+                  this.localPlay();
+                }
+              } else if (e.data === window.YT?.PlayerState?.PLAYING) {
                 this.socket.emit("CMD:play");
                 this.localPlay();
               } else {
@@ -3592,6 +3609,9 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   roomSetPlaybackRate = (rate: number) => {
+    if (this.otherControlsPlayback()) {
+      return;
+    }
     // emit an event to the server
     this.socket.emit("CMD:playbackRate", rate);
   };
@@ -3631,6 +3651,13 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // "One person drives" (round 5C): an extension member holds playback control
+  // and the server silently drops CMD:play/pause/seek/playbackRate from every
+  // other socket — web members included. Don't send what would be dropped: the
+  // controller's REC:play/pause/seek/rate broadcasts keep us in sync
+  otherControlsPlayback = () =>
+    Boolean(this.state.extController && this.state.extController !== clientId);
+
   roomTogglePlay = () => {
     if (this.state.exploring) {
       if (this.Player().shouldPlay()) {
@@ -3639,6 +3666,9 @@ export class App extends React.Component<AppProps, AppState> {
         this.Player().pauseVideo();
       }
       this.refreshControls();
+      return;
+    }
+    if (this.otherControlsPlayback()) {
       return;
     }
     if (!this.haveLock()) {
@@ -3699,6 +3729,9 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   roomSeek = (time: number) => {
+    if (this.otherControlsPlayback()) {
+      return;
+    }
     let target = time;
     target = Math.max(target, 0);
     // Remember where the room was, for /fb
@@ -4612,6 +4645,16 @@ export class App extends React.Component<AppProps, AppState> {
                     up
                   </button>
                 )}
+                {this.state.extController &&
+                  this.state.extController !== clientId && (
+                    <div
+                      className={styles.catchUpChip}
+                      style={{ cursor: "default" }}
+                    >
+                      {(this.state.nameMap[this.state.extController] ??
+                        "Someone") + " controls playback (WatchParty Sync)"}
+                    </div>
+                  )}
                 {!this.state.fullScreen && (
                   <React.Fragment>
                     <div
