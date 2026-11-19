@@ -85,6 +85,7 @@ plain `ws://` socket to a remote host).
 `http://localhost:5173/dev/extension_test.html` (served by `npm run ui`) has one seekable
 60 s video. The extension also runs on `http://localhost/dev/*`, so two tabs of that page can
 be synced without a Netflix account.
+Automated test: with `npm run dev` and `npm run ui` running, `node dev/extension_e2e.mjs` drives headless Edge over CDP through every feature, once with the extension loaded and once as the bookmarklet (`EDGE=<browser path>` to use another Chromium).
 
 ## Known limits
 
