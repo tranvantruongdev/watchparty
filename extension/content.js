@@ -20,6 +20,9 @@
   const DRIFT_SEEK_S = 5; // beyond this one silent seek beats a long nudge
   const DRIFT_OK_S = 0.3; // close enough: restore the room rate
   const MAX_CHAT = 200;
+  // stickers (round 10A): a chat message whose whole text is [sticker:<id>] renders as
+  // the emoji alone, large — the same list/ids the web app renders
+  const STICKERS = { laugh: "😂", cry: "😭", wow: "😮", love: "😍", fire: "🔥", clap: "👏", scared: "😱", sleep: "😴", facepalm: "🤦", party: "🥳" };
   // youtube marks its ad player this way; while it shows, the ad owns the video
   // and sync stays out of the way (no local emits, no remote applies)
   const AD_SEL = "#movie_player.ad-showing, .html5-video-player.ad-showing";
@@ -174,6 +177,10 @@
       .typing { font-size: 11px; color: #98a; min-height: 14px; font-style: italic; }
       .rx { display: flex; gap: 4px; }
       .rx button { flex: 1; padding: 4px 0; font-size: 15px; }
+      .stickers { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+      .stickers[hidden] { display: none; }
+      .stickers button { font-size: 16px; padding: 3px 0; }
+      .log .sticker { font-size: 2.2em; }
       #floats { position: fixed; right: 20px; bottom: 30vh; display: flex; flex-direction: column;
         align-items: flex-end; gap: 4px; pointer-events: none; }
       #floats .float { font-size: 26px; color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
@@ -213,7 +220,11 @@
         <div class="rx" id="rx"></div>
         <div class="log" id="log"></div>
         <div class="typing" id="typing"></div>
-        <input id="chatinput" placeholder="Message (Enter to send)" maxlength="500" autocomplete="off" />
+        <div class="row">
+          <input id="chatinput" placeholder="Message (Enter to send)" maxlength="500" autocomplete="off" />
+          <button id="stickersBtn" title="Stickers" style="flex:0 0 36px">🙂</button>
+        </div>
+        <div class="stickers" id="stickers" hidden></div>
       </div>
     </div>
     <div id="floats"></div>`;
@@ -241,6 +252,8 @@
     rx: $("rx"),
     log: $("log"),
     chatinput: $("chatinput"),
+    stickersBtn: $("stickersBtn"),
+    stickers: $("stickers"),
     floats: $("floats"),
   };
 
@@ -260,6 +273,43 @@
     b.addEventListener("click", () => emit("CMD:floatReaction", emoji));
     el.rx.appendChild(b);
   });
+
+  // ---- sticker picker (round 10A) ----
+  // Each button sends the same CMD:chat path as typed text; the room renders the tag.
+  const closeStickers = () => {
+    el.stickers.hidden = true;
+  };
+  for (const [id, emoji] of Object.entries(STICKERS)) {
+    const b = document.createElement("button");
+    b.textContent = emoji;
+    b.dataset.sticker = id;
+    b.title = "sticker:" + id;
+    b.addEventListener("click", () => {
+      typingStop(); // sending is not typing
+      emit("CMD:chat", "[sticker:" + id + "]");
+      closeStickers();
+    });
+    el.stickers.appendChild(b);
+  }
+  el.stickersBtn.addEventListener("click", () => {
+    el.stickers.hidden = !el.stickers.hidden;
+  });
+  // Esc / click elsewhere closes the picker. keydown and clicks inside the panel are
+  // stopped at the host (the Netflix shortcut guard), so the root listeners cover the
+  // panel and the document listeners cover the page around it.
+  const onStickerEsc = (e) => {
+    if (e.key === "Escape") closeStickers();
+  };
+  root.addEventListener("keydown", onStickerEsc);
+  document.addEventListener("keydown", onStickerEsc);
+  const stickerClickAway = (e) => {
+    if (el.stickers.hidden) return;
+    const path = e.composedPath();
+    if (path.includes(el.stickersBtn) || path.includes(el.stickers)) return;
+    closeStickers();
+  };
+  root.addEventListener("click", stickerClickAway);
+  document.addEventListener("click", stickerClickAway);
 
   // Netflix binds player shortcuts (space, f, m, arrows) and click-to-pause on its container,
   // and in fullscreen the panel lives inside that container: keep our events to ourselves.
@@ -455,6 +505,13 @@
   });
   el.followx.addEventListener("click", hideFollow);
 
+  // a sticker is a chat message whose WHOLE text is [sticker:<id>] with a known id;
+  // anything else (unknown id, text around the tag) stays plain text
+  const stickerOf = (t) => {
+    const m = /^\[sticker:([a-z]+)\]$/.exec(String(t || ""));
+    return m && Object.hasOwn(STICKERS, m[1]) ? STICKERS[m[1]] : null;
+  };
+
   function renderChat() {
     el.log.textContent = "";
     for (const m of chat) {
@@ -491,7 +548,16 @@
         w.style.color = colorOf(m.id);
         w.textContent = who;
         line.appendChild(w);
-        line.appendChild(document.createTextNode(": " + (m.msg || "")));
+        const st = stickerOf(m.msg);
+        if (st) {
+          line.appendChild(document.createTextNode(": "));
+          const s = document.createElement("span");
+          s.className = "sticker";
+          s.textContent = st;
+          line.appendChild(s);
+        } else {
+          line.appendChild(document.createTextNode(": " + (m.msg || "")));
+        }
       }
       el.log.appendChild(line);
     }

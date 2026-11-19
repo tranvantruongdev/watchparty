@@ -29,7 +29,9 @@ derived from their id — the same shade in every panel — with a "(you)" marke
 own name in the members line. If your
 video buffers while the room is playing, the room pauses until everyone can play again. It
 shows who is watching ("N watching: ...") with join / leave notes in its log, and a row of
-emoji reactions that float over the video — shared with the web app in both directions. The
+emoji reactions that float over the video — shared with the web app in both directions. A 🙂
+button by the chat box opens a sticker grid; a sticker is a chat line that renders as one
+large emoji in every panel (same list as the web app). The
 `-` button collapses the panel; it follows the player into fullscreen, and while collapsed a
 "• N" badge in the header counts chat messages that arrived from the others (opening the
 panel clears it). **Sync everyone to me** (under the speed row) moves the whole room to your

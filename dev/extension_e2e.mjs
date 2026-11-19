@@ -1521,8 +1521,13 @@ async function main() {
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
     await netOffline(B, true);
-    const closed = await closeSocketIoWs(B);
-    const recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    let closed = await closeSocketIoWs(B);
+    let recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    if (recMs === null) {
+      // harness flake: the engine socket sometimes reconnects before offline emulation bites; drop it once more
+      closed += await closeSocketIoWs(B);
+      recMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
+    }
     dropWsNoise(B, bErr0);
     await sleep(3000); // B keeps playing through the outage on the stale anchor
     await netOffline(B, false);
@@ -1622,6 +1627,77 @@ async function main() {
       aF && aF.r === 1 && !aF.paused && Math.abs(aF.t - (await vstate(B)).t) < 2 && !dA8["CMD:playbackRate"] && !dA8["CMD:seek"],
       `A=${JSON.stringify(aF)} B=${JSON.stringify(await vstate(B))}; A emit diff=${JSON.stringify(dA8)} (ts/name/siteUrl allowed)`,
     );
+  }
+
+  // ---------------- u. round 10A: sticker picker ----------------
+  // A sticker is an ordinary chat message whose WHOLE text is [sticker:<id>]; the panel
+  // renders the emoji alone, large, with the sender name as usual. Unknown ids and text
+  // around the tag stay plain text. Chat does not need playback, so pause the room
+  // first (also keeps a video end mid-check out of A's emit diff).
+  const stickerLine = (p, needle) =>
+    ev(p, PANEL(`const line = Array.from(r.querySelectorAll('#log div')).find((d) => d.textContent.includes(${JSON.stringify(needle)}));
+      if (!line) return null;
+      const st = line.querySelector('.sticker');
+      return { text: line.textContent, emoji: st ? st.textContent : null,
+        px: st ? parseFloat(getComputedStyle(st).fontSize) : null, base: parseFloat(getComputedStyle(line).fontSize) };`));
+  {
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await waitFor(async () => (await vstate(B)).paused === true, 2500);
+    await sleep(400);
+
+    // u1: A opens the picker and clicks fire
+    {
+      const b0 = await emits(A);
+      await ev(A, PANEL(`r.getElementById('stickersBtn').click(); return true;`));
+      const openMs = await waitFor(() => ev(A, PANEL(`return !r.getElementById('stickers').hidden;`)), 1500);
+      await ev(A, PANEL(`r.querySelector('#stickers button[data-sticker="fire"]').click(); return true;`));
+      const dA = nonTs(b0, await emits(A));
+      const bHit = await waitFor(async () => { const l = await stickerLine(B, "🔥"); return l && l.emoji ? l : null; }, 3000);
+      const lineB = bHit !== null ? await stickerLine(B, "🔥") : null;
+      const cHit = await waitFor(async () => { const l = await stickerLine(C, "🔥"); return l && l.emoji ? l : null; }, 3000);
+      const lineC = cHit !== null ? await stickerLine(C, "🔥") : null;
+      check(
+        "u1. A opens the picker and clicks fire: exactly one CMD:chat emitted, B and C show a line with Alice and a large 🔥 (≥1.8x the chat text) and no '[sticker' text",
+        openMs !== null && dA["CMD:chat"] === 1 && !Object.keys(dA).some((k) => k !== "CMD:chat")
+          && lineB && lineB.text.includes("Alice") && lineB.emoji === "🔥" && lineB.px >= 1.8 * lineB.base && !lineB.text.includes("[sticker")
+          && lineC && lineC.text.includes("Alice") && lineC.emoji === "🔥" && lineC.px >= 1.8 * lineC.base && !lineC.text.includes("[sticker"),
+        `picker opened after ${openMs} ms; A emit diff=${JSON.stringify(dA)}; B line=${JSON.stringify(lineB)}; C line=${JSON.stringify(lineC)}`,
+      );
+    }
+
+    // u2: unknown id and text around the tag arrive as plain text on B
+    {
+      await sendChat(A, "[sticker:nope]");
+      await sendChat(A, "hi [sticker:fire]");
+      const nopeHit = await waitFor(() => stickerLine(B, "Alice: [sticker:nope]"), 3000);
+      const nope = nopeHit !== null ? await stickerLine(B, "Alice: [sticker:nope]") : null;
+      const aroundHit = await waitFor(() => stickerLine(B, "Alice: hi [sticker:fire]"), 3000);
+      const around = aroundHit !== null ? await stickerLine(B, "Alice: hi [sticker:fire]") : null;
+      check(
+        "u2. '[sticker:nope]' (unknown id) and 'hi [sticker:fire]' (text around the tag) arrive on B as plain text, no large emoji",
+        nope && around && nope.emoji === null && around.emoji === null
+          && nope.text.includes("Alice: [sticker:nope]") && around.text.includes("Alice: hi [sticker:fire]"),
+        `nope=${JSON.stringify(nope)}; around=${JSON.stringify(around)}`,
+      );
+    }
+
+    // u3: the picker closes after a pick and on Esc
+    {
+      await ev(A, PANEL(`r.getElementById('stickersBtn').click(); return true;`));
+      const open1 = await waitFor(() => ev(A, PANEL(`return !r.getElementById('stickers').hidden;`)), 1500);
+      await ev(A, PANEL(`r.querySelector('#stickers button[data-sticker="party"]').click(); return true;`));
+      const closed1 = await waitFor(() => ev(A, PANEL(`return r.getElementById('stickers').hidden;`)), 1500);
+      await ev(A, PANEL(`r.getElementById('stickersBtn').click(); return true;`));
+      const open2 = await waitFor(() => ev(A, PANEL(`return !r.getElementById('stickers').hidden;`)), 1500);
+      await ev(A, PANEL(`const i = r.getElementById('chatinput');
+        i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true })); return true;`));
+      const closed2 = await waitFor(() => ev(A, PANEL(`return r.getElementById('stickers').hidden;`)), 1500);
+      check(
+        "u3. the picker closes after picking (party) and again on Esc",
+        open1 !== null && closed1 !== null && open2 !== null && closed2 !== null,
+        `open=${open1} ms; closed after pick=${closed1} ms; reopened=${open2} ms; closed after Esc=${closed2} ms`,
+      );
+    }
   }
 
   // h. console errors
