@@ -7,7 +7,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.netflix.com/*", "http://localhost/dev/*"],
-      "js": ["vendor/socket.io.min.js", "content.js"],
+      "js": ["vendor/socket.io.min.js", "content.js", "ui.js"],
       "run_at": "document_idle"
     },
     {

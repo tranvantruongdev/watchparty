@@ -20,7 +20,7 @@ s.onload=f;
 s.onerror=function(){R();alert("WatchParty Sync: cannot load "+s.src)};
 document.head.appendChild(s)
 }
-L("vendor/socket.io.min.js",function(){R();L("page.js",function(){L("content.js")})})
+L("vendor/socket.io.min.js",function(){R();L("page.js",function(){L("content.js",function(){L("ui.js")})})})
 })(${JSON.stringify(origin)},${JSON.stringify(roomName)})`;
   // collapse the newlines (they are only for reading here) to keep the URL short
   return "javascript:" + code.replace(/\n/g, "");
