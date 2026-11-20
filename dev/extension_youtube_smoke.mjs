@@ -91,7 +91,9 @@ let browser, proc, userDir;
 // socket works; --lna passes false to keep the check ON (the socket is then blocked — the point).
 // loadExt=false (--bookmarklet phase) launches Edge WITHOUT the extension.
 async function launch(variant, blockLna = true, loadExt = true) {
-  userDir = fs.mkdtempSync(path.join(os.tmpdir(), "wpyt-"));
+  // one fixed profile, wiped at each launch: a fresh mkdtemp per run piled up ~10 GB in Temp (2026-11-20)
+  userDir = path.join(os.tmpdir(), "wp-yt-profile");
+  fs.rmSync(userDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   const port = 9900 + Math.floor(Math.random() * 500);
   const feats = blockLna ? [LNA_FEATURE, ...(variant.features || [])] : variant.features || [];
   const args = [

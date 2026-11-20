@@ -71,7 +71,9 @@ let browser, proc, userDir;
 
 let MODE = "extension"; // "extension" | "bookmarklet"
 async function launch(variant) {
-  userDir = fs.mkdtempSync(path.join(os.tmpdir(), "wpext-"));
+  // one fixed profile, wiped at each launch: a fresh mkdtemp per run piled up ~10 GB in Temp (2026-11-20)
+  userDir = path.join(os.tmpdir(), "wp-e2e-profile");
+  fs.rmSync(userDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   const port = 9300 + Math.floor(Math.random() * 500);
   const args = [
     `--user-data-dir=${userDir}`,
