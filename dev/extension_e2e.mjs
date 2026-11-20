@@ -183,7 +183,9 @@ const PANEL = (body) =>
 const hasPanel = (p) => ev(p, `!!document.getElementById('wpx-host')`);
 const vstate = (p) =>
   ev(p, `(() => { const v = document.querySelector('video'); return v ? { paused: v.paused, t: v.currentTime, r: v.playbackRate } : null; })()`);
-const emits = (p) => ev(p, PANEL(`return JSON.parse(h.dataset.emits || '{}');`));
+// {} (not null) when the panel is momentarily gone — a vite HMR reload mid-check used
+// to kill the rest of the mode with Object.keys(null) / ["CMD:ts"] on null
+const emits = (p) => ev(p, PANEL(`return JSON.parse(h.dataset.emits || '{}');`)).then((v) => v || {});
 const logText = (p) => ev(p, PANEL(`return r.getElementById('log').textContent;`));
 const sysLines = (p) => ev(p, PANEL(`return r.querySelectorAll('#log .sys').length;`));
 // round 5A: HH:MM chat-stamp helpers (minute-of-day, wraparound-safe ±slack)
@@ -225,6 +227,10 @@ function check(label, ok, detail) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}  ${detail ?? ""}`);
 }
 const nonTs = (before, after) => {
+  // a vanished panel (page reloaded mid-check) evals to null — produce negative diffs
+  // so the check FAILs visibly instead of the TypeError killing the whole phase
+  before = before || {};
+  after = after || {};
   const d = {};
   for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (k === "CMD:ts") continue;
@@ -232,6 +238,176 @@ const nonTs = (before, after) => {
     if (n) d[k] = n;
   }
   return d;
+};
+
+// r1/r2/t5 shared outage helpers (module level: t5-only mode uses them outside main).
+// CDP offline emulation does not cut an established WebSocket; the drop is forced
+// by closing the socket.io engine WebSocket in the world content.js runs in. The
+// reconnect handshake is held back by the SAME offline emulation (r13b probe: a fresh
+// ws:// handshake to :8080 fails in 0-1 ms while offline is on; Network.setBlockedURLs
+// does NOT block WebSocket handshakes in Edge 157 — a blocked-URL WS still opens in
+// ~11 ms — so no URL block is used). startOutage snapshots conn + the socket.io WS
+// inventory before the close and traces conn during the 4 s wait, so if the reconnect
+// ever slips through, the FAIL line carries the evidence itself.
+const netOffline = async (p, offline) => {
+  await p.s("Network.enable");
+  await p.s("Network.emulateNetworkConditions", {
+    offline,
+    latency: 0,
+    downloadThroughput: offline ? 0 : -1,
+    uploadThroughput: offline ? 0 : -1,
+  });
+};
+const closeSocketIoWs = async (p) => {
+  const hits = [];
+  for (const c of p.ctxById.values()) {
+    const type = c.auxData && c.auxData.type;
+    if (type !== "default" && type !== "isolated") continue;
+    try {
+      const proto = await p.s("Runtime.evaluate", { expression: "WebSocket.prototype", contextId: c.id });
+      if (!proto.result.objectId) continue;
+      const objs = await p.s("Runtime.queryObjects", { prototypeObjectId: proto.result.objectId });
+      if (!objs.objects || !objs.objects.objectId) continue;
+      const r = await p.s("Runtime.callFunctionOn", {
+        objectId: objs.objects.objectId,
+        functionDeclaration:
+          "function () { const hit = this.filter((w) => /socket\\.io/.test(w.url || '') && w.readyState <= 1); hit.forEach((w) => w.close()); return hit.map((w) => w.readyState + '@' + (w.url || '').slice(0, 30)); }",
+        returnByValue: true,
+      });
+      if (Array.isArray(r.result.value)) hits.push(...r.result.value.map((s) => `${type}:${s}`));
+    } catch {}
+  }
+  return hits;
+};
+const wsInventory = async (p) => {
+  const out = [];
+  for (const c of p.ctxById.values()) {
+    const type = c.auxData && c.auxData.type;
+    if (type !== "default" && type !== "isolated") continue;
+    try {
+      const proto = await p.s("Runtime.evaluate", { expression: "WebSocket.prototype", contextId: c.id });
+      if (!proto.result.objectId) continue;
+      const objs = await p.s("Runtime.queryObjects", { prototypeObjectId: proto.result.objectId });
+      if (!objs.objects || !objs.objects.objectId) continue;
+      const r = await p.s("Runtime.callFunctionOn", {
+        objectId: objs.objects.objectId,
+        functionDeclaration:
+          "function () { return this.filter((w) => /socket\\.io/.test(w.url || '')).map((w) => w.readyState + '@' + (w.url || '').slice(0, 40)); }",
+        returnByValue: true,
+      });
+      if (Array.isArray(r.result.value)) out.push(...r.result.value.map((s) => `${type}:${s}`));
+    } catch {}
+  }
+  return out;
+};
+// the blocked reconnect handshakes are logged as console errors by the page itself:
+// expected during the outage, not extension defects — keep real errors, drop these
+// (the second pattern: socket.io writing/closing onto the WS the harness just closed)
+const dropWsNoise = (p, before) => {
+  p.errors = p.errors.filter(
+    (e, i) => i < before || !/WebSocket connection to .* failed|WebSocket is already in CLOSING or CLOSED state/.test(e),
+  );
+};
+const startOutage = async (p) => {
+  const pre = await ev(p, PANEL(`return String(h.dataset.conn);`));
+  const inv = await wsInventory(p);
+  // Close the WS BEFORE enabling offline emulation: the close handshake needs the
+  // network. Offline-first can eat the close frame so the socket sits in CLOSING limbo
+  // — no 'close' event, no disconnect, conn stays 'on' (measured SLIP: closes=
+  // [isolated:2@...], 60 trace samples over 4.3 s all 'on', B emit diff {} — B never
+  // dropped and never reconnected; it raced 50/50 with the emulation taking effect).
+  // With the network still up the disconnect is deterministic, and the emulation is
+  // active ~10 ms later — socket.io's earliest reconnect retry is >=1 s away (backoff),
+  // and a fresh ws:// handshake fails in 0-1 ms once offline is on (r13b probe), so the
+  // outage still holds for the whole window.
+  const firstHits = await closeSocketIoWs(p);
+  await netOffline(p, true);
+  // then watch conn for 1.2 s per attempt; if 'reconnecting' never shows, close again
+  // (max 3 tries) in case the close hit a WS the panel's engine was not using.
+  const trace = [];
+  let recMs = null;
+  let closed = 0;
+  const closes = [];
+  const t0 = Date.now();
+  for (let attempt = 1; attempt <= 3 && recMs === null; attempt++) {
+    const hits = attempt === 1 ? firstHits : await closeSocketIoWs(p);
+    closed += hits.length;
+    closes.push(...hits);
+    const deadline = Date.now() + 1200;
+    while (Date.now() < deadline) {
+      const c = await ev(p, PANEL(`return String(h.dataset.conn);`)).catch(() => "?");
+      trace.push(`${Date.now() - t0}:${c}`);
+      if (c === "reconnecting") { recMs = Date.now() - t0; break; }
+      await sleep(50);
+    }
+  }
+  return { closed, recMs, pre, inv, trace, closes };
+};
+const endOutage = async (p) => {
+  await netOffline(p, false);
+};
+// appended to a check's detail when no 'reconnecting' was observed during the outage
+const slipInfo = (o) =>
+  o.recMs === null
+    ? ` SLIP[pre=${o.pre} closed=${o.closed} closes=${JSON.stringify(o.closes)} inv=${JSON.stringify(o.inv)} trace=${o.trace.join(",")}]`
+    : "";
+
+// known state for the t-cases: rate 1 everywhere, paused together at `pos`, then playing
+const tNormalize = async (A, B, C, pos) => {
+  await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
+  await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
+  await ev(A, `document.querySelector('video').pause(); true`);
+  await waitFor(async () => (await vstate(B)).paused === true, 2500);
+  await sleep(400);
+  await ev(A, `document.querySelector('video').currentTime = ${pos}; true`);
+  await waitFor(async () => Math.abs((await vstate(B)).t - pos) < 1.5 && Math.abs((await vstate(C)).t - pos) < 1.5, 3000);
+  await sleep(1200);
+  await ev(A, `document.querySelector('video').play().then(() => true)`);
+  await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
+};
+
+// t5 (checked, not a bug): reconnect × drift anchor. A 4 s outage while everyone
+// keeps playing: the stale anchor must not fire a bogus seek before REC:host
+// re-anchors on the reconnect. Module level + tag so E2E_ONLY=t5 can repeat it;
+// every sub-condition is named in the detail so a FAIL carries its own cause.
+const t5case = async (A, B, C, tag) => {
+  await tNormalize(A, B, C, 20);
+  const bEmits0 = await emits(B);
+  const bErr0 = B.errors.length;
+  const outage = await startOutage(B);
+  const { closed, recMs } = outage;
+  dropWsNoise(B, bErr0);
+  await sleep(3000); // B keeps playing through the outage on the stale anchor
+  await endOutage(B);
+  const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
+  dropWsNoise(B, bErr0);
+  const landMs = await waitFor(async () => {
+    const s = await vstate(B), a = await vstate(A);
+    return s && a && !s.paused && Math.abs(s.t - a.t) < 1.5 ? true : null;
+  }, 4000);
+  const dB = nonTs(bEmits0, await emits(B));
+  const cond = {
+    closed: closed >= 1,
+    recMs: recMs !== null,
+    onMs: onMs !== null,
+    landMs: landMs !== null,
+    "no CMD:seek": !dB["CMD:seek"],
+    "no CMD:play": !dB["CMD:play"],
+    "no CMD:pause": !dB["CMD:pause"],
+    "no CMD:playbackRate": !dB["CMD:playbackRate"],
+  };
+  const bad = Object.entries(cond).filter(([, v]) => !v).map(([k]) => k);
+  // on a FAIL, B's panel log tail names the event sequence that led to the emit
+  const logTail = bad.length
+    ? await ev(B, PANEL(`return Array.from(r.querySelectorAll('#log div')).slice(-14).map((d) => d.textContent).join(' | ');`))
+    : "";
+  check(
+    `${tag}. 4 s outage while everyone keeps playing: no bogus drift seek from the stale anchor (0 playback emits from B), reconnect re-syncs B near the room`,
+    bad.length === 0,
+    `closed=${closed}(${cond.closed}); reconnecting after ${recMs} ms (${cond.recMs}), 'on' after ${onMs} ms (${cond.onMs}); B near A after ${landMs} ms (${cond.landMs}) (B=${JSON.stringify(await vstate(B))} A=${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed)`
+      + slipInfo(outage)
+      + (bad.length ? `; FAIL CAUSE: ${bad.join(", ")}; B log tail: ${logTail}` : ""),
+  );
 };
 
 // ---------------- main ----------------
@@ -1152,69 +1328,13 @@ async function main() {
   // ---------------- r. round 7A: survive a network drop (auto-reconnect) ----------------
   // CDP offline emulation does not cut an established WebSocket, so the drop is forced
   // directly: close the socket.io engine WebSocket in the world content.js runs in
-  // (isolated world for the extension, page world for the bookmarklet) while the
-  // reconnect handshake is blocked at the request layer (see startOutage). socket.io
-  // then retries on its own until the outage ends.
+  // (isolated world for the extension, page world for the bookmarklet) while offline
+  // emulation holds the reconnect handshake back (see startOutage). socket.io then
+  // retries on its own until the outage ends. The outage helpers are module level.
   const connOf = (p) => ev(p, PANEL(`return h.dataset.conn || '';`));
   const countLines = (p) => ev(p, PANEL(`return r.querySelectorAll('#log div').length;`));
   const joinLeaveLines = (p) =>
     ev(p, PANEL(`return Array.from(r.querySelectorAll('#log .sys')).filter((d) => / (joined|left)$/.test(d.textContent)).length;`));
-  const netOffline = async (p, offline) => {
-    await p.s("Network.enable");
-    await p.s("Network.emulateNetworkConditions", {
-      offline,
-      latency: 0,
-      downloadThroughput: offline ? 0 : -1,
-      uploadThroughput: offline ? 0 : -1,
-    });
-  };
-  const closeSocketIoWs = async (p) => {
-    let closed = 0;
-    for (const c of p.ctxById.values()) {
-      const type = c.auxData && c.auxData.type;
-      if (type !== "default" && type !== "isolated") continue;
-      try {
-        const proto = await p.s("Runtime.evaluate", { expression: "WebSocket.prototype", contextId: c.id });
-        if (!proto.result.objectId) continue;
-        const objs = await p.s("Runtime.queryObjects", { prototypeObjectId: proto.result.objectId });
-        if (!objs.objects || !objs.objects.objectId) continue;
-        const r = await p.s("Runtime.callFunctionOn", {
-          objectId: objs.objects.objectId,
-          functionDeclaration:
-            "function () { const hit = this.filter((w) => /socket\\.io/.test(w.url || '') && w.readyState <= 1); hit.forEach((w) => w.close()); return hit.length; }",
-          returnByValue: true,
-        });
-        closed += r.result.value || 0;
-      } catch {}
-    }
-    return closed;
-  };
-  // the blocked reconnect handshakes are logged as console errors by the page itself:
-  // expected during the outage, not extension defects — keep real errors, drop these
-  // (the second pattern: socket.io writing/closing onto the WS the harness just closed)
-  const dropWsNoise = (p, before) => {
-    p.errors = p.errors.filter(
-      (e, i) => i < before || !/WebSocket connection to .* failed|WebSocket is already in CLOSING or CLOSED state/.test(e),
-    );
-  };
-
-  // r1/r2/t5 shared outage helper. CDP offline emulation alone races: the socket.io
-  // reconnect handshake sometimes completes before the emulation bites, so no outage
-  // is observed. Network.setBlockedURLs fails every socket.io request — the WebSocket
-  // upgrade included — with ERR_BLOCKED_BY_CLIENT until it is cleared, so the outage
-  // lasts exactly as long as the block is held: set it BEFORE closing the WS, clear it
-  // to end the outage (offline emulation stays on top for the rest of the page).
-  const startOutage = async (p) => {
-    await netOffline(p, true);
-    await p.s("Network.setBlockedURLs", { urls: ["*localhost:8080/socket.io/*"] });
-    const closed = await closeSocketIoWs(p);
-    const recMs = await waitFor(() => ev(p, PANEL(`return h.dataset.conn === 'reconnecting';`)), 4000);
-    return { closed, recMs };
-  };
-  const endOutage = async (p) => {
-    await p.s("Network.setBlockedURLs", { urls: [] });
-    await netOffline(p, false);
-  };
 
   // r1: B drops off the network for ~4 s while A pauses, seeks to 40 and sets rate 1.25.
   // After the reconnect B re-syncs like a joiner (room state wins), the chat history is
@@ -1229,7 +1349,8 @@ async function main() {
     const bJl0 = await joinLeaveLines(B);
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
-    const { closed, recMs } = await startOutage(B);
+    const outage = await startOutage(B);
+    const { closed, recMs } = outage;
     const recStatus = (await statusOf(B)).text;
     dropWsNoise(B, bErr0);
     // while B is offline: A pauses, seeks to 40, sets rate 1.25 (C follows live)
@@ -1260,7 +1381,7 @@ async function main() {
         && bLines1 === bLines0 + 3 - bJl0 && helloCount === 1
         && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"]
         && (await statusOf(B)).text === `Connected to ${roomName}`,
-      `closed=${closed}; reconnecting after ${recMs} ms ('${recStatus}'), 'on' after ${onMs} ms; B ${JSON.stringify(await vstate(B))} landed after ${landMs} ms; A ${JSON.stringify(aPre)}->${JSON.stringify(aPost)} C ${JSON.stringify(cPre)}->${JSON.stringify(cPost)}; chat lines ${bLines0}->${bLines1} (+3 = A's pause/seek/rate notices missed while offline, -${bJl0} = local join/leave notes replaced by the fresh chatinit), 'hello from A' x${helloCount}; B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'`,
+      `closed=${closed}; reconnecting after ${recMs} ms ('${recStatus}'), 'on' after ${onMs} ms; B ${JSON.stringify(await vstate(B))} landed after ${landMs} ms; A ${JSON.stringify(aPre)}->${JSON.stringify(aPost)} C ${JSON.stringify(cPre)}->${JSON.stringify(cPost)}; chat lines ${bLines0}->${bLines1} (+3 = A's pause/seek/rate notices missed while offline, -${bJl0} = local join/leave notes replaced by the fresh chatinit), 'hello from A' x${helloCount}; B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'${slipInfo(outage)}`,
     );
   }
 
@@ -1278,7 +1399,8 @@ async function main() {
     await sleep(800);
     const bEmits0 = await emits(B);
     const bErr0 = B.errors.length;
-    const { closed, recMs } = await startOutage(B);
+    const outage = await startOutage(B);
+    const { closed, recMs } = outage;
     dropWsNoise(B, bErr0);
     await sleep(500);
     await ev(B, `document.querySelector('video').pause(); true`);
@@ -1298,7 +1420,7 @@ async function main() {
       closed >= 1 && recMs !== null && bPausedOffline === true && onMs !== null && landMs !== null
         && !dB["CMD:pause"] && !dB["CMD:play"] && !dB["CMD:seek"] && !dB["CMD:playbackRate"]
         && (await statusOf(B)).text === `Connected to ${roomName}`,
-      `closed=${closed}; reconnecting after ${recMs} ms; local pause applied=${bPausedOffline}; room kept playing (A t=${aMid.t.toFixed(1)}); 'on' after ${onMs} ms; B playing near A after ${landMs} ms (B ${JSON.stringify(await vstate(B))} A ${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'`,
+      `closed=${closed}; reconnecting after ${recMs} ms; local pause applied=${bPausedOffline}; room kept playing (A t=${aMid.t.toFixed(1)}); 'on' after ${onMs} ms; B playing near A after ${landMs} ms (B ${JSON.stringify(await vstate(B))} A ${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed); status='${(await statusOf(B)).text}'${slipInfo(outage)}`,
     );
   }
 
@@ -1409,24 +1531,12 @@ async function main() {
   // features into a real bug (they FAIL on the pre-fix code); t4-t8 are candidates
   // that checked out clean and must keep passing.
   const N555 = "https://www.netflix.com/watch/555";
-  // known state: rate 1 everywhere, paused together at `pos`, then playing
-  const tNormalize = async (pos) => {
-    await ev(A, PANEL(`r.querySelector('#rates button[data-rate="1"]').click(); return true;`));
-    await waitFor(async () => { const b = await vstate(B), c = await vstate(C); return b && c && b.r === 1 && c.r === 1; }, 3000);
-    await ev(A, `document.querySelector('video').pause(); true`);
-    await waitFor(async () => (await vstate(B)).paused === true, 2500);
-    await sleep(400);
-    await ev(A, `document.querySelector('video').currentTime = ${pos}; true`);
-    await waitFor(async () => Math.abs((await vstate(B)).t - pos) < 1.5 && Math.abs((await vstate(C)).t - pos) < 1.5, 3000);
-    await sleep(1200);
-    await ev(A, `document.querySelector('video').play().then(() => true)`);
-    await waitFor(async () => { const s = await vstate(B); return s && !s.paused; }, 3000);
-  };
+  // tNormalize is module level (shared with the t5-only mode); B and C are the room tabs
 
   // t1: drift nudge × "Sync everyone to me". While nudging, B's video runs at the
   // temporary nudge rate; the sync must hand the room the room rate, not the nudge.
   {
-    await tNormalize(8);
+    await tNormalize(A, B, C, 8);
     const inj = await silentDrift(B, A, 10, -2);
     const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
     const b0 = await emits(B);
@@ -1456,7 +1566,7 @@ async function main() {
   // + re-anchor), so the nudge being corrected is obsolete — a stale one keeps 1.25x
   // running and B walks away from the room it just aligned.
   {
-    await tNormalize(12);
+    await tNormalize(A, B, C, 12);
     const inj = await silentDrift(B, A, 14, -2);
     const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
     await ev(B, `document.querySelector('video').pause(); true`);
@@ -1485,7 +1595,7 @@ async function main() {
   // leaves the drift anchor describing the old title; correction must wait for a
   // fresh room apply, not seek the new episode to the old title's position.
   {
-    await tNormalize(14);
+    await tNormalize(A, B, C, 14);
     const b0 = await emits(B);
     const bPre = await vstate(B);
     await postSite(B, N555);
@@ -1506,7 +1616,7 @@ async function main() {
   // t4 (checked, not a bug): remote rate change mid-nudge. The nudge must rebase
   // onto the new room rate and the old nudged rate must never leak anywhere.
   {
-    await tNormalize(16);
+    await tNormalize(A, B, C, 16);
     const inj = await silentDrift(B, A, 18, -2);
     const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
     const b0 = await emits(B);
@@ -1528,37 +1638,17 @@ async function main() {
     );
   }
 
-  // t5 (checked, not a bug): reconnect × drift anchor. A 4 s outage while everyone
-  // keeps playing: the stale anchor must not fire a bogus seek before REC:host
-  // re-anchors on the reconnect.
+  // t5 (checked, not a bug): reconnect × drift anchor — body is module-level t5case
+  // (shared with the E2E_ONLY=t5 repeat mode; the per-sub-condition detail lives there).
   {
-    await tNormalize(20);
-    const bEmits0 = await emits(B);
-    const bErr0 = B.errors.length;
-    const { closed, recMs } = await startOutage(B);
-    dropWsNoise(B, bErr0);
-    await sleep(3000); // B keeps playing through the outage on the stale anchor
-    await endOutage(B);
-    const onMs = await waitFor(() => ev(B, PANEL(`return h.dataset.conn === 'on';`)), 15000);
-    dropWsNoise(B, bErr0);
-    const landMs = await waitFor(async () => {
-      const s = await vstate(B), a = await vstate(A);
-      return s && a && !s.paused && Math.abs(s.t - a.t) < 1.5 ? true : null;
-    }, 4000);
-    const dB = nonTs(bEmits0, await emits(B));
-    check(
-      "t5. 4 s outage while everyone keeps playing: no bogus drift seek from the stale anchor (0 playback emits from B), reconnect re-syncs B near the room",
-      closed >= 1 && recMs !== null && onMs !== null && landMs !== null
-        && !dB["CMD:seek"] && !dB["CMD:play"] && !dB["CMD:pause"] && !dB["CMD:playbackRate"],
-      `closed=${closed}; reconnecting after ${recMs} ms, 'on' after ${onMs} ms; B near A after ${landMs} ms (B=${JSON.stringify(await vstate(B))} A=${JSON.stringify(await vstate(A))}); B emit diff=${JSON.stringify(dB)} (ts/name/siteUrl allowed)`,
-    );
+    await t5case(A, B, C, "t5");
   }
 
   // t6 (checked, not a bug): ad guard × drift nudge. The correction freezes under
   // the ad; the ad-end re-sync (CMD:askHost → REC:host → applyHostState) restores
   // rate and position.
   {
-    await tNormalize(24);
+    await tNormalize(A, B, C, 24);
     const inj = await silentDrift(B, A, 26, -2);
     const nudgeMs = await waitFor(async () => { const b = await vstate(B); return b && !b.paused && b.r > 1.01 && b.r < 2 ? true : null; }, 8000);
     const b0 = await emits(B);
@@ -1582,7 +1672,7 @@ async function main() {
   // t7 (checked, not a bug): drift correction × control mode. Another member drives;
   // B still aligns locally and silently (no CMD:askHost, no playback emits).
   {
-    await tNormalize(28);
+    await tNormalize(A, B, C, 28);
     await ev(A, PANEL(`r.getElementById('ctl').click(); return true;`));
     const ctlId = await waitFor(async () => {
       const a = await ctlOf(A), b = await ctlOf(B);
@@ -1612,7 +1702,7 @@ async function main() {
   // leaves at once: the server drops the claim on disconnect, so the room is not
   // auto-paused by a ghost 2.5 s later; the rejoin lands clean.
   {
-    await tNormalize(34);
+    await tNormalize(A, B, C, 34);
     const a0 = await emits(A);
     await ev(A, `document.querySelector('video').dispatchEvent(new Event('waiting')); true`);
     const bufMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (a0["CMD:buffering"] || 0) + 1, 1500);
@@ -1829,6 +1919,59 @@ async function main() {
   check("i4. no new console errors in A/B/C during step i", errCount() === errBefore, `errors before=${errBefore} after=${errCount()}`);
 }
 
+// E2E_ONLY=t5 (extension mode only): minimal faithful setup for t5 — launch, create the
+// room through the web UI like the full suite does, A/B/C join — then E2E_REPEAT t5 runs
+// back-to-back without the 15-minute suite (each run re-normalizes via tNormalize, which
+// is everything t5 assumes about prior state). Any other E2E_ONLY value runs the suite.
+async function t5only() {
+  let browserVer, A = null;
+  for (const variant of VARIANTS) {
+    try {
+      browserVer = await launch(variant);
+    } catch (e) {
+      console.log(`launch failed (${variant.name}): ${e.message}`);
+      killEdge();
+      continue;
+    }
+    A = await newPage("A", TEST_URL);
+    const ms = await waitFor(() => hasPanel(A), 8000, 200);
+    console.log(`variant "${variant.name}" -> extension panel ${ms === null ? "NOT found" : "found after " + ms + " ms"}`);
+    if (ms !== null) break;
+    killEdge();
+    pages.clear();
+    A = null;
+  }
+  if (!A) throw new Error("extension never loaded in any launch variant");
+  console.log("browser:", browserVer);
+
+  const W = await newPage("web", VITE + "/");
+  const homeMs = await waitFor(
+    () => ev(W, `!!Array.from(document.querySelectorAll('button')).find(b => /New Room/.test(b.textContent))`),
+    15000,
+    200,
+  );
+  if (homeMs === null) throw new Error("home page has no New Room button");
+  await ev(W, `Array.from(document.querySelectorAll('button')).find(b => /New Room/.test(b.textContent)).click(); true`);
+  const roomMs = await waitFor(() => ev(W, `location.pathname.startsWith('/watch/')`), 15000, 200);
+  if (roomMs === null) throw new Error("room not created");
+  const roomUrl = await ev(W, `location.href`);
+  console.log("room:", roomUrl);
+  await waitFor(() => ev(W, `document.readyState === 'complete'`), 5000);
+  await sleep(1500);
+
+  const B = await newPage("B", TEST_URL);
+  await waitFor(() => hasPanel(B), 8000, 200);
+  const C = await newPage("C", TEST_URL);
+  await waitFor(() => hasPanel(C), 8000, 200);
+  console.log("A joined in", await joinRoom(A, roomUrl, "Alice"), "ms");
+  console.log("B joined in", await joinRoom(B, roomUrl, "Bob"), "ms");
+  console.log("C joined in", await joinRoom(C, roomUrl, "Carol"), "ms");
+  await sleep(1500); // roster settles (same settle window the full suite gives joins)
+
+  const n = Math.max(1, parseInt(process.env.E2E_REPEAT || "1", 10));
+  for (let i = 1; i <= n; i++) await t5case(A, B, C, `t5#${i}/${n}`);
+}
+
 const wanted = process.argv[2] ? [process.argv[2]] : ["extension", "bookmarklet"];
 for (const mode of wanted) {
   MODE = mode;
@@ -1836,7 +1979,8 @@ for (const mode of wanted) {
   pages.clear();
   console.log(`\n=================== MODE: ${mode} ===================`);
   try {
-    await main();
+    if (process.env.E2E_ONLY === "t5" && mode === "extension") await t5only();
+    else await main();
   } catch (e) {
     console.log("SCRIPT ERROR:", e.stack);
     process.exitCode = 1;
