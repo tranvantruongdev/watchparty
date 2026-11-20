@@ -123,6 +123,10 @@ export class Chat extends React.Component<ChatProps> {
     // whole backlog on load; flip to polite once the backlog has settled
     liveReady: false,
     isPickerOpen: false,
+    // Typing indicator (r15d): peer id → expiry ms. Populated from REC:typing,
+    // pruned by a 1s sweeper; expired entries stop showing on their own even
+    // if the peer's "false" (or disconnect) never arrives.
+    typingPeers: {} as Record<string, number>,
     reactionMenu: {
       isOpen: false,
       selectedMsgId: "",
@@ -133,6 +137,14 @@ export class Chat extends React.Component<ChatProps> {
   };
   messagesRef = React.createRef<HTMLDivElement>();
   chatInputRef = React.createRef<HTMLInputElement>();
+  // Typing indicator wiring: mirrors the extension's contract (true at most
+  // once per 2 s while typing, false 3 s after the last keystroke or on
+  // send/blur); the server caps CMD:typing at 3/s. The 6 s expiry and the
+  // REC:typing relay excluding the sender are server-side guarantees.
+  typingLastSent = 0;
+  typingFalseTimer?: number;
+  typingSweeper?: number;
+  typingSocket?: Socket;
 
   async componentDidMount() {
     this.scrollToBottom();
@@ -150,13 +162,28 @@ export class Chat extends React.Component<ChatProps> {
     });
     if (this.messagesRef.current)
       this.resizeObserver.observe(this.messagesRef.current);
+    // Typing indicator: receive peers' state; the relay never includes the
+    // sender, and expired entries are swept once a second.
+    this.attachTypingListener();
+    this.typingSweeper = window.setInterval(this.sweepTypingPeers, 1000);
   }
 
   componentWillUnmount() {
     this.unsubChatStore?.();
     this.resizeObserver?.disconnect();
     if (this.liveTimer) window.clearTimeout(this.liveTimer);
+    this.typingSocket?.off("REC:typing", this.onRecTyping);
+    if (this.typingSweeper) window.clearInterval(this.typingSweeper);
+    this.stopTyping();
   }
+
+  // App.socket is null until join() creates it (Chat mounts first); re-attach
+  // from componentDidUpdate when the socket prop arrives
+  attachTypingListener = () => {
+    if (!this.props.socket || this.typingSocket === this.props.socket) return;
+    this.props.socket.on("REC:typing", this.onRecTyping);
+    this.typingSocket = this.props.socket;
+  };
 
   componentDidUpdate(prevProps: ChatProps) {
     const { messages, scrollTimestamp } = chatStore.getSnapshot();
@@ -174,6 +201,9 @@ export class Chat extends React.Component<ChatProps> {
     }
     if (this.props.hide !== prevProps.hide) {
       this.scrollToBottom();
+    }
+    if (this.props.socket !== prevProps.socket) {
+      this.attachTypingListener();
     }
     // Count messages that arrived while scrolled up; reset on the flip back
     // to near-bottom in onScroll. Keyed on the LAST message, not the length:
@@ -237,9 +267,72 @@ export class Chat extends React.Component<ChatProps> {
   updateChatMsg = (e: any) => {
     // console.log(e.target.selectionStart);
     this.setState({ chatMsg: e.target.value });
+    this.onTypingInput();
+  };
+
+  // Typing indicator (r15d), shared with the extension's contract:
+  // CMD:typing true at most once per 2 s while typing; false 3 s after the
+  // last keystroke, or immediately on send (sendChatMsg) / blur.
+  onTypingInput = () => {
+    const now = Date.now();
+    if (now - this.typingLastSent >= 2000) {
+      this.props.socket?.emit("CMD:typing", true);
+      this.typingLastSent = now;
+    }
+    window.clearTimeout(this.typingFalseTimer);
+    this.typingFalseTimer = window.setTimeout(() => this.stopTyping(), 3000);
+  };
+
+  stopTyping = () => {
+    window.clearTimeout(this.typingFalseTimer);
+    this.typingFalseTimer = undefined;
+    // typingLastSent > 0 marks "we sent a true and haven't cleared it yet";
+    // without that guard every empty-input Enter would broadcast a false.
+    if (!this.typingLastSent) return;
+    this.typingLastSent = 0;
+    this.props.socket?.emit("CMD:typing", false);
+  };
+
+  onRecTyping = (data: { id: string; typing: boolean }) => {
+    if (!data?.id || data.id === clientId) return;
+    if (data.typing) {
+      this.setState({
+        typingPeers: {
+          ...this.state.typingPeers,
+          [data.id]: Date.now() + 6000,
+        },
+      });
+    } else {
+      const next = { ...this.state.typingPeers };
+      delete next[data.id];
+      this.setState({ typingPeers: next });
+    }
+  };
+
+  sweepTypingPeers = () => {
+    const now = Date.now();
+    const expired = Object.keys(this.state.typingPeers).filter(
+      (id) => this.state.typingPeers[id] <= now,
+    );
+    if (!expired.length) return;
+    const next = { ...this.state.typingPeers };
+    expired.forEach((id) => delete next[id]);
+    this.setState({ typingPeers: next });
+  };
+
+  typingLabel = () => {
+    const ids = Object.keys(this.state.typingPeers);
+    const names = ids.map((id) => this.props.nameMap[id] || id);
+    if (names.length === 0) return null;
+    if (names.length === 1) return `${names[0]} is typing…`;
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+    return `${names.length} people are typing…`;
   };
 
   sendChatMsg = () => {
+    // A send ends typing (guard makes this a no-op when nothing was sent);
+    // also correct for the /command paths that clear the input instead.
+    this.stopTyping();
     if (!this.state.chatMsg) {
       return;
     }
@@ -618,6 +711,14 @@ export class Chat extends React.Component<ChatProps> {
           </div>
         )}
         <div className={styles.inputDock}>
+          {this.typingLabel() && (
+            <div
+              className={styles.small + " " + styles.light}
+              aria-live="polite"
+            >
+              {this.typingLabel()}
+            </div>
+          )}
           {!this.props.isChatDisabled && (
             <div className={styles.floatReactions}>
               {["😂", "❤️", "😮", "😢", "👏", "🔥"].map((emoji) => (
@@ -646,6 +747,7 @@ export class Chat extends React.Component<ChatProps> {
               this.sendChatMsg()
             }
             onChange={this.updateChatMsg}
+            onBlur={this.stopTyping}
             value={this.state.chatMsg}
             error={this.chatTooLong()}
             disabled={this.props.isChatDisabled}
