@@ -3,7 +3,8 @@
 // (Big Buck Bunny, public), join the same fresh room through the panel (Alice / Bob) and run
 // checks y1-y8. Launcher + CDP helpers are copied from dev/extension_e2e.mjs (kept standalone
 // on purpose). Needs only the server on :8080 (npm run dev). Run: node dev/extension_youtube_smoke.mjs
-// Whole run is capped at 5 minutes.
+// Phases: (default) y1-y8 sync checks | --nav: YouTube SPA next-video hop keeps the room
+// in sync (n1-n4) | --lna | --bookmarklet. Each run is capped at 5 minutes.
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,6 +17,9 @@ const EXT = path.resolve(import.meta.dirname, "../extension");
 const SERVER = "http://localhost:8080";
 const YT_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ";
 const CANON = "https://www.youtube.com/watch?v=aqz-KE-bpKQ";
+// Sintel (Blender open movie, public, unmonetised) — the --nav phase's in-page hop target
+const NAV_URL = "https://www.youtube.com/watch?v=eRsGyueVLvQ";
+const NAV_CANON = "https://www.youtube.com/watch?v=eRsGyueVLvQ";
 const RUN_MS = 5 * 60 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -260,6 +264,20 @@ async function settleOnWatch(p, label) {
   return { ok: false, bot: false, ms: Date.now() - t0, rejects };
 }
 
+// The server rate-limits POST /createRoom to 30/hour per IP with a FIXED window, and the
+// same dev server serves every harness on this machine: retry until the window rolls over
+// instead of failing the whole phase on a 429.
+async function createRoom() {
+  for (let i = 0; i < 6; i++) {
+    const r = await (await fetch(SERVER + "/createRoom", { method: "POST" })).json().catch(() => ({}));
+    const name = String(r.name || "").replace(/^\//, "");
+    if (name) return name;
+    if (!i) console.log(`createRoom: ${r.error || "no name"} — retrying every 20 s (30/hour per IP, fixed window)`);
+    await sleep(20000);
+  }
+  throw new Error("createRoom kept failing (rate-limited?)");
+}
+
 // ---------------- results ----------------
 let results = [];
 function check(label, ok, detail) {
@@ -449,10 +467,296 @@ async function runBmPhase() {
   finish();
 }
 
+// ---------------- --nav phase ----------------
+// Round 15C: an in-page YouTube navigation (SPA next-video hop, no full reload) must keep
+// the room in sync. A and B join one fresh room at 1.5x, playing. A hops in-page with
+// Shift+N — YouTube's OWN next-video SPA shortcut, sent as trusted CDP key events; the
+// target is YouTube's up-next, read dynamically (measured room-free: no synthetic trigger
+// SPA-navigates to an ARBITRARY url — JS click, trusted CDP clicks on injected plain and
+// yt-simple-endpoint anchors, pushState + popstate all hard-navigate, and the headless
+// page renders no related anchors — while Shift+N SPA-hops; if it ever fails, the phase
+// falls back to a full location.href load and says so). window.__navMark survives an SPA
+// hop and vanishes on a real reload. Checks n1-n4: page.js posts the new canonical url and
+// A announces it (CMD:siteUrl) while B shows the Follow bar; A's new video runs at the
+// room rate 1.5 without emitting CMD:playbackRate (the site-reset path restores locally);
+// B's Follow click lands it on the new title, joined again (saved-room prefill — the
+// extension does not auto-join without a #wpx hash), at 1.5x within ±2 s of A; and no
+// extension console errors.
+// Run: node dev/extension_youtube_smoke.mjs --nav
+async function runNav() {
+  summaryTag = "nav-youtube";
+  // room first (fail fast here rather than after a browser launch when the server is rate-limiting)
+  const roomName = await createRoom();
+  const roomUrl = SERVER + "/watch/" + roomName;
+  console.log("room:", roomUrl);
+
+  // 0. launch + settle A (same variant loop as the main run)
+  let A = null;
+  for (const variant of VARIANTS) {
+    try {
+      await launch(variant);
+    } catch (e) {
+      console.log(`launch failed (${variant.name}): ${e.message}`);
+      killEdge();
+      continue;
+    }
+    const p = await newPage("A", YT_URL);
+    const settle = await settleOnWatch(p, "A");
+    console.log(`variant "${variant.name}" -> watch page ${settle.ok ? "settled" : "NOT settled"} in ${settle.ms} ms (rejects=${settle.rejects}${settle.bot ? ", BOT-WALL TEXT PRESENT" : ""})`);
+    const ms = settle.ok ? await waitFor(() => hasPanel(p), 10000, 200) : null;
+    if (settle.ok && ms !== null) {
+      A = p;
+      break;
+    }
+    killEdge();
+    pages.clear();
+  }
+  if (!A) {
+    check("n0. extension loaded on YouTube (panel present)", false, "no launch variant produced the panel");
+    exitCode = 1;
+    return finish();
+  }
+  check("n0. extension loaded on YouTube (panel present)", true, "");
+
+  const B = await newPage("B", YT_URL);
+  const settleB = await settleOnWatch(B, "B");
+  const bPanel = settleB.ok ? await waitFor(() => hasPanel(B), 10000, 200) : null;
+  if (bPanel === null) {
+    check("n0b. tab B on the watch page with the panel", false, `settle=${settleB.ok}, no panel within 10 s`);
+    exitCode = 1;
+    return finish();
+  }
+  check("n0b. tab B on the watch page with the panel", true, "");
+
+  for (const [tag, p] of [["A", A], ["B", B]]) {
+    const vms = await waitFor(() => ev(p, `${MAINV} && ${MAINV}.readyState >= 1`), 25000, 200);
+    await muteAll(p);
+    console.log(`collector ${tag}:`, await collectSiteUrls(p), `| main video ready after ${vms ?? "NEVER"} ms`);
+    if (vms === null) {
+      check("n0c. main player video present on " + tag, false, "no #movie_player video within 25 s");
+      exitCode = 1;
+      return finish();
+    }
+    check("n0c. main player video present on " + tag, true, "");
+  }
+
+  const ja = await joinRoom(A, roomUrl, "Alice");
+  const jb = await joinRoom(B, roomUrl, "Bob");
+  check("n0d. A (Alice) and B (Bob) joined", ja !== null && jb !== null, `A ${ja ?? "never"} ms | B ${jb ?? "never"} ms`);
+
+  await sleep(4000); // initial sync + the 3 s site-reset window settle
+  await muteAll(A);
+  await muteAll(B);
+  const c15 = await clickRate(A, "1.5");
+  const rA = await waitFor(async () => Math.abs((await vstate(A))?.r - 1.5) < 0.05, 3000, 100);
+  const rB = await waitFor(async () => Math.abs((await vstate(B))?.r - 1.5) < 0.05, 3000, 100);
+  await ev(A, `${MAINV}.play().catch(() => {}); true`);
+  await ev(B, `${MAINV}.play().catch(() => {}); true`);
+  const pA = await waitFor(async () => (await vstate(A))?.paused === false, 4000, 100);
+  const pB = await waitFor(async () => (await vstate(B))?.paused === false, 4000, 100);
+  check("n0e. both playing at the room rate 1.5", c15 && rA !== null && rB !== null && pA !== null && pB !== null,
+    `A r=${(await vstate(A))?.r} paused=${(await vstate(A))?.paused} | B r=${(await vstate(B))?.r} paused=${(await vstate(B))?.paused}`);
+
+  const emA0 = await emits(A); // emit counters before the hop
+  const dur0 = await ev(A, `${MAINV} ? ${MAINV}.duration : 0`); // BBB's duration — the new title's differs
+
+  // ---- A hops in-page through YouTube's own SPA router ----
+  // Trigger: Shift+N, YouTube's OWN "next video" SPA shortcut, sent as trusted CDP key
+  // events. Measured room-free (probe): the router does not SPA-navigate to an ARBITRARY
+  // url from any synthetic trigger — a JS .click() (isTrusted=false), trusted CDP clicks
+  // on injected plain and yt-simple-endpoint anchors, and pushState + synthetic popstate
+  // all hard-navigated (full load) — while Shift+N SPA-hops reliably; the headless page
+  // renders no related-list anchors to click. So the target is YouTube's own up-next,
+  // read dynamically after landing (Sintel eRsGyueVLvQ is the order's example; it is not
+  // in the headless related list). __navMark survives an SPA hop and vanishes on a real
+  // reload — that is how an SPA hop is told from a full load.
+  const navT0 = Date.now();
+  await ev(A, `window.__navMark = 'spa'; window.__navDone = false; window.__t0 = document.title;
+    addEventListener('yt-navigate-finish', () => { window.__navDone = true; }, true); true`);
+  // diagnosis: record the main video's own events + element identity across the hop
+  await ev(A, `(() => { const v = ${MAINV}; if (!v) return false;
+    window.__hopT0 = Date.now(); window.__el0 = v; window.__evLog = [];
+    for (const t of ["ratechange", "emptied", "loadstart", "loadedmetadata"])
+      v.addEventListener(t, () => window.__evLog.push((Date.now() - window.__hopT0) + "ms:" + t + ":r=" + v.playbackRate), true);
+    return true; })()`);
+  for (const type of ["keyDown", "keyUp"]) {
+    await A.s("Input.dispatchKeyEvent", {
+      type, key: "N", code: "KeyN", windowsVirtualKeyCode: 78, nativeVirtualKeyCode: 78,
+      ...(type === "keyDown" ? { modifiers: 8 } : {}),
+    });
+  }
+  let navMode = null; // 'spa (Shift+N…)' | 'full-fallback'
+  const landed = () =>
+    ev(
+      A,
+      `window.__navMark === 'spa' && location.pathname === '/watch' && new URLSearchParams(location.search).get('v') !== 'aqz-KE-bpKQ' && (window.__navDone === true || document.title !== window.__t0)`,
+    );
+  for (let i = 0; i < 80 && !navMode; i++) {
+    await sleep(100);
+    try {
+      if (await landed()) navMode = "spa (Shift+N, YouTube's own next-video shortcut)";
+    } catch {} // eval can fail mid-navigation; keep polling
+  }
+  if (!navMode) {
+    console.log("NOTE: Shift+N did not SPA-hop within 8 s -> falling back to a full load (location.href)");
+    await ev(A, `location.href = ${JSON.stringify(NAV_URL)}; true`);
+    if ((await waitFor(() => ev(A, `location.search.includes('eRsGyueVLvQ')`), 20000, 200)) !== null) navMode = "full-fallback";
+  }
+  const navCanon = navMode === "spa (Shift+N, YouTube's own next-video shortcut)" ? await ev(A, `window.__wpExtPageCanon(location.href)`) : NAV_CANON;
+  check(
+    "n0f. A navigated to another title through YouTube's SPA router (no page reload)",
+    navMode !== null && (navMode.startsWith("spa") ? /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]+$/.test(navCanon) && navCanon !== CANON : true),
+    `via ${navMode ?? "NEVER"} (${Date.now() - navT0} ms); new title=${navCanon ?? "?"}`,
+  );
+  if (!navMode) {
+    exitCode = 1;
+    return finish();
+  }
+
+  const swapped = await waitFor(() => ev(A, `${MAINV} && Math.abs((${MAINV}.duration || 0) - ${dur0 ?? 0}) > 1`), 20000, 200); // the new title's video really loaded
+  const panelBack = await waitFor(() => hasPanel(A), 15000, 200); // a full load rebuilds it (content script at document_idle)
+  check("n0g. the extension is back on A's new title (panel present)", panelBack !== null, `new video loaded after ${swapped ?? "NEVER"} ms, panel after ${panelBack ?? "NEVER"} ms (${Date.now() - navT0} ms since the hop, mode=${navMode})`);
+  if (panelBack === null) {
+    exitCode = 1;
+    return finish();
+  }
+  if (!(await ev(A, `!!window.__wpUrls`))) await collectSiteUrls(A); // a full load reset the page world: re-arm the collector
+  await muteAll(A);
+  await ev(A, `${MAINV}.play().catch(() => {}); true`); // masked by the title-reset window, never emitted
+  await waitFor(async () => (await vstate(A))?.paused === false, 4000, 100);
+
+  // n1: the new canonical url is posted by page.js, announced by A, Follow bar on B
+  const urlsA = (await ev(A, `window.__wpUrls || []`)) || [];
+  const canonA = await ev(A, `window.__wpExtPageCanon ? window.__wpExtPageCanon(location.href) : null`);
+  const emA1 = await emits(A);
+  const siteDelta = (emA1["CMD:siteUrl"] || 0) - (emA0["CMD:siteUrl"] || 0);
+  check(
+    `n1. A's page.js posted the new canonical url (${navCanon}) and A announced it (CMD:siteUrl)`,
+    urlsA[urlsA.length - 1] === navCanon && canonA === navCanon && siteDelta >= 1,
+    `last posted=${JSON.stringify(urlsA[urlsA.length - 1])} canonNow=${canonA} CMD:siteUrl delta=${siteDelta}`,
+  );
+  const followB = await waitFor(async () => (await dset(B, "follow")) === navCanon, 8000, 200);
+  check("n1b. B shows the Follow bar for it (host.dataset.follow)", followB !== null, `dataset.follow='${await dset(B, "follow")}' after ${followB ?? "NEVER"} ms`);
+
+  // n2: the new video runs at the room rate 1.5 (not YouTube's default 1), no CMD:playbackRate
+  // emitted. The up-next title may serve a pre-roll AD POD — measured on real YouTube: two
+  // ads back to back (~45-55 s total), during which the extension's ad-guard pauses sync by
+  // design (round 4A): the ads play at their own rate 1 and nothing is broadcast. So the
+  // 5 s rate window starts once the pod has cleared and the content video is running.
+  const NAV_ADQ = `!!document.querySelector('#movie_player.ad-showing, .html5-video-player.ad-showing')`;
+  // this up-next title served 1-3 ads per pod per run (~30-75 s waiting them out — measured);
+  // do what a viewer does: click YouTube's own Skip button each tick so each ad lasts ~5 s
+  const NAV_SKIP = `(() => { const b = document.querySelector('.ytp-ad-skip-button-modern, .ytp-ad-skip-button, .ytp-ad-skip-button-slot button, .ytp-ad-skip-button-container button')
+      || [...document.querySelectorAll('button')].find((e) => /^(skip|bỏ qua)/i.test((e.textContent || "").trim()));
+    if (b && b.offsetParent !== null) { b.click(); return true; } return false; })()`;
+  const samples = [];
+  let stopSample = false;
+  const sampler = (async () => {
+    while (!stopSample) {
+      try {
+        const s = await vstate(A);
+        const ad = await ev(A, NAV_ADQ);
+        samples.push({
+          ms: Date.now() - navT0, t: s ? Math.round(s.t) : null, r: s?.r, paused: s?.paused, ad,
+          dr: await dset(A, "rate"), sameEl: await ev(A, `${MAINV} === window.__el0`),
+        });
+        if (ad) await ev(A, NAV_SKIP);
+      } catch {}
+      await sleep(500);
+    }
+  })();
+  const adClearMs = await waitFor(async () => !(await ev(A, NAV_ADQ)), 75000, 300);
+  const rateMs = adClearMs !== null
+    ? await waitFor(async () => {
+        const s = await vstate(A);
+        return s && Math.abs(s.r - 1.5) < 0.05 && s.paused === false;
+      }, 5000, 100)
+    : null;
+  const emA2 = await emits(A);
+  const rateDelta = (emA2["CMD:playbackRate"] || 0) - (emA0["CMD:playbackRate"] || 0);
+  stopSample = true;
+  await sampler;
+  // compact the sample line: keep the shape (ad flips, rate changes, position jumps back
+  // at a pod boundary) plus the last sample, not 150 near-identical points
+  const tLine = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    const p = samples[i - 1];
+    if (!p || s.ad !== p.ad || Math.abs((s.r ?? 0) - (p.r ?? 0)) > 0.05 || (s.dr ?? "") !== (p.dr ?? "") || (s.t !== null && s.t < (p.t ?? 0)) || i === samples.length - 1)
+      tLine.push(`${s.ms}ms:t=${s.t},r=${s.r},dr=${s.dr},paused=${s.paused},ad=${s.ad}`);
+  }
+  const ads = samples.filter((s) => s.ad).length * 0.5;
+  let evLog = [];
+  let sameEl = null;
+  try {
+    evLog = (await ev(A, `window.__evLog || []`)) || [];
+    sameEl = await ev(A, `${MAINV} === window.__el0`);
+  } catch {}
+  check(
+    "n2. A's new video runs at the room rate 1.5 and A emitted no CMD:playbackRate for it",
+    rateMs !== null && rateDelta === 0,
+    `ad pod ~${ads}s, cleared after ${adClearMs ?? "NEVER (75 s cap)"}, rate 1.5 + playing ${rateMs ?? "NEVER"} ms later; CMD:playbackRate delta since before the hop=${rateDelta}; sameVideoElement=${sameEl}; video events: ${evLog.join(" | ") || "(none recorded)"}; shape: ${tLine.join(" | ") || "(none)"}`,
+  );
+
+  // n3: B clicks Follow (same host -> navigates), lands on the new title, joined again, in sync
+  const clickedGo = await ev(B, PANEL(`r.getElementById('followgo').click(); return true;`));
+  const settleN = await settleOnWatch(B, "B");
+  const pn = settleN.ok ? await waitFor(() => hasPanel(B), 15000, 200) : null;
+  const urlB = pn !== null ? await ev(B, `window.__wpExtPageCanon ? window.__wpExtPageCanon(location.href) : null`) : null;
+  check(
+    "n3a. B's Follow click navigated B to the new title",
+    clickedGo && pn !== null && urlB === navCanon,
+    `clicked=${clickedGo} settle=${settleN.ok} (${settleN.ms} ms) panel=${pn !== null} B canon=${urlB}`,
+  );
+  const prefill = await ev(B, PANEL(`return { room: r.getElementById('room').value, name: r.getElementById('name').value };`));
+  const jn = await joinRoom(B, roomUrl, "Bob");
+  check(
+    "n3b. B joined again after the Follow navigation",
+    jn !== null,
+    `path=${prefill.room === roomUrl ? "saved room prefilled, harness clicked Join" : "harness re-entered the room"} (the extension has no auto-rejoin without a #wpx hash); prefill=${JSON.stringify(prefill)}; joined after ${jn ?? "NEVER"} ms`,
+  );
+  await ev(B, `${MAINV}.play().catch(() => {}); true`);
+  // both tabs may be sitting through the up-next title's pre-roll ads (same video, same ad
+  // pool): the guard drops applies during an ad and each ad end re-syncs, so the sync
+  // window starts once both ads have cleared — and the harness skips each ad like a viewer
+  const syncMs = await waitFor(async () => {
+    const sa = await vstate(A);
+    const sb = await vstate(B);
+    if (!sa || !sb) return false;
+    const adA = await ev(A, NAV_ADQ);
+    const adB = await ev(B, NAV_ADQ);
+    if (adA) await ev(A, NAV_SKIP);
+    if (adB) await ev(B, NAV_SKIP);
+    if (adA || adB) return false;
+    return !sa.paused && !sb.paused && Math.abs(sa.r - 1.5) < 0.05 && Math.abs(sb.r - 1.5) < 0.05 && Math.abs(sa.t - sb.t) <= 2;
+  }, 40000, 250);
+  const sa = await vstate(A);
+  const sb = await vstate(B);
+  const gap = sa && sb ? Math.round(Math.abs(sa.t - sb.t) * 100) / 100 : null;
+  check(
+    "n3c. B at the room rate 1.5 within ±2 s of A on the new title",
+    syncMs !== null,
+    `A=${JSON.stringify(sa)} B=${JSON.stringify(sb)} gap=${gap}s after ${syncMs ?? "NEVER"} ms`,
+  );
+
+  // n4: extension console errors on both tabs (site noise is not the extension's)
+  for (const [tag, p] of [["A", A], ["B", B]]) {
+    const ext = p.errors.filter((e) => EXT_ERR.test(e));
+    check(`n4. no console errors from the extension on ${tag}`, ext.length === 0, ext.length ? ext.slice(0, 8).join(" ;; ") : "0 extension errors");
+  }
+
+  finish();
+}
+
 // ---------------- main ----------------
 async function main() {
   if (process.argv.includes("--lna")) return runLna();
   if (process.argv.includes("--bookmarklet")) return runBmPhase();
+  if (process.argv.includes("--nav")) return runNav();
+  // room first (fail fast here rather than after a browser launch when the server is rate-limiting)
+  const roomName = await createRoom();
+  const roomUrl = SERVER + "/watch/" + roomName;
+  console.log("room:", roomUrl);
   // 0. launch, find a variant where the extension loads on YouTube
   let used = null;
   let browserVer;
@@ -496,11 +800,6 @@ async function main() {
     return finish();
   }
   check("1. tab B on the watch page with the panel", true, "");
-
-  const rr = await (await fetch(SERVER + "/createRoom", { method: "POST" })).json();
-  const roomName = String(rr.name || "").replace(/^\//, "");
-  const roomUrl = SERVER + "/watch/" + roomName;
-  console.log("room:", roomUrl);
 
   // 2. land both tabs on the player, mute, siteUrl collector
   for (const [tag, p] of [["A", A], ["B", B]]) {

@@ -776,7 +776,12 @@
     playing: onBufferRecover,
     canplay: onBufferRecover,
     loadstart: markSiteReset,
-    loadedmetadata: markSiteReset,
+    // a same-element reload (YouTube SPA hop) resets playbackRate inside the load algorithm
+    // with no ratechange (measured on youtube.com, round 15C), so put the room rate back here
+    loadedmetadata: () => {
+      markSiteReset();
+      if (joined && sync && sync.done && !adPlaying()) applyRate(roomRate);
+    },
     emptied: markSiteReset,
   };
 
