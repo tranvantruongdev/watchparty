@@ -528,7 +528,7 @@ app.post("/createRoom", async (req, res) => {
   }
   // Tens per hour per IP: plenty for a household behind one NAT, still keeps
   // one holder from filling the 1000-room shard cap alone
-  if (tooManyRequests(req, "createRoom", 30, 60 * 60 * 1000)) {
+  if (tooManyRequests(req, "createRoom", Number(config.CREATE_ROOM_LIMIT), 60 * 60 * 1000)) {
     res.status(429).json({ error: "too many rooms created" });
     return;
   }

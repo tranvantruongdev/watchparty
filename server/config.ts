@@ -46,6 +46,7 @@ const defaults = {
   ROOM_CAPACITY: 0, // Maximum capacity of a standard room. Set to 0 for unlimited.
   ROOM_CAPACITY_SUB: 0, // Maximum capacity of a sub room. Set to 0 for unlimited.
   MAX_CONNECTIONS: 500, // Maximum concurrent socket connections on this server. Set to 0 for unlimited.
+  CREATE_ROOM_LIMIT: 30, // Rooms one IP may create per hour; raise only for local test runs
   BUILD_DIRECTORY: "build", // Name of the directory where the built React UI is served from
   VM_MIN_UPTIME_MINUTES: 0, // Number of minutes of the hour VMs must exist for before being eligible for termination
   SHARD: undefined, // Shard ID of the web server (configure in ecosystem.config.js)
