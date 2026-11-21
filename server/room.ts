@@ -139,6 +139,9 @@ export class Room {
   private floatReactionTimes: { [clientId: string]: number[] } = {};
   // clientId -> true while that viewer reports being stuck buffering
   private bufferingMap: BooleanDict = {};
+  // the subset of bufferingMap that may auto-pause the room: in a locked room
+  // only the lock holder's claims count (a guest's still shows in the roster)
+  private bufferPauseMap: BooleanDict = {};
   // clientId -> timestamps of accepted buffering changes in the last second
   private bufferingChangeTimes: { [clientId: string]: number[] } = {};
   // The active intermission ("BRB"): who started it and when it ends
@@ -256,6 +259,7 @@ export class Room {
         // re-pause the room after someone wakes up and presses play (same
         // consumption as the buffer auto-pause below)
         this.bufferingMap = {};
+        this.bufferPauseMap = {};
         this.io.of(this.roomId).emit("roster", this.getRosterForApp());
         this.addChatMessage(null, {
           id: by,
@@ -690,7 +694,12 @@ export class Room {
           (hasLock || (await validateOwner())) &&
           this.lockRoom(socket, data);
       });
-      on("CMD:buffering", (data: unknown) => this.setBuffering(socket, data));
+      // Arming the buffer auto-pause pauses the room like CMD:pause, so it
+      // needs the lock like CMD:pause (CMD:sleep passes the same check);
+      // a guest's buffering is still recorded and shown in the roster
+      on("CMD:buffering", (data: unknown) =>
+        this.setBuffering(socket, data, validateLock()),
+      );
       // Typing indicator from the browser extension: relayed to the other
       // members only, never stored, no chat line
       on("CMD:typing", (data: unknown) => {
@@ -1044,6 +1053,7 @@ export class Room {
     this.playbackRate = 1;
     this.tsMap = {};
     this.bufferingMap = {};
+    this.bufferPauseMap = {};
     // New media ends any intermission
     if (this.intermission) {
       this.intermission = null;
@@ -1737,7 +1747,7 @@ export class Room {
     });
   };
 
-  private setBuffering = (socket: Socket, data: unknown) => {
+  private setBuffering = (socket: Socket, data: unknown, canPause: boolean) => {
     // Accept only booleans; ignore no-op updates so the roster isn't re-emitted
     if (typeof data !== "boolean") {
       return;
@@ -1757,12 +1767,23 @@ export class Room {
     times.push(now);
     this.bufferingChangeTimes[socket.clientId] = times;
     this.bufferingMap[socket.clientId] = data;
+    if (canPause) {
+      this.bufferPauseMap[socket.clientId] = data;
+    } else {
+      delete this.bufferPauseMap[socket.clientId];
+    }
     // Jellyfin SyncPlay behavior: if a viewer stays stuck too long while the
     // room plays, pause everyone so nobody watches ahead of the stuck viewer.
     // CMD:buffering is already capped and validated above, so no new event.
     // Re-arm on false too: with two stuck viewers, one recovering must not
     // cancel the timer for the other.
-    this.armBufferPause();
+    // Pausing is playback control: in a locked room only the lock holder's
+    // claims arm it (same check CMD:pause uses) and only theirs can land it
+    // (bufferPauseMap), so a guest's claim can't ride a play's re-arm either;
+    // it still shows in the roster below
+    if (canPause) {
+      this.armBufferPause();
+    }
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
 
@@ -1770,12 +1791,12 @@ export class Room {
   // this adds ~2.5s grace before pausing (~4s of stall total) to ride out blips
   private armBufferPause = () => {
     this.clearBufferPause();
-    if (this.paused || !Object.values(this.bufferingMap).some(Boolean)) {
+    if (this.paused || !Object.values(this.bufferPauseMap).some(Boolean)) {
       return;
     }
     this.bufferPauseTimer = setTimeout(() => {
-      const stuck = Object.keys(this.bufferingMap).find(
-        (id) => this.bufferingMap[id],
+      const stuck = Object.keys(this.bufferPauseMap).find(
+        (id) => this.bufferPauseMap[id],
       );
       if (this.paused || !stuck) {
         return;
@@ -1789,6 +1810,7 @@ export class Room {
       // true still in the map would otherwise re-pause the room after every
       // play, forever.
       this.bufferingMap = {};
+      this.bufferPauseMap = {};
       this.io.of(this.roomId).emit("roster", this.getRosterForApp());
       this.addChatMessage(null, {
         id: stuck,
@@ -2472,6 +2494,7 @@ export class Room {
       }
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
+      delete this.bufferPauseMap[clientId];
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.pageIdMap[clientId];
