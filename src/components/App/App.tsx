@@ -1533,6 +1533,21 @@ export class App extends React.Component<AppProps, AppState> {
         config.NODE_ENV === "development" && console.log(data);
         // Handle messages received from signaling server
         const msg = data.msg;
+        // Malformed peer data (buggy or hostile sender) drops here, before any
+        // PC work: a missing/non-string sdp reads as a fingerprint change in
+        // the offer path below and closes a healthy PC right before the
+        // .split() throws uncaught (measured red: viewer share black), and a
+        // non-object ice throws in the RTCIceCandidate constructor outside
+        // the answer chain's try. Legit frames always carry an sdp string
+        // (pc.localDescription) and an ice object (emit is gated on
+        // event.candidate), so nothing real is dropped
+        if (
+          (msg.sdp != null && typeof msg.sdp.sdp !== "string") ||
+          (msg.ice !== undefined &&
+            (typeof msg.ice !== "object" || msg.ice === null))
+        ) {
+          return;
+        }
         const from = data.from;
         // Determine whether the message came from the sharer or the sharee
         let pc = (

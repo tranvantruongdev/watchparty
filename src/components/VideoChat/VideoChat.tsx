@@ -991,6 +991,20 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   handleSignal = async (data: any) => {
     // Handle messages received from signaling server
     const msg = data.msg;
+    // Malformed peer data (buggy or hostile voice peer) drops here, before
+    // any PC work: a non-object ice throws in the RTCIceCandidate constructor
+    // outside the offer chain's try (an sdp offer/answer of the same shape is
+    // already caught below, but dropping it up front keeps the two handlers
+    // in App.tsx and here identical). Legit frames always carry an sdp string
+    // (pc.localDescription) and an ice object (emit is gated on
+    // event.candidate), so nothing real is dropped
+    if (
+      (msg.sdp != null && typeof msg.sdp.sdp !== "string") ||
+      (msg.ice !== undefined &&
+        (typeof msg.ice !== "object" || msg.ice === null))
+    ) {
+      return;
+    }
     const from = data.from;
     const selfId = getOrCreateClientId();
     let pc = window.watchparty.videoPCs[from];
