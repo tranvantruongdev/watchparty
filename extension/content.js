@@ -73,6 +73,7 @@
   let followUrl = null; // url the follow bar points at while shown
   let adMode = false; // an ad was showing at the last 1 s check (drives status + re-sync)
   let adFreeAt = 0; // when adMode last flipped to no-ad (the ad tail gap window, D1)
+  let adPullTimer = null; // the post-ad pull, sent once the ad tail gap has passed (R16C)
   let adStartUrl = null; // our title when the current ad started (a mid-ad hop, D2)
   let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
   let extController = null; // member currently holding playback control (null = free)
@@ -1150,6 +1151,8 @@
     roomSiteUrl = null;
     adMode = false;
     adFreeAt = 0;
+    clearTimeout(adPullTimer);
+    adPullTimer = null;
     askedHost = false;
     extController = null;
     hideFollow();
@@ -1519,9 +1522,25 @@
           statusConnected();
           if (myUrl) onTitleChange(adStartUrl);
         } else {
-          // the ad ended: pull the room state and apply it like a joiner would
-          askedHost = true;
-          emit("CMD:askHost");
+          // the ad ended: pull the room state and apply it like a joiner would — but
+          // only once the ad tail gap is over. Youtube clears .ad-showing ~250 ms
+          // BEFORE the ad->content media swap (R15V audit), so a pull sent at this
+          // flip can land inside that gap on the ad's media: applySeek clamps the
+          // room position to the ad's duration - 0.5 and rebases the drift anchor
+          // there, the swap then discards it, and drift correction pins us at the
+          // ad's end while the room plays on (measured 44 s behind, no recovery).
+          // At flip + AD_GAP_MS the swap, when there is one, has settled; an ad that
+          // ends without a swap pulls 1.5 s late and gets the same room state. An ad
+          // that started again inside the window skips the pull — its own end arms a
+          // fresh one.
+          adPullTimer = setTimeout(() => {
+            adPullTimer = null;
+            adFreeAt = 0; // consumed; the D1 gate ends here either way (flip + AD_GAP_MS)
+            if (adPlaying() || !joined || askedHost || myUrl !== adStartUrl)
+              return;
+            askedHost = true;
+            emit("CMD:askHost");
+          }, AD_GAP_MS);
         }
       }
     }

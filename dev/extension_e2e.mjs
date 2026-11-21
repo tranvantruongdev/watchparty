@@ -1079,12 +1079,14 @@ async function main() {
       `status after ${adMs} ms; A during B-play=${JSON.stringify(aDuringPlay)} during B-seek=${JSON.stringify(aDuringSeek)}; emit diff=${JSON.stringify(dA)}; B=${JSON.stringify(await vstate(B))}`,
     );
     const removed = await ev(A, `document.getElementById('movie_player').remove(); true`);
+    // the 1 s tick sees the flip, then the pull waits AD_GAP_MS (1.5 s) so a
+    // youtube ad->content media swap can settle first (R16C): up to ~2.6 s
     const backMs = await waitFor(async () => {
       const s = await vstate(A), b = await vstate(B);
       return s && b && s.paused && s.r === 1 && Math.abs(s.t - b.t) < 2;
-    }, 2000);
+    }, 3500);
     check(
-      "n1b. ad removed -> A re-syncs from the room within 2 s (paused, rate 1, near the room position)",
+      "n1b. ad removed -> A re-syncs from the room within 3.5 s (paused, rate 1, near the room position)",
       removed && backMs !== null,
       `A=${JSON.stringify(await vstate(A))} B=${JSON.stringify(await vstate(B))}; landed after ${backMs} ms`,
     );
