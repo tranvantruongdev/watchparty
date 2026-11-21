@@ -110,6 +110,15 @@ interface ControlsProps {
   localSetAudioTrack?: (id: number) => void;
 }
 
+// iOS ignores HTMLMediaElement.volume (it always reads back 1, and the YouTube
+// iframe's setVolume hits the same wall): the slider moved with no effect
+// there. The mute button still works
+const volumeSettable = (() => {
+  const probe = document.createElement("audio");
+  probe.volume = 0.5;
+  return probe.volume === 0.5;
+})();
+
 export const Controls = (props: ControlsProps) => {
   const [hoverState, setHoverState] = useState({
     hoverTimestamp: 0,
@@ -572,19 +581,21 @@ export const Controls = (props: ControlsProps) => {
           className={` ${styles.action}`}
         />
       )}
-      <div style={{ width: "100px" }}>
-        <Slider
-          defaultValue={volume}
-          thumbLabel="Volume"
-          disabled={muted}
-          min={0}
-          max={1}
-          step={0.01}
-          onChangeEnd={(value: number) => {
-            props.localSetVolume(value);
-          }}
-        />
-      </div>
+      {volumeSettable && (
+        <div style={{ width: "100px" }}>
+          <Slider
+            defaultValue={volume}
+            thumbLabel="Volume"
+            disabled={muted}
+            min={0}
+            max={1}
+            step={0.01}
+            onChangeEnd={(value: number) => {
+              props.localSetVolume(value);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 };
