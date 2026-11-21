@@ -1214,6 +1214,12 @@ export class Room {
     if (this.playlist.length >= 500) {
       return;
     }
+    // Count and item size are capped apart, but every change re-sends the
+    // whole list: 500 x 4 KB was still a 2 MB frame (measured 200 items =
+    // 1.6 MB). 500 typical YouTube entries serialize to ~100 KB
+    if (JSON.stringify(this.playlist).length + 2 * data.length > 256 * 1024) {
+      return;
+    }
     redisCount("playlistAdds");
     const youtubeVideoId = getYoutubeVideoID(data);
     const item = {
