@@ -2198,6 +2198,10 @@ export class App extends React.Component<AppProps, AppState> {
       return;
     }
     this.isLocalStreamAFile = true;
+    // A share starting supersedes a stale "Share stopped" prompt from the
+    // previous one (file A ended by itself, file B starts): an intentional
+    // stop of B must not resurface A's prompt
+    this.setState({ shareEndedPrompt: false });
     this.socket.emit("CMD:joinScreenShare", {
       file: true,
       mediasoup: useMediaSoup,
@@ -2290,6 +2294,9 @@ export class App extends React.Component<AppProps, AppState> {
       // !track.onended guard keeps this idempotent once PCs exist
       captureTrack.onended = () => this.stopPublishingLocalStream();
       this.isLocalStreamAFile = false;
+      // Same supersede as the file share: a fresh capture clears the old
+      // prompt so stopping this share doesn't resurface it
+      this.setState({ shareEndedPrompt: false });
       // Round 184: audio is always requested, but sharing a window (or a
       // screen without "share system audio") returns video only, and the
       // sharer would never learn that every viewer hears nothing. Round 185:
@@ -3836,6 +3843,19 @@ export class App extends React.Component<AppProps, AppState> {
 
   roomSeek = (time: number) => {
     if (this.otherControlsPlayback()) {
+      return;
+    }
+    // A share stream has no seekable clock: a viewer's leftVideo plays the
+    // received MediaStream, whose currentTime is the stream clock (starts at
+    // 0), so an arrow key sent CMD:seek with a bogus target that yanked the
+    // sharer's file to it (R15T: 18.9 -> 1.5). The file sharer's own element
+    // has the real clock, so their arrows still scrub; screen share has the
+    // same viewer path and nothing seekable behind it either. Slash commands
+    // already refuse both via hasDuration
+    if (
+      (this.playingFileShare() && !this.isLocalStreamAFile) ||
+      (this.playingScreenShare() && !this.isSharingScreen())
+    ) {
       return;
     }
     let target = time;
