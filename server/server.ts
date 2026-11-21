@@ -414,10 +414,25 @@ app.get("/stats", async (req, res) => {
   }
 });
 
+// Anonymous route: each call made vmWorker run its per-pool postgres stats
+// queries (measured 101 calls = 102 /stats). Share one fetch for 15 s; a
+// failed fetch is dropped so the next call retries
+let vmStats: { at: number; data: Promise<any> } | undefined;
 app.get("/health/:metric", async (req, res) => {
-  const vmManagerStats = (
-    await axios.get("http://localhost:" + config.VMWORKER_PORT + "/stats")
-  ).data;
+  if (!vmStats || Date.now() - vmStats.at > 15_000) {
+    const data = axios
+      .get("http://localhost:" + config.VMWORKER_PORT + "/stats", {
+        timeout: 10_000,
+      })
+      .then((r) => r.data);
+    vmStats = { at: Date.now(), data };
+    data.catch(() => {
+      if (vmStats?.data === data) {
+        vmStats = undefined;
+      }
+    });
+  }
+  const vmManagerStats = await vmStats.data;
   const result = vmManagerStats[req.params.metric]?.availableVBrowsers?.length;
   res.status(result ? 200 : 500).json(result);
 });
