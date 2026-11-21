@@ -3675,12 +3675,24 @@ export class App extends React.Component<AppProps, AppState> {
     ) {
       return;
     }
+    this.unlockPlayback();
+  };
+
+  // Both gesture unlocks (a tap anywhere, the Unmute overlay button)
+  unlockPlayback = () => {
     this.setState({ isAutoPlayable: true, playbackBlocked: false }, () => {
       this.localSetMute(false);
       // The gesture means "give me sound", not "full blast": keep the
       // user's saved volume (round 168), don't stomp it with 1
       this.localSetVolume(parseStoredVolume(localStorage.getItem(VOLUME_KEY)));
       if (!this.state.roomPaused) {
+        // The element sat paused while blocked and the room moved on: start
+        // from the room's position (R16B: 2.2 s behind until the drift
+        // resync 4 ticks later). YouTube does this on its first PLAYING
+        // (ytNeedsFirstPlaySync); a share stream is live, nothing to seek
+        if (this.hasDuration() && !this.usingYoutube()) {
+          this.catchUpNow();
+        }
         this.localPlay();
       }
     });
@@ -3741,7 +3753,9 @@ export class App extends React.Component<AppProps, AppState> {
     if (this.usingYoutube()) {
       raw =
         this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
-        window.YT?.PlayerState.BUFFERING;
+        // window.YT exists ({loading, loaded}) before the widget API defines
+        // PlayerState: without the second ?. the tick threw (R16B, 2 of 3 runs)
+        window.YT?.PlayerState?.BUFFERING;
     } else {
       const el = this.Player().getVideoEl();
       raw = Boolean(el && !el.paused && el.readyState < 3);
@@ -5294,30 +5308,9 @@ export class App extends React.Component<AppProps, AppState> {
                       !this.isLocalStreamAFile && (
                         <Overlay className={styles.flexCenter}>
                           <Button
-                            onClick={() => {
-                              // Real user gesture: muted autoplay was refused, so
-                              // actually start playback too (if the room is playing)
-                              this.setState(
-                                {
-                                  isAutoPlayable: true,
-                                  playbackBlocked: false,
-                                },
-                                () => {
-                                  this.localSetMute(false);
-                                  // The click means "give me sound", not "full
-                                  // blast": keep the user's saved volume
-                                  // (round 168), don't stomp it with 1
-                                  this.localSetVolume(
-                                    parseStoredVolume(
-                                      localStorage.getItem(VOLUME_KEY),
-                                    ),
-                                  );
-                                  if (!this.state.roomPaused) {
-                                    this.localPlay();
-                                  }
-                                },
-                              );
-                            }}
+                            // Real user gesture: muted autoplay was refused, so
+                            // actually start playback too (if the room is playing)
+                            onClick={this.unlockPlayback}
                             leftSection={<IconVolume />}
                             size="xl"
                           >

@@ -69,7 +69,7 @@ export class YouTube implements Player {
   shouldPlay = () => {
     return (
       this.watchPartyYTPlayer?.getPlayerState() ===
-        window.YT?.PlayerState.PAUSED ||
+        window.YT?.PlayerState?.PAUSED ||
       this.getCurrentTime() === this.getDuration()
     );
   };
