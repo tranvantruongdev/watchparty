@@ -14,6 +14,7 @@
   const SUPPRESS_MS = 700; // ignore the local events our own remote-apply causes
   const SEEK_TARGET_MS = 5000; // a remote seek can finish (seeked) long after we asked
   const SEEK_EPSILON = 0.5; // no point seeking when already this close
+  const SEEK_FLUSH_MS = 80; // seeked-triggered flush delay (a drag keeps re-arming it)
   const SITE_RESET_MS = 3000; // after a (re)load the site may reset playbackRate itself
   const DRIFT_TICK_S = 2; // slow-drift check cadence during playback
   const DRIFT_NUDGE_S = 0.75; // drifts smaller than this are left alone
@@ -51,6 +52,7 @@
   let pendingHost = null; // joiner state waiting for a <video> to appear
   let remoteSeek = null; // { t, at }
   let seekEventCount = 0; // seeking/seeked events on the bound video (tick poll baseline)
+  let seekTimer = null; // pending CMD:seek coalesce timer (a scrubber drag: send once it settles)
   let seenT = null; // video.currentTime at the last 1 s tick (eventless-jump detection)
   let seenAt = 0; // Date.now() of that tick
   let seenSeekEvt = 0;
@@ -695,6 +697,7 @@
   }
   function applySeek(t) {
     if (!video || !Number.isFinite(t)) return;
+    cancelSeek(); // a remote seek took over: the pending local broadcast is stale
     rebasePos(t); // the room moved here (remote seek or host state): new anchor
     if (Math.abs(video.currentTime - t) < SEEK_EPSILON) return;
     remoteSeek = { t, at: Date.now() };
@@ -708,10 +711,42 @@
   // own play/pause/seek noise after an in-page episode change from broadcasting:
   // a follower's autoplay must not drag the room to 0 — the room state comes via
   // CMD:askHost instead (or stays put when we moved ahead on our own).
+  // A scrubber drag fires a seeking event per drag tick: schedule the broadcast and
+  // send the CURRENT position once the drag settles (300 ms without a new seeking) or
+  // when the seek completes ('seeked' — normal sites keep their old latency). The
+  // gates are re-checked at send: a remote seek can arrive while ours is pending.
+  const cancelSeek = () => {
+    if (!seekTimer) return;
+    clearTimeout(seekTimer);
+    seekTimer = null;
+  };
+  const flushSeek = () => {
+    cancelSeek();
+    if (!joined || !video) return;
+    // a remote apply cancels this timer synchronously; only an echo of a remote seek
+    // that never reported landing is dropped here, a seek elsewhere still goes out
+    if (
+      remoteSeek &&
+      Date.now() - remoteSeek.at < SEEK_TARGET_MS &&
+      Math.abs(video.currentTime - remoteSeek.t) < 1
+    )
+      return;
+    if (suppressed("seeking") || Date.now() < titleResetUntil) return;
+    if (ctlBlocked()) return;
+    const t = video.currentTime;
+    emit("CMD:seek", t);
+    rebasePos(t); // the room lined up on us: we are the anchor now
+    seenT = t;
+    if (nudging) {
+      nudging = false;
+      applyRate(roomRate);
+    }
+  };
   const onPlay = () => {
     if (suppressed("play") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
+    cancelSeek(); // the play broadcast below already carries our position
     // line everyone up on our position before they start
     emit("CMD:seek", video.currentTime);
     emit("CMD:play");
@@ -741,6 +776,14 @@
     ) {
       remoteSeek = null; // the applied remote seek landed: no longer in flight
     }
+    // a seek that completes must not wait the full settle window (normal sites keep
+    // their old latency), but a seekable file completes every drag tick too (measured:
+    // a seeked after each 60 ms tick), so the flush itself is debounced — a still-
+    // dragging user re-arms it on every tick and only the last position goes out
+    if (seekTimer) {
+      clearTimeout(seekTimer);
+      seekTimer = setTimeout(flushSeek, SEEK_FLUSH_MS);
+    }
   };
   const onSeeking = () => {
     seekEventCount++;
@@ -756,13 +799,8 @@
     if (suppressed("seeking")) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
-    emit("CMD:seek", video.currentTime);
-    rebasePos(video.currentTime); // the room lined up on us: we are the anchor now
-    seenT = video.currentTime;
-    if (nudging) {
-      nudging = false;
-      applyRate(roomRate);
-    }
+    cancelSeek(); // a newer drag tick replaces the position the old timer would send
+    seekTimer = setTimeout(flushSeek, 300);
   };
   // A currentTime write on a <video> that never got media fires no events at all, so
   // the tick compares the position with the last one it saw: a jump no seek event and
@@ -884,19 +922,21 @@
     // with no ratechange (measured on youtube.com, round 15C), so put the room rate back here
     // a src swap on the same element (ad end, SPA hop) jumps currentTime with no seek events
     emptied: () => {
-      seenT = null;
+      seenT = null; // the media reset: the tick poll must not read the jump as a seek
+      cancelSeek(); // a pending drag broadcast describes the old media
+      markSiteReset();
     },
     loadedmetadata: () => {
       markSiteReset();
       if (joined && sync && sync.done && !adPlaying()) applyRate(roomRate);
     },
-    emptied: markSiteReset,
   };
 
   function bindVideo(v) {
     if (video) {
       for (const [type, fn] of Object.entries(VIDEO_EVENTS)) video.removeEventListener(type, fn);
     }
+    cancelSeek(); // a pending drag broadcast belongs to the old element's position
     video = v;
     seenT = null; // a fresh element: the tick poll must not see a phantom jump
     seenSeekEvt = seekEventCount;
