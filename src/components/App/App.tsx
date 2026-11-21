@@ -340,6 +340,50 @@ interface AppState {
 // gets a new one, which tells the sharer its old PC to us is dead
 const pageId = Math.random().toString(36).slice(2);
 
+// A rebuilt share link (sharer freeze / blip) otherwise restarts its sending
+// bandwidth estimate at Chrome's ~300 kbps default and ramps for ~30 s
+// (measured 0.33 -> 2.35 Mbps over 30 s after a 20 s sharer freeze). Setting
+// x-google-start-bitrate on each video codec tells the sender-side estimator
+// where to begin; the caller passes the same cap the share encoder uses
+// (capped at 2.5 Mbps) so a weak link is never flooded at start.
+const addShareStartBitrate = (sdp: string, startKbps: number): string => {
+  const lines = sdp.split("\r\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^a=rtpmap:(\d+) (?:VP8|VP9|H264|AV1)\/90000$/);
+    if (!m) {
+      continue;
+    }
+    const pt = m[1];
+    // fmtp for this payload type lives in the same media section (before the
+    // next m= line); PT numbers can repeat across sections
+    let sectionEnd = lines.length;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].startsWith("m=")) {
+        sectionEnd = j;
+        break;
+      }
+    }
+    let fmtpIdx = -1;
+    for (let j = i + 1; j < sectionEnd; j++) {
+      if (lines[j].startsWith(`a=fmtp:${pt} `)) {
+        fmtpIdx = j;
+        break;
+      }
+    }
+    const tag = `x-google-start-bitrate=${startKbps}`;
+    if (fmtpIdx >= 0) {
+      if (!lines[fmtpIdx].includes("x-google-start-bitrate")) {
+        lines[fmtpIdx] += `;${tag}`;
+      }
+    } else {
+      // VP8/VP9 usually have no fmtp line: add one right after the rtpmap
+      lines.splice(i + 1, 0, `a=fmtp:${pt} ${tag}`);
+      i++; // skip the line just inserted
+    }
+  }
+  return lines.join("\r\n");
+};
+
 export class App extends React.Component<AppProps, AppState> {
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -1575,6 +1619,13 @@ export class App extends React.Component<AppProps, AppState> {
             pc.connectionState !== "closed" &&
             pc.connectionState !== "failed"
           ) {
+            const startKbps = Math.round(
+              Math.min(
+                getShareCapMbps(this.state.participants.length - 1),
+                2.5,
+              ) * 1000,
+            );
+            msg.sdp.sdp = addShareStartBitrate(msg.sdp.sdp, startKbps);
             pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(
               (e) => console.warn("stale share answer dropped", e),
             );
