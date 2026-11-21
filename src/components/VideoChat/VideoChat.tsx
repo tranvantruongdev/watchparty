@@ -244,6 +244,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   } = {};
   // A mic switch is in flight (serialize changeMic — see the guard there)
   micSwitching = false;
+  lastMicAutoReopenAt = 0;
   micNoticeTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   // Bumped by every teardown (Leave, mic-off, auto-listen's leave): a capture
   // that started before the teardown must not resurrect voice when it resolves
@@ -579,13 +580,85 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       ourStream.removeTrack(oldTrack);
       ourStream.addTrack(newTrack);
       oldTrack.stop();
-      newTrack.addEventListener("ended", () => this.micOff(true));
+      newTrack.addEventListener("ended", () => this.micEnded(newTrack));
       this.saveMic(deviceId);
       this.refreshMics();
       this.clearDeviceHint("Microphone");
     } finally {
       this.micSwitching = false;
     }
+  };
+
+  micEnded = async (dead: MediaStreamTrack) => {
+    if (this.micSwitching) return;
+    const ourStream = window.watchparty.ourStream;
+    if (!ourStream || ourStream.getAudioTracks()[0] !== dead) return;
+
+    const now = Date.now();
+    if (now - this.lastMicAutoReopenAt < 10_000) {
+      this.micOff(true);
+      return;
+    }
+    this.lastMicAutoReopenAt = now;
+
+    const isStale = () =>
+      window.watchparty.ourStream !== ourStream ||
+      ourStream.getAudioTracks()[0] !== dead;
+    let fresh: MediaStream | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+        if (isStale()) return;
+      }
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({
+          audio: micAudio(this.state.micId),
+        });
+      } catch (e) {
+        console.warn("mic reopen failed", e);
+        if (isStale()) return;
+        if (attempt === 1) {
+          this.micOff(true);
+          return;
+        }
+        continue;
+      }
+      if (isStale()) {
+        fresh.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      break;
+    }
+
+    const newTrack = fresh?.getAudioTracks()[0];
+    if (!fresh || !newTrack) {
+      fresh?.getTracks().forEach((track) => track.stop());
+      this.micOff(true);
+      return;
+    }
+    newTrack.enabled = dead.enabled;
+    await Promise.all(
+      Object.entries(window.watchparty.videoPCs).map(([id, pc]) => {
+        if (id === getOrCreateClientId() || pc.connectionState === "closed") {
+          return undefined;
+        }
+        return pc
+          .getSenders()
+          .find((s) => s.track === dead)
+          ?.replaceTrack(newTrack)
+          .catch(() => {});
+      }),
+    );
+    if (isStale()) {
+      fresh.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    ourStream.removeTrack(dead);
+    ourStream.addTrack(newTrack);
+    newTrack.addEventListener("ended", () => this.micEnded(newTrack));
+    this.refreshMics();
+    this.clearDeviceHint("Microphone");
+    this.forceUpdate();
   };
 
   componentDidMount() {
@@ -1190,12 +1263,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     if (stream.getAudioTracks().length) {
       this.refreshMics();
     }
-    // Mic unplugged or revoked by the OS: the track ends and would stream
-    // silence forever behind a green mic icon — show the manual mic-off state
-    // instead (keep listening if someone else is in voice, else leave)
-    stream
-      .getAudioTracks()[0]
-      ?.addEventListener("ended", () => this.micOff(true));
+    // Sleep/resume or a driver stall can end capture while the device is still
+    // present; before this, members stayed listen-only and silent until clicking
+    // the mic.
+    const audioTrack = stream.getAudioTracks()[0];
+    audioTrack?.addEventListener("ended", () => this.micEnded(audioTrack));
     // Same for the camera: unplugging ends the track and the button would keep
     // showing a live camera over a frozen frame for everyone — show the manual
     // camera-off state instead (audio untouched)
