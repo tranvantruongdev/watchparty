@@ -664,11 +664,14 @@
   // broadcast would pause the whole room mid-video. Local play/pause/seek broadcasts
   // stay local while the 1 s tick's ad state (adMode) still says ad and for AD_GAP_MS
   // after it flips to no-ad — the media swap itself arms the emptied window on top.
-  // The window is deliberately bare (no gesture exception): a "Skip ad" click gestures
-  // and the ad teardown fires the same pause, so a gesture pass-through would re-open
-  // the bug through that path.
+  // A trusted gesture made AFTER the tick's flip passes (R16G A): the user saw the
+  // content resume and paused/scrubbed themselves, so their pause/seek is theirs, not
+  // the ad's. The "Skip ad" click still stays blocked: its gesture always PREDATES the
+  // flip (adFreeAt is set when the tick sees it) while the ad teardown fires the same
+  // pause in the gap, so the gestureAt <= adFreeAt side keeps that pause local.
   const AD_GAP_MS = 1500;
-  const adGapBlock = () => adMode || Date.now() - adFreeAt < AD_GAP_MS;
+  const adGapBlock = () =>
+    adMode || (Date.now() - adFreeAt < AD_GAP_MS && gestureAt <= adFreeAt);
   function emit(ev, arg) {
     if (!socket || !socket.connected) return;
     if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || ev === "CMD:buffering")) return;
@@ -921,6 +924,24 @@
   // at load (round 15C), which a gesture must not un-guard into a room-wide broadcast.
   const endTitleReset = (e) => {
     if (!e.isTrusted) return;
+    if (e.type === "keydown") {
+      // typing is not a player action (R16G B): a keydown aimed at an editable target
+      // — the page's chat box, or our own panel's inputs, whose open shadow root the
+      // composed path pierces — must not end the window or refresh gestureAt. The
+      // whole panel is skipped too: a key pressed on its buttons is panel UI, not a
+      // player shortcut. pointerdown keeps ending the window for everything.
+      const p = e.composedPath();
+      if (p.includes(host)) return;
+      const t = p[0];
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      )
+        return;
+    }
     titleResetUntil = 0;
     gestureAt = Date.now();
   };
