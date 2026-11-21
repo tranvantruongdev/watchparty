@@ -665,8 +665,10 @@ export class Room {
       on("CMD:leaveScreenShare", () => {
         allowRelay() && this.leaveScreenSharing(socket);
       });
+      // The slow path (room media empty) re-hosts via cmdHost, so it changes
+      // room media and needs the lock like CMD:host
       on("CMD:resumeShare", (data: unknown) =>
-        this.resumeSharing(socket, data),
+        validateLock() && allowRelay() && this.resumeSharing(socket, data),
       );
       on("CMD:startVBrowser", (data: unknown) => {
         validateLock() && this.startVBrowser(socket, data);
