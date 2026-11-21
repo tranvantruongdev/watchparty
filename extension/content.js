@@ -45,6 +45,8 @@
   let names = {};
   let chat = [];
   let buffering = false; // last CMD:buffering state we reported (true = asked the room to pause)
+  let waitingSince = 0; // when the current 'waiting' stall started (0 = none): the claim waits 1.5 s
+  let gestureAt = 0; // last trusted pointerdown / held-button pointermove / keydown
   let members = null; // roster ids from the last 'roster' event; null = nothing received yet
   let collapsed = false;
   let unread = 0; // chat lines from others that arrived while the panel was collapsed
@@ -731,7 +733,10 @@
       Math.abs(video.currentTime - remoteSeek.t) < 1
     )
       return;
-    if (suppressed("seeking") || Date.now() < titleResetUntil) return;
+    // no suppressed("seeking") gate: a flush timer alive inside a remote apply's suppress
+    // window was armed by a user drag tick that landed there after the apply (applySeek
+    // cancels any older timer), and its position is not the apply's echo — it must go out
+    if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     const t = video.currentTime;
     emit("CMD:seek", t);
@@ -769,6 +774,7 @@
   // remote-apply landing bookkeeping.
   const onSeeked = () => {
     seekEventCount++;
+    onBufferRecover(); // a seek that completed is not a stall: clear an armed 'waiting'
     if (
       remoteSeek &&
       Date.now() - remoteSeek.at < SEEK_TARGET_MS &&
@@ -796,9 +802,17 @@
       remoteSeek = null; // the applied remote seek reached the element: no echo
       return;
     }
-    if (suppressed("seeking")) return;
-    if (Date.now() < titleResetUntil) return;
-    if (ctlBlocked()) return;
+    // Inside a suppress window (remote apply, drift correction) a seek that is not the
+    // echo stays local — a site moving the video on its own is not a room command —
+    // unless the user is scrubbing right now (trusted pointer/key in the last 1 s): then
+    // keep coalescing so the final drag position still goes out (flushSeek re-checks
+    // the title/ctl gates at send, so skipping them here changes nothing)
+    if (suppressed("seeking")) {
+      if (Date.now() - gestureAt > 1000) return;
+    } else {
+      if (Date.now() < titleResetUntil) return;
+      if (ctlBlocked()) return;
+    }
     cancelSeek(); // a newer drag tick replaces the position the old timer would send
     seekTimer = setTimeout(flushSeek, 300);
   };
@@ -858,6 +872,31 @@
     resetReapplied = false;
   };
 
+  // A trusted user gesture (capture, so pointerdown precedes the video event the site's
+  // own handler causes) says a human is acting NOW: the title-reset window exists for
+  // the site's gesture-less restart after a src swap or title hop, so end it — a
+  // play/pause the user makes inside the window must reach the room. The site's own
+  // programmatic restart has no gesture and stays local. A click on "next episode"
+  // still keeps the window: the URL change re-arms it AFTER the gesture. siteResetUntil
+  // is deliberately NOT ended: its window also guards the site's default-rate restore
+  // at load (round 15C), which a gesture must not un-guard into a room-wide broadcast.
+  const endTitleReset = (e) => {
+    if (!e.isTrusted) return;
+    titleResetUntil = 0;
+    gestureAt = Date.now();
+  };
+  document.addEventListener("pointerdown", endTitleReset, true);
+  document.addEventListener("keydown", endTitleReset, true);
+  // a drag's ticks follow pointer moves with a button held: that keeps "the user is
+  // scrubbing" fresh for onSeeking (no stuck flag if the release happens off-window)
+  document.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.isTrusted && e.buttons) gestureAt = Date.now();
+    },
+    true,
+  );
+
   // In-page title change (myUrl moved to a new non-null title while joined): the site
   // starts the next episode at its own defaults (rate 1, position 0) and may swap the
   // video element without firing loadstart/emptied, so the site-reset window is armed
@@ -899,11 +938,18 @@
     buffering = on;
     emit("CMD:buffering", on);
   };
+  // 'waiting' only ARMS a stall — every seek fires 'waiting', so reporting on the event
+  // floods CMD:buffering past the server's 5/s relay cap (a dropped false leaves the
+  // claim stuck) and a 3.2 s load stall pauses the whole room. The 1 s tick below sends
+  // the claim once the stall has lasted > 1.5 s and is still ongoing — the web app's
+  // reportBuffering contract (App.tsx: bufferingSince > 1500 with raw = !paused &&
+  // readyState < 3) that the server's buffer-pause grace assumes.
   const onWaiting = () => {
     if (!joined || roomMedia || adPlaying() || !video || video.paused) return;
-    reportBuffering(true);
+    if (!waitingSince) waitingSince = Date.now();
   };
   const onBufferRecover = () => {
+    waitingSince = 0;
     if (roomMedia || adPlaying()) return;
     reportBuffering(false);
   };
@@ -1057,6 +1103,7 @@
     nudging = false;
     names = {};
     buffering = false;
+    waitingSince = 0;
     members = null;
     typingPeers = {};
     typingActive = false;
@@ -1433,6 +1480,21 @@
       emit("CMD:ts", video.currentTime);
       checkSeekJump();
     } else seenT = null;
+    // the armed 'waiting' becomes a buffering claim only once the stall is > 1.5 s old
+    // and still ongoing (raw = !paused && readyState < 3, the web app's own check);
+    // recoveries report false immediately via onBufferRecover, this is the 1 s tick
+    if (waitingSince) {
+      if (joined && video && !video.paused && !roomMedia && !adPlaying()) {
+        if (video.readyState < 3) {
+          if (Date.now() - waitingSince > 1500) reportBuffering(true);
+        } else {
+          waitingSince = 0;
+          reportBuffering(false);
+        }
+      } else {
+        waitingSince = 0; // paused / room media / ad / left: the stall context is gone
+      }
+    }
     if (++driftCount % DRIFT_TICK_S === 0) driftCheck();
   }, 1000);
 })();

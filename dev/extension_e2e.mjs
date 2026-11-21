@@ -166,6 +166,10 @@ async function isolatedEval(p, expression) {
   if (r.exceptionDetails) throw new Error("isolated eval failed: " + (r.exceptionDetails.exception?.description || r.exceptionDetails.text));
   return r.result.value;
 }
+// a real stall as content.js sees it: 'waiting' with readyState < 3 (run via isolatedEval);
+// UNSTALL restores the element's own readyState and fires the recovery
+const STALL = `(() => { const v = document.querySelector('video'); Object.defineProperty(v, 'readyState', { get: () => 2, configurable: true }); v.dispatchEvent(new Event('waiting')); return true; })()`;
+const UNSTALL = `(() => { const v = document.querySelector('video'); delete v.readyState; v.dispatchEvent(new Event('playing')); return true; })()`;
 
 async function waitFor(fn, timeoutMs, intervalMs = 50) {
   const t0 = Date.now();
@@ -686,21 +690,23 @@ async function main() {
     );
   }
 
-  // j1: a 'waiting' while the room plays reports CMD:buffering true; the server's
-  // armBufferPause grace is 2.5 s, so B pauses ~2.6 s after the report (4 s window)
+  // j1: a real stall while the room plays ('waiting' + readyState < 3, faked in the
+  // world content.js runs in) reports CMD:buffering true once it is > 1.5 s old (the web
+  // app's contract, sent on the 1 s tick); the server's armBufferPause grace is 2.5 s, so
+  // B pauses ~2.6 s after the report (4 s window)
   await ev(A, `document.querySelector('video').play().then(() => true)`);
   ms = await waitFor(async () => (await vstate(B)).paused === false, 2000);
   await sleep(600);
   const j0a = await emits(A);
-  await ev(A, `document.querySelector('video').dispatchEvent(new Event('waiting')); true`);
-  const jTrueMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 1, 1500);
+  await isolatedEval(A, STALL);
+  const jTrueMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 1, 3500);
   ms = await waitFor(async () => (await vstate(B)).paused === true, 4000);
   check(
     "j1a. A 'waiting' while playing -> CMD:buffering true -> server auto-pauses the room -> B paused",
     jTrueMs !== null && ms !== null,
     `true emitted after ${jTrueMs} ms; B paused after ${ms} ms (2.5 s server grace); A ${JSON.stringify(await vstate(A))}`,
   );
-  await ev(A, `document.querySelector('video').dispatchEvent(new Event('playing')); true`);
+  await isolatedEval(A, UNSTALL);
   const jEmits = await ev(A, PANEL(`return h.dataset.emits;`));
   const jRecover = ((await emits(A))["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 2;
   const jIdleA = await emits(A);
@@ -1707,9 +1713,10 @@ async function main() {
   {
     await tNormalize(A, B, C, 34);
     const a0 = await emits(A);
-    await ev(A, `document.querySelector('video').dispatchEvent(new Event('waiting')); true`);
-    const bufMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (a0["CMD:buffering"] || 0) + 1, 1500);
+    await isolatedEval(A, STALL);
+    const bufMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (a0["CMD:buffering"] || 0) + 1, 3500);
     await ev(A, PANEL(`r.getElementById('join').click(); return true;`)); // Leave
+    await isolatedEval(A, `(() => { delete document.querySelector('video').readyState; return true; })()`);
     const leftMs = await waitFor(async () => (await statusOf(A)).ds !== "on", 4000);
     await sleep(3500); // past the server's 2.5 s buffer-pause grace
     const bF = await vstate(B), cF = await vstate(C);
