@@ -34,6 +34,7 @@ import { makeRoomName, makeUserName } from "./utils/moniker.ts";
 import { getStats } from "./utils/getStats.ts";
 import { assertPublicUrl, safeAxiosConfig } from "./utils/ssrf.ts";
 import { hasRoomKey } from "./utils/roomKey.ts";
+import "./utils/redactError.ts";
 
 // Last-resort safety net: a stray rejected promise shouldn't take down every room on this shard.
 // Socket handlers are individually guarded in room.ts, this catches anything we missed.

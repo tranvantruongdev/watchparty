@@ -6,6 +6,12 @@ import {
   YOUTUBE_VIDEO_ID_REGEX,
 } from "./regex.ts";
 import { youtube, youtube_v3 } from "@googleapis/youtube";
+import { hideRequest } from "./redactError.ts";
+
+// gaxios errors carry the request URL with ?key=<YOUTUBE_API_KEY>
+const rethrowHidden = (e: unknown): never => {
+  throw hideRequest(e);
+};
 
 let Youtube = config.YOUTUBE_API_KEY
   ? youtube({
@@ -63,7 +69,7 @@ export const searchYoutube = async (
     type: ["video"],
     maxResults: 25,
     q: query,
-  });
+  }).catch(rethrowHidden);
   return response?.data?.items?.map(mapYoutubeSearchResult) ?? [];
 };
 
@@ -74,7 +80,7 @@ export const youtubePlaylist = async (
     part: ["snippet"],
     playlistId,
     maxResults: 100,
-  });
+  }).catch(rethrowHidden);
   return response?.data?.items?.map(mapYoutubePlaylistResult) ?? [];
 };
 
@@ -98,7 +104,7 @@ export const fetchYoutubeVideo = async (
   const response = await Youtube?.videos.list({
     part: ["snippet", "contentDetails"],
     id: [id],
-  });
+  }).catch(rethrowHidden);
   const top = response?.data?.items?.[0];
   return top ? mapYoutubeListResult(top) : null;
 };

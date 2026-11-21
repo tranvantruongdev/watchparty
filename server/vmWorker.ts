@@ -1,5 +1,6 @@
 import config from "./config.ts";
 import { getBgVMManagers } from "./vm/utils.ts";
+import "./utils/redactError.ts";
 import express from "express";
 import bodyParser from "body-parser";
 
