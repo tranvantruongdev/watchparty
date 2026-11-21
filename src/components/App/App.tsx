@@ -3086,9 +3086,16 @@ export class App extends React.Component<AppProps, AppState> {
           };
           pc.onnegotiationneeded = async () => {
             // Start connection for peer's video
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            this.sendSignalSS(id, { sdp: pc.localDescription }, true);
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              this.sendSignalSS(id, { sdp: pc.localDescription }, true);
+            } catch (e) {
+              // The PC can be closed out from under this offer (share
+              // rebuild, viewer roster change): drop it, the replacement PC
+              // negotiates on its own (same guard as the voice twin)
+              console.warn("share offer aborted", e);
+            }
           };
           // A dropped offer is a permanent black share: the viewer-side retry
           // (round 54) only rebuilds OUR pc when an offer lands, and the

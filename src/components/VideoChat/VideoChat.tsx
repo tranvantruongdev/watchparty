@@ -1321,6 +1321,33 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     this.setState({ deviceHint: "Camera disconnected" });
   };
 
+  // Tile mute / camera-off must actually stop the RTP: an enabled flip alone
+  // keeps the sender streaming silence/black frames (measured round R15L).
+  // replaceTrack(null) sends nothing and needs no renegotiation; unmuting
+  // restores our own track with a same-kind replace. recvonly transceivers
+  // (listen-only) have nothing to send — skip them, and skip a sender already
+  // in the wanted state so roster ticks stay no-ops
+  applyMute = (kind: "audio" | "video", muted: boolean) => {
+    const track = window.watchparty.ourStream
+      ?.getTracks()
+      .find((t) => t.kind === kind);
+    Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
+      if (id === getOrCreateClientId() || pc.connectionState === "closed") {
+        return;
+      }
+      pc.getTransceivers().forEach((t) => {
+        if (t.direction === "recvonly" || t.receiver.track.kind !== kind) {
+          return;
+        }
+        if (muted) {
+          if (t.sender.track) t.sender.replaceTrack(null).catch(() => {});
+        } else if (track && t.sender.track !== track) {
+          t.sender.replaceTrack(track).catch(() => {});
+        }
+      });
+    });
+  };
+
   toggleVideoWebRTC = () => {
     const ourStream = window.watchparty.ourStream;
     const track = ourStream?.getVideoTracks()[0];
@@ -1332,6 +1359,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         return;
       }
       track.enabled = !track.enabled;
+      this.applyMute("video", !track.enabled);
       if (track.enabled) this.clearDeviceHint("Camera");
     }
     this.emitUserMute();
@@ -1383,11 +1411,15 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
             return undefined;
           }
           // A PC that dies mid-swap is replaced by the roster logic anyway
-          return pc
-            .getSenders()
-            .find((s) => s.track === dead)
-            ?.replaceTrack(newTrack)
-            .catch(() => {});
+          // The camera was off at death: applyMute cleared the sender (track
+          // null), so look it up by transceiver kind, not by the dead track
+          const sender = pc
+            .getTransceivers()
+            .find(
+              (t) =>
+                t.receiver.track.kind === "video" && t.direction !== "recvonly",
+            )?.sender;
+          return sender?.replaceTrack(newTrack).catch(() => {});
         }),
       );
       // A camera that died during the awaits already re-set the hint through
@@ -1419,6 +1451,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       return;
     }
     audioTrack.enabled = !audioTrack.enabled;
+    this.applyMute("audio", !audioTrack.enabled);
     if (audioTrack.enabled) this.clearDeviceHint("Microphone");
     this.emitUserMute();
     this.forceUpdate();
@@ -1652,6 +1685,13 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         };
       }
     });
+    // A PC built while muted (new peer, blip/InvalidAccessError rebuild) got
+    // the disabled track on its senders via addTrack above: strip the muted
+    // kinds before the offer goes out, or they stream silence/black again
+    const audio0 = ourStream?.getAudioTracks()[0];
+    if (audio0 && !audio0.enabled) this.applyMute("audio", true);
+    const video0 = ourStream?.getVideoTracks()[0];
+    if (video0 && !video0.enabled) this.applyMute("video", true);
     // PCs exist (or just did): the speaking poll has work again
     this.startSpeakTimer();
   };
