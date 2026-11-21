@@ -700,7 +700,11 @@ export class Room {
         validateLock() && allowRelay() && this.changeController(String(data));
       });
       on("CMD:subtitle", (data: unknown) => {
-        validateLock() && allowRelay() && this.addSubtitles(String(data));
+        // String(null) stored and broadcast "null" as the room's subtitle (R16H)
+        typeof data === "string" &&
+          validateLock() &&
+          allowRelay() &&
+          this.addSubtitles(data);
       });
       on("CMD:lock", async (data: unknown) => {
         // Rate gate before the owner check: a flooded socket must not get a
@@ -791,7 +795,9 @@ export class Room {
         io.of(roomId).emit("REC:extControl", { id: this.extController });
       });
       on("CMD:askHost", () => {
-        socket.emit("REC:host", this.getHostState());
+        // Same per-socket cap as every relaying handler: uncapped, a member
+        // could have the server serialize a 60 KB host state 300x in a burst
+        allowRelay() && socket.emit("REC:host", this.getHostState());
       });
       on("CMD:getRoomState", () => allowRelay() && this.getRoomState(socket));
       on("CMD:setRoomState", async (data: unknown) => {
@@ -811,7 +817,13 @@ export class Room {
         // payload would skip playlistNext's url validation entirely and force
         // the list forward, so it is rejected here; the server's own
         // auto-advance calls playlistNext(null) directly, never this handler.
-        validateLock() && allowRelay() && !!data && this.playlistNext(data);
+        // A non-string ({x:1} -> "[object Object]") skipped the url match
+        // whenever no video was hosted and advanced the list (R16H)
+        typeof data === "string" &&
+          !!data &&
+          validateLock() &&
+          allowRelay() &&
+          this.playlistNext(data);
       });
       on("CMD:playlistAdd", (data: unknown) => {
         validateLock() &&
