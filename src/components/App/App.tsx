@@ -552,6 +552,8 @@ export class App extends React.Component<AppProps, AppState> {
   // the flag — it only shows while ICE is unhappy too (disconnected/failed),
   // which a healthy static screen never is
   shareStallTicks = 0;
+  // A dead viewer copy needs an immediate offer when its replacement is ready.
+  consumerDied = false;
   shareLastFrames?: number;
   // Round 145 tried a frame-gap stall watch here (no presented frame for 10 s
   // => "Sharer's screen paused") and REVERTED it the same round: the static
@@ -1519,7 +1521,7 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on(
       "signalSS",
       async (data: {
-        msg: { ice: any; sdp: any };
+        msg: { ice: any; sdp: any; reoffer?: boolean };
         from: string;
         sharer: boolean;
       }) => {
@@ -1629,6 +1631,16 @@ export class App extends React.Component<AppProps, AppState> {
             pc.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(
               (e) => console.warn("stale share answer dropped", e),
             );
+          }
+        } else if (msg.reoffer && !data.sharer) {
+          // The viewer's fresh PC can wait idle while a frozen sharer's 6 s
+          // watchdog still sees this PC as connected; restart ICE to offer now.
+          if (
+            pc &&
+            pc.signalingState === "stable" &&
+            pc.currentRemoteDescription
+          ) {
+            pc.restartIce();
           }
         }
       },
@@ -3119,6 +3131,7 @@ export class App extends React.Component<AppProps, AppState> {
         }
         pc.close();
         this.consumerConn = undefined;
+        this.consumerDied = true;
         // No copy left to poll: the frozen frame is not coming back until the
         // sharer rebuilds, so flag it now (the poll can no longer flip it)
         this.setState({ shareStalled: true });
@@ -3143,6 +3156,12 @@ export class App extends React.Component<AppProps, AppState> {
           this.localPlay();
         }
       };
+      if (this.consumerDied) {
+        // On resume, the sharer's PC can still look connected while our fresh
+        // PC waits idle (measured: black until 14.3 s, idle since 1.1 s).
+        this.consumerDied = false;
+        this.sendSignalSS(sharer.id, { reoffer: true });
+      }
     }
   };
 
