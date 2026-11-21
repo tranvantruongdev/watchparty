@@ -519,9 +519,20 @@ export class Room {
 
       // "One person drives" mode (CMD:extControl): while a controller is set, only their
       // play / pause / seek / speed commands pass; everyone else's are dropped, web app
-      // members included — one person drives. CMD:ts and CMD:buffering stay open to all
+      // members included — one person drives. CMD:buffering stays open to all; CMD:ts
+      // still records every member's position, but only a member who may drive moves
+      // the room position (mayDriveTs)
       const extCtlAllows = () =>
         !this.extController || socket.clientId === this.extController;
+
+      // Who may move the room position with CMD:ts (videoTS — what joiners and
+      // CMD:askHost get): the same lock + controller gate as CMD:seek. The lock
+      // is a uid that outlives its holder's disconnect (see `lock` above), so
+      // while no connected member carries the lock uid the lock part falls
+      // open — otherwise nobody could move the position again. Everyone's
+      // tsMap entry is still recorded either way (roster / sync heartbeat)
+      const mayDriveTs = () =>
+        (validateLock() || !this.lockHolderPresent()) && extCtlAllows();
 
       // Check if this socket matches the room owner UID
       const validateOwner = async () => {
@@ -624,7 +635,9 @@ export class Room {
       on("CMD:loop", (data: unknown) => {
         validateLock() && allowRelay() && this.setLoop(data);
       });
-      on("CMD:ts", (data: unknown) => this.setTimestamp(socket, data));
+      on("CMD:ts", (data: unknown) =>
+        this.setTimestamp(socket, data, mayDriveTs()),
+      );
       on(
         "CMD:chat",
         (data: unknown) =>
@@ -1448,7 +1461,7 @@ export class Room {
     this.io.of(this.roomId).emit("REC:loop", data);
   };
 
-  private setTimestamp = (socket: Socket, data: unknown) => {
+  private setTimestamp = (socket: Socket, data: unknown, mayDrive: boolean) => {
     if (
       typeof data !== "number" ||
       !Number.isFinite(data) ||
@@ -1462,7 +1475,9 @@ export class Room {
     }
     // This is negative for live streams, so allow overwriting
     // Otherwise, only increment this value to prevent a lagging viewer from holding up the room state
-    if (data < 0 || data > this.videoTS) {
+    // Only a member who may drive moves the room position: in a locked room /
+    // one-driver room a guest's CMD:ts must not set what joiners get
+    if (mayDrive && (data < 0 || data > this.videoTS)) {
       this.videoTS = data;
     }
     // Normalize the received TS based on how long since the last tsMap emit
@@ -2222,6 +2237,23 @@ export class Room {
       msg: "",
     };
     this.addChatMessage(socket, chatMsg);
+  };
+
+  // Whether any connected socket in the room currently carries the lock uid.
+  // The lock outlives its holder (see `lock`), so CMD:ts falls open while
+  // nobody in the room holds it — otherwise a locked room whose holder left
+  // could never move its position again. Unlike the lock, extController is
+  // already cleared in onDisconnect, so it needs no such fallback
+  private lockHolderPresent = (): boolean => {
+    if (!this.lock) {
+      return false;
+    }
+    for (const socket of this.io.of(this.roomId).sockets.values()) {
+      if (socket.uid === this.lock) {
+        return true;
+      }
+    }
+    return false;
   };
 
   private setRoomOwner = async (socket: Socket, raw: unknown) => {
