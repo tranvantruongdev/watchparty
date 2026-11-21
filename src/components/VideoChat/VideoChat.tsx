@@ -1387,6 +1387,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       track.enabled = !track.enabled;
       this.applyMute("video", !track.enabled);
       if (track.enabled) this.clearDeviceHint("Camera");
+    } else {
+      // Listening, no capture: a camera-on click here is the user's latest ask,
+      // so the next mic-on must not restore a camera-off from before (R16J)
+      this.keepCameraOff = false;
     }
     this.emitUserMute();
     this.forceUpdate();
@@ -2125,6 +2129,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                         transform: `scaleX(${p.id === selfId ? "-1" : "1"})`,
                       }}
                       autoPlay
+                      // iPhone plays a <video> without playsinline only in its
+                      // native fullscreen player: every peer tile start took
+                      // over the screen, and the muted self tile never
+                      // autoplayed (R16I)
+                      playsInline
                       data-id={p.id}
                     />
                   ) : (
