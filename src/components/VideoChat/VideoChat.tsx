@@ -219,6 +219,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // that starts on a recvonly transceiver (they were listening, then opened
   // their mic) arrives with no stream of its own
   remoteStreams: Record<string, MediaStream> = {};
+  elStreams: Record<string, MediaStream> = {};
   // Who is talking: clientId -> last poll where their incoming audio level
   // was above the speaking threshold (see pollSpeaking)
   speakSeen: { [id: string]: number } = {};
@@ -373,6 +374,33 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     Object.keys(window.watchparty.videoRefs).forEach(this.applyVoiceOutput);
   };
 
+  // Keep a dead camera track from holding voice playback at its first frame
+  syncElementStream = (id: string) => {
+    const stream = this.remoteStreams[id];
+    if (!stream) {
+      return undefined;
+    }
+    const elementStream = (this.elStreams[id] ||= new MediaStream());
+    const cameraOff = this.props.participants.find(
+      (p) => p.id === id,
+    )?.isCameraOff;
+    const tracks: MediaStreamTrack[] = stream.getAudioTracks();
+    if (!cameraOff) {
+      tracks.push(...stream.getVideoTracks().filter((track) => !track.muted));
+    }
+    elementStream.getTracks().forEach((track) => {
+      if (!tracks.includes(track)) {
+        elementStream.removeTrack(track);
+      }
+    });
+    tracks.forEach((track) => {
+      if (!elementStream.getTracks().includes(track)) {
+        elementStream.addTrack(track);
+      }
+    });
+    return elementStream;
+  };
+
   // Show the peer's stream on their element (which can mount after the track
   // arrives, or remount) and play it. Autoplay with sound is refused until
   // the page has had a click, so retry on the next click or key press
@@ -382,11 +410,15 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     if (!el || !stream) {
       return;
     }
+    const elementStream = this.syncElementStream(id);
+    if (!elementStream) {
+      return;
+    }
     // The chosen voice volume rides on every (re)mount of the element; set
     // before the stream so nothing plays unmuted for a moment
     this.applyVoiceOutput(id);
-    if (el.srcObject !== stream) {
-      el.srcObject = stream;
+    if (el.srcObject !== elementStream) {
+      el.srcObject = elementStream;
     }
     if (el.paused) {
       el.play().catch(() => {
@@ -780,16 +812,18 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   }
 
   componentDidUpdate(prevProps: VideoChatProps) {
+    const rosterChanged =
+      this.props.rosterUpdateTS !== prevProps.rosterUpdateTS;
     if (this.props.deaf !== prevProps.deaf) {
       // Headphones on/off: element mute and the boosted gain follow
       this.applyAllVoiceOutputs();
     }
-    if (
-      this.props.rosterUpdateTS !== prevProps.rosterUpdateTS ||
-      this.props.deaf !== prevProps.deaf
-    ) {
+    if (rosterChanged || this.props.deaf !== prevProps.deaf) {
       this.autoListen();
       this.updateWebRTC();
+      if (rosterChanged) {
+        Object.keys(this.remoteStreams).forEach(this.attach);
+      }
     }
   }
 
@@ -849,6 +883,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       videoPCs[key].close();
       delete videoPCs[key];
       delete this.remoteStreams[key];
+      delete this.elStreams[key];
       this.dropVoiceNode(key);
     });
   };
@@ -1180,6 +1215,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       });
     window.watchparty.ourStream = undefined;
     this.remoteStreams = {};
+    this.elStreams = {};
     this.dropAllVoiceNodes();
     Object.keys(videoPCs).forEach((key) => {
       videoPCs[key].close();
@@ -1331,6 +1367,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         value.close();
         delete videoPCs[key];
         delete this.remoteStreams[key];
+        delete this.elStreams[key];
         this.dropVoiceNode(key);
         // Their tile unmounts with them; without this the detached <video>
         // lingers in videoRefs forever (applyAllVoiceOutputs keeps visiting it)
@@ -1394,6 +1431,15 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
           if (!stream.getTracks().includes(event.track)) {
             stream.addTrack(event.track);
           }
+          if (event.track.kind === "video") {
+            const attachWhenAvailable = () => {
+              if (videoPCs[id] === pc) {
+                this.attach(id);
+              }
+            };
+            event.track.addEventListener("mute", attachWhenAvailable);
+            event.track.addEventListener("unmute", attachWhenAvailable);
+          }
           this.attach(id);
         };
         // Transport failed (permanently; a temporary drop would be "disconnected"):
@@ -1409,6 +1455,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
           pc.close();
           delete videoPCs[id];
           delete this.remoteStreams[id];
+          delete this.elStreams[id];
           this.dropVoiceNode(id);
           this.updateWebRTC();
           // The peer's PC may have died so quietly that it never renegotiates
