@@ -925,6 +925,9 @@
       seenT = null; // the media reset: the tick poll must not read the jump as a seek
       cancelSeek(); // a pending drag broadcast describes the old media
       markSiteReset();
+      // the restart after a swap (autoplay fires a fresh 'play' at 0) must not drag
+      // the room to the new media's start: same window a title hop arms
+      titleResetUntil = Date.now() + SITE_RESET_MS;
     },
     loadedmetadata: () => {
       markSiteReset();
