@@ -251,6 +251,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   teardownSeq = 0;
   // A camera reopen is in flight (serialize reopenCamera — see the guard there)
   cameraReopening = false;
+  // The camera was off at the last mic-off teardown: the next mic-on re-capture
+  // starts camera-off too (R16F), or the camera the user turned off would come
+  // back. stopWebRTC (a real Leave) resets it
+  keepCameraOff = false;
   // Our root element, for the People-closed check below (round 121)
   rootEl: HTMLDivElement | null = null;
   // Watches the root's width so tiles can two-up on narrow panels (round 167)
@@ -1130,6 +1134,16 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
+    // The camera was off when the last mic-off tore the capture down: the
+    // fresh capture starts camera-off too. Disabled here, the fresh-join
+    // branch's PCs strip the video at the end of updateWebRTC
+    // (muted-at-build); the listening branch clears its senders after the
+    // addTrack loop below
+    if (this.keepCameraOff) {
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = false;
+      });
+    }
     const ourStream = window.watchparty.ourStream;
     if (!ourStream) {
       window.watchparty.ourStream = stream;
@@ -1181,6 +1195,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         }
       });
     });
+    // keepCameraOff disabled the fresh video track above: the senders got it
+    // in the loop, so clear them again — the transceiver stays sendrecv but
+    // sends nothing, and a later tile camera-on restores the track on every PC
+    if (this.keepCameraOff) this.applyMute("video", true);
     this.emitUserMute();
     this.forceUpdate();
   };
@@ -1219,8 +1237,13 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         MIC_NOTICE_MS,
       );
     }
+    // The camera's state before the capture goes away: the next mic-on keeps
+    // it (the user never asked the camera back). Computed even on the leave
+    // path — stopWebRTC resets the field, so it is set again after it
+    const cameraOff = ourStream?.getVideoTracks()[0]?.enabled === false;
     if (!ourStream || !others || this.props.deaf) {
       this.stopWebRTC();
+      this.keepCameraOff = cameraOff;
       return;
     }
     Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
@@ -1238,6 +1261,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       track.stop();
       ourStream.removeTrack(track);
     });
+    this.keepCameraOff = cameraOff;
     this.emitUserMute();
     this.forceUpdate();
   };
@@ -1292,6 +1316,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   };
 
   stopWebRTC = () => {
+    // A real Leave starts the next join fresh: no camera-off carry-over
+    this.keepCameraOff = false;
     this.teardownSeq++;
     const ourStream = window.watchparty.ourStream;
     const videoPCs = window.watchparty.videoPCs;

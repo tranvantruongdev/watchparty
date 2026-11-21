@@ -4334,8 +4334,14 @@ export class App extends React.Component<AppProps, AppState> {
     const inVoice = this.state.participants.find(
       (p) => p.id === getOrCreateClientId(),
     )?.isVideoChat;
-    const talking =
-      inVoice && !!window.watchparty.ourStream?.getAudioTracks().length;
+    // Key on the track's enabled state, not its presence: a tile-muted mic
+    // still has a track, and this button said "Turn off mic" there — clicking
+    // it then tore the whole capture down, camera included (R16F). With a
+    // muted track it unmutes in place; no track means the mic-on path
+    const audio = inVoice
+      ? window.watchparty.ourStream?.getAudioTracks()[0]
+      : undefined;
+    const talking = !!audio?.enabled;
     const deaf = this.state.voiceDeaf;
     return (
       <>
@@ -4346,7 +4352,9 @@ export class App extends React.Component<AppProps, AppState> {
           onClick={() =>
             talking
               ? this.videoChatRef.current?.micOff()
-              : this.videoChatRef.current?.setupWebRTC()
+              : audio
+                ? this.videoChatRef.current?.toggleAudioWebRTC()
+                : this.videoChatRef.current?.setupWebRTC()
           }
         >
           <IconMicrophone />
