@@ -1,5 +1,5 @@
 import React, { useContext, useState } from "react";
-import { Modal, Button, Table, Checkbox } from "@mantine/core";
+import { Modal, Button, Table, Checkbox, Alert } from "@mantine/core";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { MetadataContext } from "../../MetadataContext";
 import { isClientTranscodeSupported } from "../../utils/clientTranscode";
@@ -15,6 +15,11 @@ export const FileShareModal = (props: {
   const { closeModal } = props;
   const [convert, setConvert] = useState(false);
   const canConvert = isClientTranscodeSupported();
+  // A file reaches the room only through the video element's captureStream():
+  // iPhone/iPad browsers (all WebKit) and Safari don't have it, Firefox only the
+  // prefixed mozCaptureStream — there the share played the file locally and then
+  // threw, with nothing shared and nothing shown
+  const canShareFile = "captureStream" in HTMLMediaElement.prototype;
   const subscribeButton = <SubscribeButton />;
   return (
     <Modal
@@ -26,6 +31,13 @@ export const FileShareModal = (props: {
       centered
     >
       <div>You're about to share a file from your device.</div>
+      {!canShareFile && (
+        <Alert color="red" my="sm">
+          This browser can't share a file. Open WatchParty in Chrome or Edge on
+          a computer to share one. iPhone/iPad browsers can't share files at
+          all; you can still watch what others share.
+        </Alert>
+      )}
       <Table striped>
         <Table.Thead>
           <Table.Tr>
@@ -65,6 +77,7 @@ export const FileShareModal = (props: {
             <Table.Td></Table.Td>
             <Table.Td>
               <Button
+                disabled={!canShareFile}
                 onClick={() => {
                   props.startFileShare(false, { convert });
                   props.closeModal();
@@ -77,6 +90,7 @@ export const FileShareModal = (props: {
               {context.isSubscriber ? (
                 <Button
                   color="orange"
+                  disabled={!canShareFile}
                   onClick={() => {
                     props.startFileShare(true, { convert });
                     props.closeModal();
