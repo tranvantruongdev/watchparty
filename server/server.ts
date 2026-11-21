@@ -306,11 +306,19 @@ app.get("/downloadSubtitles", async (req, res) => {
     res.status(403).json({ error: "roomKey" });
     return;
   }
+  // The client sends the numeric file id of a search result; anything else
+  // (?file_id[]=…, missing) only spent an OpenSubtitles call on a 4xx
+  const fileId = req.query.file_id;
+  if (typeof fileId !== "string" || !/^\d{1,12}$/.test(fileId)) {
+    res.status(400).json({ error: "invalid file_id" });
+    return;
+  }
   // Request the URL from OS
   try {
     const urlResp = await axios<{ link: string }>({
       url: "https://api.opensubtitles.com/api/v1/download",
       method: "POST",
+      timeout: 15000,
       headers: {
         "User-Agent": "watchparty v1",
         "Api-Key": config.OPENSUBTITLES_KEY,
@@ -319,7 +327,7 @@ app.get("/downloadSubtitles", async (req, res) => {
         // 'Authorization': 'Bearer ' + config.OPENSUBTITLES_KEY,
       },
       data: {
-        file_id: req.query.file_id,
+        file_id: Number(fileId),
         // sub_format: 'srt',
       },
     });
@@ -330,7 +338,11 @@ app.get("/downloadSubtitles", async (req, res) => {
       return;
     }
     // Cache the contents in Redis (longer retention)
+    // A URL from a third party's response: same guards as /proxy, and a
+    // subtitle file is far below 5 MB (uploads are capped at 1 MB)
     const subResp = await axios.get(urlResp.data.link, {
+      ...safeAxiosConfig,
+      maxContentLength: 5 * 1024 * 1024,
       responseType: "arraybuffer",
     });
     const data = subResp.data;
