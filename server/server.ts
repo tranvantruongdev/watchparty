@@ -12,7 +12,7 @@ import https from "node:https";
 import http from "node:http";
 import { Server } from "socket.io";
 import { searchYoutube, youtubePlaylist } from "./utils/youtube.ts";
-import { Room } from "./room.ts";
+import { isServerOnlyMedia, Room } from "./room.ts";
 import { redis, redisCount } from "./utils/redis.ts";
 import {
   getCustomerByUid,
@@ -574,7 +574,9 @@ app.post("/createRoom", async (req, res) => {
     const decoded = await validateUserToken(req.body?.uid, req.body?.token);
     newRoom.creator = decoded?.email;
     const preload =
-      typeof req.body?.video === "string" ? req.body.video.slice(0, 20000) : "";
+      typeof req.body?.video === "string" && !isServerOnlyMedia(req.body.video)
+        ? req.body.video.slice(0, 20000)
+        : "";
     if (preload) {
       redisCount("createRoomPreload");
       newRoom.video = preload;

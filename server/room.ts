@@ -63,6 +63,18 @@ const SHARER_GRACE_MS = 10_000;
 // Overridable via env for a fast leak test (r161 measured with 5000)
 const SESSION_TTL_MS = Number(config.SESSION_TTL_MS) || 7 * 24 * 60 * 60 * 1000;
 
+// Media values only the server sets: vbrowser:// carries a VM's password and
+// host (startVBrowser), screenshare:// / fileshare:// name the sharer
+// (joinScreenSharing / resumeSharing). Sent by a client (CMD:host, playlist,
+// createRoom preload) they pointed every member's player at a host of the
+// sender's choosing, or made another member the "sharer"
+export const isServerOnlyMedia = (media: string) =>
+  /^(vbrowser|screenshare|fileshare):\/\//.test(media);
+
+// Positions (CMD:ts / CMD:seek) beyond ~115 days are garbage: CMD:ts only
+// ever raises videoTS, so one 1e308 froze every late joiner at the end
+const MAX_MEDIA_SECONDS = 1e7;
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -421,7 +433,8 @@ export class Room {
         // with it) instead of leaving it to the reconnecting socket
         this.socketIdMap[clientId] = socket.id;
         const pageId = socket.handshake.query?.pageId;
-        if (typeof pageId === "string") {
+        // Relayed in every roster frame; the client's id is ~10 chars
+        if (typeof pageId === "string" && pageId.length <= 64) {
           this.pageIdMap[clientId] = pageId;
         } else {
           delete this.pageIdMap[clientId];
@@ -567,9 +580,11 @@ export class Room {
         }
       });
       on("CMD:host", (data: unknown) => {
-        validateLock() &&
+        // String(undefined) used to host the literal "undefined"
+        typeof data === "string" &&
+          validateLock() &&
           allowRelay() &&
-          this.startHosting(socket, String(data));
+          this.startHosting(socket, data);
       });
       on("CMD:play", () => {
         validateLock() && extCtlAllows() && allowRelay() && this.playVideo(socket);
@@ -1033,6 +1048,13 @@ export class Room {
     }
     const chatWithTime: ChatMessage = {
       ...chatMsg,
+      // Command lines (host, playlistAdd) carry the media URL, up to 50 KB;
+      // chat text is capped at 2,000 (isValidChatMessage), so are they —
+      // 100 of them made every joiner's chatinit ~5 MB
+      msg:
+        typeof chatMsg.msg === "string"
+          ? chatMsg.msg.slice(0, 2000)
+          : chatMsg.msg,
       timestamp: new Date().toISOString(),
       videoTS: socket?.clientId ? this.tsMap[socket.clientId] : undefined,
     };
@@ -1058,8 +1080,10 @@ export class Room {
   private changeUserPicture = (socket: Socket, data: string) => {
     // Real pictures are https Gravatar / Google-account URLs (getUserImage in
     // src/utils/utils.ts); anything else (javascript:, data:, junk) has no use
-    // in <Avatar src> and React warns it will block javascript: URLs
-    if (data.length > 10000 || !/^https?:\/\/\S+$/i.test(data)) {
+    // in <Avatar src> and React warns it will block javascript: URLs. Those
+    // sources are all https; a plain-http URL only served as a beacon that
+    // logs every member's IP, so it is refused too
+    if (data.length > 2048 || !/^https:\/\/\S+$/i.test(data)) {
       return;
     }
     this.pictureMap[socket.clientId] = data;
@@ -1072,6 +1096,9 @@ export class Room {
         "errorMessage",
         `Can't update the video while vbrowser is running`,
       );
+      return;
+    }
+    if (isServerOnlyMedia(data)) {
       return;
     }
     // localcopy:// is synthesized by our own client and carries only the file
@@ -1150,7 +1177,14 @@ export class Room {
   };
 
   public playlistAdd = async (socket: Socket | null, data: string) => {
-    if (typeof data !== "string" || !data || data.length > 20000) {
+    // Every change re-broadcasts the whole list: 500 items x 20 KB made each
+    // frame ~10 MB. 4 KB still fits long signed URLs and magnet links
+    if (
+      typeof data !== "string" ||
+      !data ||
+      data.length > 4096 ||
+      isServerOnlyMedia(data)
+    ) {
       return;
     }
     // ponytail: cap the playlist so one spammy guest can't grow it (and every
@@ -1281,7 +1315,11 @@ export class Room {
   private seekVideo = (socket: Socket, data: unknown) => {
     // Must be a real number: Number(null), Number("") etc. would silently become 0, and
     // NaN/Infinity serialize to null and break clients
-    if (typeof data !== "number" || !Number.isFinite(data)) {
+    if (
+      typeof data !== "number" ||
+      !Number.isFinite(data) ||
+      Math.abs(data) > MAX_MEDIA_SECONDS
+    ) {
       return;
     }
     // While the room is switching videos, a seek still in flight belongs to the
@@ -1330,7 +1368,11 @@ export class Room {
   };
 
   private setTimestamp = (socket: Socket, data: unknown) => {
-    if (typeof data !== "number" || !Number.isFinite(data)) {
+    if (
+      typeof data !== "number" ||
+      !Number.isFinite(data) ||
+      Math.abs(data) > MAX_MEDIA_SECONDS
+    ) {
       return;
     }
     // Prevent lagging TS updates from the old video from messing up our timestamps
