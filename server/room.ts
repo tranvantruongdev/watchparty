@@ -911,6 +911,8 @@ export class Room {
       clearInterval(this.tsInterval);
     }
     this.clearBufferPause();
+    // A pending trailing map send would re-create the namespace via io.of()
+    Object.values(this.mapEmitTimers).forEach((t) => clearTimeout(t));
     // Unregister the namespace so it doesn't linger (or get duplicated on reload)
     this.io._nsps.delete(this.roomId);
   };
@@ -1092,7 +1094,7 @@ export class Room {
       return;
     }
     this.nameMap[socket.clientId] = data;
-    this.io.of(this.roomId).emit("REC:nameMap", this.nameMap);
+    this.emitMap("REC:nameMap");
   };
 
   private changeUserPicture = (socket: Socket, data: string) => {
@@ -1105,7 +1107,32 @@ export class Room {
       return;
     }
     this.pictureMap[socket.clientId] = data;
-    this.io.of(this.roomId).emit("REC:pictureMap", this.pictureMap);
+    this.emitMap("REC:pictureMap");
+  };
+
+  // Each name/picture change re-sends the WHOLE map to every member, and the
+  // relay cap is per socket: 4 sockets renaming made 120 full-map frames in
+  // 1.4 s. Send at most one per map per 500 ms per room — the first at once,
+  // later ones folded into a trailing send that carries the latest state
+  private mapEmitAt: Record<string, number> = {};
+  private mapEmitTimers: Record<string, NodeJS.Timeout | undefined> = {};
+  private emitMap = (event: "REC:nameMap" | "REC:pictureMap") => {
+    if (this.mapEmitTimers[event]) {
+      return;
+    }
+    const fire = () => {
+      this.mapEmitTimers[event] = undefined;
+      this.mapEmitAt[event] = Date.now();
+      this.io
+        .of(this.roomId)
+        .emit(event, event === "REC:nameMap" ? this.nameMap : this.pictureMap);
+    };
+    const wait = (this.mapEmitAt[event] ?? 0) + 500 - Date.now();
+    if (wait <= 0) {
+      fire();
+    } else {
+      this.mapEmitTimers[event] = setTimeout(fire, wait);
+    }
   };
 
   private startHosting = async (socket: Socket, data: string) => {
