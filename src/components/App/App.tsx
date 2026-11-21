@@ -97,6 +97,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { InviteButton } from "../InviteButton/InviteButton";
+import { NetflixButton } from "../Modal/NetflixSteps";
+import { bookmarkletUsable } from "../../utils/bookmarklet";
 import type WebTorrent from "webtorrent";
 import type Hls from "hls.js";
 import { type MediaPlayerClass } from "dashjs";
@@ -5372,6 +5374,11 @@ export class App extends React.Component<AppProps, AppState> {
                               style={glassCardStyle}
                             >
                               Pick something to watch above.
+                              {bookmarkletUsable() && (
+                                <div style={{ marginTop: 8 }}>
+                                  <NetflixButton />
+                                </div>
+                              )}
                             </Alert>
                           )}
                           {!this.state.loading &&
