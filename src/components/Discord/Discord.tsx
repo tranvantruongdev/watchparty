@@ -1,5 +1,5 @@
 import { useContext, useEffect, useState } from "react";
-import { serverPath } from "../../utils/utils";
+import { authHeaders, serverPath } from "../../utils/utils";
 import { MetadataContext } from "../../MetadataContext";
 
 export const Discord = () => {
@@ -12,19 +12,13 @@ export const Discord = () => {
         fragment.get("access_token"),
         fragment.get("token_type"),
       ];
-      const token = await user?.getIdToken();
       const authResponse = await fetch(serverPath + "/linkAccount", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(await authHeaders(user)),
         },
-        body: JSON.stringify({
-          uid: user?.uid,
-          kind: "discord",
-          token: token,
-          tokenType,
-          accessToken,
-        }),
+        body: JSON.stringify({ kind: "discord", tokenType, accessToken }),
       });
       if (authResponse.status !== 200) {
         const body = await authResponse.json();

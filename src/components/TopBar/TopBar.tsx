@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import {
+  authHeaders,
   serverPath,
   getUserImage,
   softWhite,
@@ -45,18 +46,15 @@ export async function createRoom(
   openNewTab: boolean | undefined,
   video: string = "",
 ) {
-  const uid = user?.uid;
-  const token = await user?.getIdToken();
   let response: Response;
   try {
     response = await fetch(serverPath + "/createRoom", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(await authHeaders(user)),
       },
       body: JSON.stringify({
-        uid,
-        token,
         video,
         roomKey: getRoomKey(),
       }),
@@ -200,22 +198,19 @@ export class ListRoomsButton extends React.Component<{}> {
 
   refreshRooms = async () => {
     if (this.context.user) {
-      const token = await this.context.user.getIdToken();
-      const response = await fetch(
-        serverPath + `/listRooms?uid=${this.context.user?.uid}&token=${token}`,
-      );
+      const response = await fetch(serverPath + "/listRooms", {
+        headers: await authHeaders(this.context.user),
+      });
       this.setState({ rooms: await response.json() });
     }
   };
 
   deleteRoom = async (roomId: string) => {
     if (this.context.user) {
-      const token = await this.context.user.getIdToken();
-      await fetch(
-        serverPath +
-          `/deleteRoom?uid=${this.context.user?.uid}&token=${token}&roomId=${roomId}`,
-        { method: "DELETE" },
-      );
+      await fetch(serverPath + `/deleteRoom?roomId=${roomId}`, {
+        method: "DELETE",
+        headers: await authHeaders(this.context.user),
+      });
       this.setState({
         rooms: this.state.rooms.filter((room) => room.roomId !== roomId),
       });

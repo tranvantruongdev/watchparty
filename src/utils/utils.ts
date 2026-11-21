@@ -277,6 +277,17 @@ export const serverPath =
       : window.location.host
   }`;
 
+// Send the Firebase ID token in the Authorization header instead of a
+// URL/body param: query strings land in access logs, headers don't
+// (server requestIdToken reads "Bearer" first). Empty when signed out, so
+// callers can spread it into their headers unconditionally.
+export async function authHeaders(
+  user: firebase.User | null | undefined,
+): Promise<Record<string, string>> {
+  const token = await user?.getIdToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function getMediaPathResults(
   mediaPath: string,
   query: string,

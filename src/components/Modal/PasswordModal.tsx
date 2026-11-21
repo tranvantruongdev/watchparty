@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useEffect } from "react";
 import { Modal, PasswordInput, ActionIcon } from "@mantine/core";
 import { IconKey } from "@tabler/icons-react";
-import { addAndSavePassword, serverPath } from "../../utils/utils";
+import { addAndSavePassword, authHeaders, serverPath } from "../../utils/utils";
 import { MetadataContext } from "../../MetadataContext";
 
 export const PasswordModal = ({ roomId }: { roomId: string }) => {
@@ -17,10 +17,9 @@ export const PasswordModal = ({ roomId }: { roomId: string }) => {
     const update = async () => {
       // Make sure we have the password for this room if we're the owner
       if (user) {
-        const token = await user.getIdToken();
-        const response = await fetch(
-          serverPath + `/listRooms?uid=${user.uid}&token=${token}`,
-        );
+        const response = await fetch(serverPath + "/listRooms", {
+          headers: await authHeaders(user),
+        });
         if (response.ok) {
           const rooms = await response.json();
           const target = rooms.find((r: any) => r.roomId === roomId);

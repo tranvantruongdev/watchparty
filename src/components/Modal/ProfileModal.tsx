@@ -1,7 +1,7 @@
 import React from "react";
 import { Modal, Button, Avatar, HoverCard, Text } from "@mantine/core";
 import { getFirebase } from "../../firebaseLazy";
-import { serverPath } from "../../utils/utils";
+import { authHeaders, serverPath } from "../../utils/utils";
 import { ManageSubButton } from "../SubscribeButton/SubscribeButton";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
@@ -29,15 +29,9 @@ export class ProfileModal extends React.Component<{
   };
 
   async componentDidMount() {
-    const token = (await this.context.user?.getIdToken()) ?? "";
-    const response = await fetch(
-      serverPath +
-        "/linkAccount?" +
-        new URLSearchParams({
-          uid: this.context.user?.uid ?? "",
-          token,
-        }),
-    );
+    const response = await fetch(serverPath + "/linkAccount", {
+      headers: await authHeaders(this.context.user),
+    });
     const data: LinkAccount[] = await response.json();
     const linkedDiscord = data.find((d) => d.kind === "discord");
     this.setState({ linkedDiscord });
@@ -81,13 +75,9 @@ export class ProfileModal extends React.Component<{
   };
 
   deleteAccount = async () => {
-    const token = await this.context.user?.getIdToken();
     await fetch(serverPath + "/deleteAccount", {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ uid: this.context.user?.uid, token }),
+      headers: await authHeaders(this.context.user),
     });
     window.location.reload();
   };
@@ -104,17 +94,13 @@ export class ProfileModal extends React.Component<{
   };
 
   deleteDiscord = async () => {
-    const token = await this.context.user?.getIdToken();
     await fetch(serverPath + "/linkAccount", {
       method: "DELETE",
       headers: {
         "Content-Type": "application/json",
+        ...(await authHeaders(this.context.user)),
       },
-      body: JSON.stringify({
-        uid: this.context.user?.uid,
-        token,
-        kind: "discord",
-      }),
+      body: JSON.stringify({ kind: "discord" }),
     });
     window.location.reload();
   };

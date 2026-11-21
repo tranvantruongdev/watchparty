@@ -4,7 +4,7 @@ import { SignInButton } from "../TopBar/TopBar";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
 import { IconBrandStripeFilled, IconCheck } from "@tabler/icons-react";
-import { serverPath } from "../../utils/utils";
+import { authHeaders, serverPath } from "../../utils/utils";
 
 export class SubscribeModal extends React.Component<{
   closeSubscribe: () => void;
@@ -20,12 +20,9 @@ export class SubscribeModal extends React.Component<{
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          ...(await authHeaders(user)),
         },
-        body: JSON.stringify({
-          uid: user?.uid,
-          token: await user?.getIdToken(),
-          return_url: window.location.href,
-        }),
+        body: JSON.stringify({ return_url: window.location.href }),
       });
       const json = await resp.json();
       if (json?.url) {

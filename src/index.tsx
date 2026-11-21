@@ -8,6 +8,7 @@ import { BrowserRouter, Route } from "react-router-dom";
 import { TopBar } from "./components/TopBar/TopBar";
 import type firebase from "firebase/compat/app";
 import {
+  authHeaders,
   getRoomKey,
   loadIceServers,
   serverPath,
@@ -92,10 +93,9 @@ class WatchParty extends React.Component {
         if (user) {
           // console.log(user);
           this.setState({ user });
-          const token = await user.getIdToken();
-          const response = await window.fetch(
-            serverPath + `/metadata?uid=${user.uid}&token=${token}`,
-          );
+          const response = await window.fetch(serverPath + "/metadata", {
+            headers: await authHeaders(user),
+          });
           const data = await response.json();
           this.setState({
             isSubscriber: data.isSubscriber,

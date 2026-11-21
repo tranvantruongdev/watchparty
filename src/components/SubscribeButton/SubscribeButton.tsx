@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import { Button } from "@mantine/core";
-import { serverPath } from "../../utils/utils";
+import { authHeaders, serverPath } from "../../utils/utils";
 import { MetadataContext } from "../../MetadataContext";
 import { IconStarFilled, IconTool } from "@tabler/icons-react";
 
@@ -53,12 +53,9 @@ export const ManageSubButton = ({}: {}) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(await authHeaders(user)),
       },
-      body: JSON.stringify({
-        uid: user?.uid,
-        token: await user?.getIdToken(),
-        return_url: window.location.href,
-      }),
+      body: JSON.stringify({ return_url: window.location.href }),
     });
     const session = await resp.json();
     console.log(session);
