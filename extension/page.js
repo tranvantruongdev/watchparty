@@ -63,6 +63,17 @@
       const m = loc.pathname.match(/\/(?:gp\/video\/)?detail\/[a-z0-9.-]+/i);
       return m ? loc.origin + m[0] : loc.origin + loc.pathname;
     }
+    if (loc.hostname.endsWith("vimeo.com")) {
+      // watch pages: vimeo.com/<digits> (also .../<digits>/<hash> for unlisted) and
+      // player.vimeo.com/video/<digits> opened as a top-level page — both canonicalize
+      // to https://vimeo.com/<digits> so the two players share one title; query/hash and
+      // non-title paths (home, channels, upload) are null like the other sites
+      const m =
+        loc.hostname === "player.vimeo.com"
+          ? loc.pathname.match(/^\/video\/(\d+)/)
+          : loc.pathname.match(/^\/(\d+)(?:\/|$)/);
+      return m ? `https://vimeo.com/${m[1]}` : null;
+    }
     return loc.origin + loc.pathname;
   };
   window.__wpExtPageCanon = canon; // tests only

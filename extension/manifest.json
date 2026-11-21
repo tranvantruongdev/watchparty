@@ -12,6 +12,8 @@
         "https://www.disneyplus.com/*",
         "https://www.primevideo.com/*",
         "https://www.amazon.com/gp/video/*",
+        "https://vimeo.com/*",
+        "https://player.vimeo.com/video/*",
         "http://localhost/dev/*"
       ],
       "js": ["vendor/socket.io.min.js", "content.js", "ui.js"],
@@ -24,6 +26,8 @@
         "https://www.disneyplus.com/*",
         "https://www.primevideo.com/*",
         "https://www.amazon.com/gp/video/*",
+        "https://vimeo.com/*",
+        "https://player.vimeo.com/video/*",
         "http://localhost/dev/*"
       ],
       "js": ["page.js"],
