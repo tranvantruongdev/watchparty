@@ -46,6 +46,13 @@ app.post("/assignVM", async (req, res) => {
 });
 
 app.post("/releaseVM", async (req, res) => {
+  // The id reaches provider API URLs and, for Docker, a shell command over SSH
+  // (docker rm -fv <id>). Real ids are hex (Docker), numeric (Hetzner, DO) or
+  // UUIDs (Scaleway); anything else could inject a command
+  if (req.body.id && !/^[A-Za-z0-9-]{1,64}$/.test(String(req.body.id))) {
+    res.status(400).end();
+    return;
+  }
   try {
     const pool =
       vmManagers[
