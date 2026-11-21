@@ -647,6 +647,15 @@
   let roomMedia = "";
   const PLAYBACK = ["CMD:play", "CMD:pause", "CMD:seek", "CMD:playbackRate", "CMD:ts"];
   const adPlaying = () => !!document.querySelector(AD_SEL);
+  // A hidden tab's local play/pause/seek/rate changes are the site's or the browser's
+  // (Chromium pauses a muted background video on hide and re-pauses every play
+  // applied while hidden — broadcasting those re-paused the room on each resume), so
+  // they stay local; remote applies are masked and drift correction fixes our
+  // position. A Picture-in-Picture window is the user watching and controlling, so
+  // it is never treated as hidden. ponytail: media keys used on a hidden tab without
+  // PiP stay local too; tell them apart if users ask for it.
+  const tabHidden = () =>
+    document.visibilityState === "hidden" && !document.pictureInPictureElement;
   function emit(ev, arg) {
     if (!socket || !socket.connected) return;
     if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || ev === "CMD:buffering")) return;
@@ -748,6 +757,7 @@
     }
   };
   const onPlay = () => {
+    if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     if (suppressed("play") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
@@ -762,6 +772,7 @@
     }
   };
   const onPause = () => {
+    if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     if (suppressed("pause") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
@@ -810,6 +821,7 @@
     if (suppressed("seeking")) {
       if (Date.now() - gestureAt > 1000) return;
     } else {
+      if (tabHidden()) return; // nobody scrubs in a hidden tab: the site moved the video
       if (Date.now() < titleResetUntil) return;
       if (ctlBlocked()) return;
     }
@@ -838,6 +850,7 @@
       return;
     }
     if (suppressed("seeked") || Date.now() < titleResetUntil) return;
+    if (tabHidden()) return; // a jump seen by a hidden tab is the site's/browser's, not a seek we drove
     if (ctlBlocked()) return;
     emit("CMD:seek", t);
     rebasePos(t);
@@ -862,6 +875,7 @@
       return;
     }
     if (suppressed("ratechange") || !joined) return;
+    if (tabHidden()) return; // a hidden tab's rate change is the site's
     if (ctlBlocked()) return;
     rebaseElapsed(); // advance the anchor to now before it advances at the new rate
     roomRate = r;
@@ -1493,6 +1507,10 @@
         }
       } else {
         waitingSince = 0; // paused / room media / ad / left: the stall context is gone
+        // rescind the claim too: a claim that outlives its stall (the video paused
+        // while we were reporting buffering, so no playing/canplay ever rescinds it)
+        // sits in the server's buffer map and re-pauses the room on the next play
+        reportBuffering(false);
       }
     }
     if (++driftCount % DRIFT_TICK_S === 0) driftCheck();
