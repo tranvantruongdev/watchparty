@@ -40,7 +40,8 @@ URL prefills the room and joins at once when your name is already saved, and **C
 copies such a link for the page you are on. While you type in the chat box a line above the
 input shows who else is typing, and when another member is on a different streaming title
 (page URL) the panel shows a **Follow** bar: Follow opens that title when it is on the same
-site, otherwise it shows the link to open on that site. When your own title changes in-page
+origin (https, or http only on an http dev page — never a cross-port or non-web URL),
+otherwise it shows the link to open on that site. When your own title changes in-page
 (next episode) the room's speed is kept, and if the room is already on that title its
 position and play state are pulled once the new video is ready. If the connection drops, the
 status shows "Reconnecting…" (with `data-conn="reconnecting"` on the panel host) while
@@ -59,7 +60,8 @@ cannot be taken away from the controller, and it clears at once when their tab l
 ## Sites
 
 The panel runs on **Netflix**, **YouTube**, **Disney+**, **Prime Video** and Amazon video
-pages (`amazon.com/gp/video/...`), plus the dev test page. The content scripts only run in
+pages (`amazon.com/gp/video/...`), and **Vimeo** watch pages (`vimeo.com/<digits>`, or
+`player.vimeo.com/video/<digits>` opened as a top-level page), plus the dev test page. The content scripts only run in
 the top frame, so a site whose player lives inside an iframe is not supported. On YouTube,
 while an ad is playing the panel shows "Ad playing — sync paused" and nothing is sent or
 applied; when the ad ends the room's state is pulled again and applied like a late joiner's.

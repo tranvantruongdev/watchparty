@@ -20,6 +20,8 @@
   const DRIFT_SEEK_S = 5; // beyond this one silent seek beats a long nudge
   const DRIFT_OK_S = 0.3; // close enough: restore the room rate
   const MAX_CHAT = 200;
+  const MAX_MEMBERS_SHOWN = 50; // roster names rendered; the rest collapse into "+N more"
+  const MAX_TYPING = 20; // typing-peers entries kept; the oldest drops out
   // stickers (round 10A): a chat message whose whole text is [sticker:<id>] renders as
   // the emoji alone, large — the same list/ids the web app renders
   const STICKERS = { laugh: "😂", cry: "😭", wow: "😮", love: "😍", fire: "🔥", clap: "👏", scared: "😱", sleep: "😴", facepalm: "🤦", party: "🥳" };
@@ -48,6 +50,10 @@
   let sync = null; // { host, tsMap, done } for the current connection
   let pendingHost = null; // joiner state waiting for a <video> to appear
   let remoteSeek = null; // { t, at }
+  let seekEventCount = 0; // seeking/seeked events on the bound video (tick poll baseline)
+  let seenT = null; // video.currentTime at the last 1 s tick (eventless-jump detection)
+  let seenAt = 0; // Date.now() of that tick
+  let seenSeekEvt = 0;
   let siteResetUntil = 0;
   let resetReapplied = false;
   let typingPeers = {}; // id -> expiry (REC:typing true; 6 s safety timeout)
@@ -383,13 +389,17 @@
   function renderMembers() {
     el.members.textContent = members ? members.length + " watching: " : "";
     if (members)
-      members.forEach((id, i) => {
+      members.slice(0, MAX_MEMBERS_SHOWN).forEach((id, i) => {
         if (i) el.members.appendChild(document.createTextNode(", "));
         const s = document.createElement("span");
         s.style.color = colorOf(id);
         s.textContent = nameOf(id) + (id === clientId ? " (you)" : "");
         el.members.appendChild(s);
       });
+    if (members && members.length > MAX_MEMBERS_SHOWN)
+      el.members.appendChild(
+        document.createTextNode(" +" + (members.length - MAX_MEMBERS_SHOWN) + " more"),
+      );
   }
 
   // ---- one person drives (CMD:extControl / REC:extControl) ----
@@ -479,12 +489,42 @@
     announcedUrl = myUrl;
     emit("CMD:siteUrl", myUrl);
   }
+  // page.js posts through the page itself, so any page script can forge these: accept
+  // only the known shape and a canonical title url that is either a supported streaming
+  // title host over https (what page.js posts on the other supported sites — the e2e
+  // simulates those posts from the dev page) or this page's own origin over http(s)
+  // (what page.js posts here, e.g. the dev test page). Anything else, ≤300 chars, drops.
+  const PAGE_URL_HOSTS = [
+    "netflix.com",
+    "youtube.com",
+    "disneyplus.com",
+    "primevideo.com",
+    "amazon.com",
+    "vimeo.com", // not on the server's relay list; kept so myUrl tracks a vimeo title
+  ];
+  const pageUrlOf = (d) => {
+    if (!d || typeof d !== "object" || d.source !== "wp-ext-page" || d.type !== "siteUrl") return undefined;
+    if (d.url === null) return null; // page.js's "not on a title" post
+    if (typeof d.url !== "string" || d.url.length > 300) return undefined;
+    try {
+      const u = new URL(d.url);
+      if (u.origin === location.origin) return d.url; // our own page, http(s) alike
+      if (
+        u.protocol === "https:" &&
+        PAGE_URL_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith("." + h))
+      )
+        return d.url;
+    } catch {
+      // not a url: drop
+    }
+    return undefined;
+  };
   window.addEventListener("message", (e) => {
     if (e.source !== window) return;
-    const d = e.data;
-    if (!d || d.source !== "wp-ext-page" || d.type !== "siteUrl") return;
+    const url = pageUrlOf(e.data);
+    if (url === undefined) return; // not our shape, or a url we do not accept: drop silently
     const prev = myUrl;
-    myUrl = typeof d.url === "string" && d.url ? d.url : null;
+    myUrl = url;
     announceUrl();
     if (myUrl && myUrl === roomSiteUrl) hideFollow(); // we caught up with the room
     // an in-page title change (next episode): the new video starts at the site's own
@@ -500,7 +540,13 @@
     } catch {
       // not a parseable url: never navigate on one
     }
-    if (u && u.hostname === location.hostname) location.href = followUrl;
+    // same-site Follow means our own origin and http(s) only — a hostname compare
+    // would navigate cross-port and a crafted scheme would navigate off the web
+    const nav =
+      u &&
+      u.origin === location.origin &&
+      (u.protocol === "https:" || (location.protocol === "http:" && u.protocol === "http:"));
+    if (nav) location.href = followUrl;
     else el.followtext.textContent = "Open it on that site: " + followUrl;
   });
   el.followx.addEventListener("click", hideFollow);
@@ -512,62 +558,72 @@
     return m && Object.hasOwn(STICKERS, m[1]) ? STICKERS[m[1]] : null;
   };
 
+  function buildChatLine(m) {
+    const who = nameOf(m.id);
+    const line = document.createElement("div");
+    const ts = hhmm(m.timestamp);
+    if (ts) {
+      const t = document.createElement("span");
+      t.className = "ts";
+      t.textContent = ts;
+      line.appendChild(t);
+      line.appendChild(document.createTextNode(" "));
+    }
+    if (m.sysJoin || m.sysLeave) {
+      // Resolved at render time: the name may arrive (REC:nameMap) after the notice
+      line.className = "sys";
+      line.appendChild(
+        document.createTextNode(m.sysJoin ? nameOf(m.sysJoin) + " joined" : nameOf(m.sysLeave) + " left"),
+      );
+    } else if (m.cmd) {
+      const text =
+        {
+          play: "played",
+          pause: "paused",
+          seek: "seeked to " + fmtTime(m.msg),
+          playbackRate: "set speed " + m.msg + "x",
+          host: "started a video",
+        }[m.cmd] || m.cmd;
+      line.className = "sys";
+      line.appendChild(document.createTextNode(who + " " + text));
+    } else {
+      const w = document.createElement("span");
+      w.className = "who";
+      w.style.color = colorOf(m.id);
+      w.textContent = who;
+      line.appendChild(w);
+      const st = stickerOf(m.msg);
+      if (st) {
+        line.appendChild(document.createTextNode(": "));
+        const s = document.createElement("span");
+        s.className = "sticker";
+        s.textContent = st;
+        line.appendChild(s);
+      } else {
+        line.appendChild(document.createTextNode(": " + (m.msg || "")));
+      }
+    }
+    return line;
+  }
+
+  // full rebuild for history (re)places: chatinit on join/reconnect and name updates
   function renderChat() {
     el.log.textContent = "";
-    for (const m of chat) {
-      const who = nameOf(m.id);
-      const line = document.createElement("div");
-      const ts = hhmm(m.timestamp);
-      if (ts) {
-        const t = document.createElement("span");
-        t.className = "ts";
-        t.textContent = ts;
-        line.appendChild(t);
-        line.appendChild(document.createTextNode(" "));
-      }
-      if (m.sysJoin || m.sysLeave) {
-        // Resolved at render time: the name may arrive (REC:nameMap) after the notice
-        line.className = "sys";
-        line.appendChild(
-          document.createTextNode(m.sysJoin ? nameOf(m.sysJoin) + " joined" : nameOf(m.sysLeave) + " left"),
-        );
-      } else if (m.cmd) {
-        const text =
-          {
-            play: "played",
-            pause: "paused",
-            seek: "seeked to " + fmtTime(m.msg),
-            playbackRate: "set speed " + m.msg + "x",
-            host: "started a video",
-          }[m.cmd] || m.cmd;
-        line.className = "sys";
-        line.appendChild(document.createTextNode(who + " " + text));
-      } else {
-        const w = document.createElement("span");
-        w.className = "who";
-        w.style.color = colorOf(m.id);
-        w.textContent = who;
-        line.appendChild(w);
-        const st = stickerOf(m.msg);
-        if (st) {
-          line.appendChild(document.createTextNode(": "));
-          const s = document.createElement("span");
-          s.className = "sticker";
-          s.textContent = st;
-          line.appendChild(s);
-        } else {
-          line.appendChild(document.createTextNode(": " + (m.msg || "")));
-        }
-      }
-      el.log.appendChild(line);
-    }
+    for (const m of chat) el.log.appendChild(buildChatLine(m));
     el.log.scrollTop = el.log.scrollHeight;
   }
 
   function pushChat(m) {
+    // append one node: no full rebuild per message; only stick to the bottom when the
+    // user was already reading the last line
+    const stick = el.log.scrollTop + el.log.clientHeight >= el.log.scrollHeight - 1;
     chat.push(m);
-    if (chat.length > MAX_CHAT) chat = chat.slice(-MAX_CHAT);
-    renderChat();
+    el.log.appendChild(buildChatLine(m));
+    if (chat.length > MAX_CHAT) {
+      chat = chat.slice(-MAX_CHAT);
+      if (el.log.firstChild) el.log.removeChild(el.log.firstChild);
+    }
+    if (stick) el.log.scrollTop = el.log.scrollHeight;
   }
 
   // local-only notices: stamped with the local clock when created (rendering can
@@ -642,7 +698,7 @@
     rebasePos(t); // the room moved here (remote seek or host state): new anchor
     if (Math.abs(video.currentTime - t) < SEEK_EPSILON) return;
     remoteSeek = { t, at: Date.now() };
-    suppress("seeked");
+    suppress("seeking", "seeked");
     // the Netflix player must be seeked from the page's own JS world (page.js)
     window.postMessage({ source: "wp-ext", type: "seek", seconds: t }, "*");
   }
@@ -672,20 +728,67 @@
     emit("CMD:pause");
     rebaseElapsed(); // the room pauses with us: freeze the anchor here
   };
+  // 'seeked' only fires once a seek COMPLETES; a player whose decode pipeline is not
+  // running (vimeo's watch page <video> before/without a real start) never completes a
+  // seek, so the local broadcast lives in onSeeking and this handler only does the
+  // remote-apply landing bookkeeping.
   const onSeeked = () => {
+    seekEventCount++;
     if (
       remoteSeek &&
       Date.now() - remoteSeek.at < SEEK_TARGET_MS &&
       Math.abs(video.currentTime - remoteSeek.t) < 1
     ) {
       remoteSeek = null; // the applied remote seek landed: no longer in flight
+    }
+  };
+  const onSeeking = () => {
+    seekEventCount++;
+    if (!joined) return;
+    if (
+      remoteSeek &&
+      Date.now() - remoteSeek.at < SEEK_TARGET_MS &&
+      Math.abs(video.currentTime - remoteSeek.t) < 1
+    ) {
+      remoteSeek = null; // the applied remote seek reached the element: no echo
       return;
     }
-    if (suppressed("seeked") || !joined) return;
+    if (suppressed("seeking")) return;
     if (Date.now() < titleResetUntil) return;
     if (ctlBlocked()) return;
     emit("CMD:seek", video.currentTime);
     rebasePos(video.currentTime); // the room lined up on us: we are the anchor now
+    seenT = video.currentTime;
+    if (nudging) {
+      nudging = false;
+      applyRate(roomRate);
+    }
+  };
+  // A currentTime write on a <video> that never got media fires no events at all, so
+  // the tick compares the position with the last one it saw: a jump no seek event and
+  // no in-flight remote apply explains is a local seek the element swallowed.
+  const checkSeekJump = () => {
+    const t = video.currentTime;
+    const hadEvents = seekEventCount !== seenSeekEvt;
+    seenSeekEvt = seekEventCount;
+    const prev = seenT;
+    const dt = (Date.now() - seenAt) / 1000;
+    seenT = t;
+    seenAt = Date.now();
+    if (prev == null || hadEvents || video.seeking) return;
+    // scale by the real time since the last tick: a hidden tab runs this timer about once a minute
+    const expected = video.paused ? 0 : video.playbackRate * dt;
+    if (Math.abs(t - prev - expected) <= video.playbackRate + 2 * SEEK_EPSILON) return;
+    if (remoteSeek && Date.now() - remoteSeek.at >= SEEK_TARGET_MS) remoteSeek = null; // never landed: stop masking local seeks
+    if (remoteSeek) {
+      if (Date.now() - remoteSeek.at < SEEK_TARGET_MS && Math.abs(t - remoteSeek.t) < 1)
+        remoteSeek = null; // our own apply landed (the element gave no events)
+      return;
+    }
+    if (suppressed("seeked") || Date.now() < titleResetUntil) return;
+    if (ctlBlocked()) return;
+    emit("CMD:seek", t);
+    rebasePos(t);
     if (nudging) {
       nudging = false;
       applyRate(roomRate);
@@ -770,6 +873,7 @@
   const VIDEO_EVENTS = {
     play: onPlay,
     pause: onPause,
+    seeking: onSeeking,
     seeked: onSeeked,
     ratechange: onRateChange,
     waiting: onWaiting,
@@ -790,6 +894,8 @@
       for (const [type, fn] of Object.entries(VIDEO_EVENTS)) video.removeEventListener(type, fn);
     }
     video = v;
+    seenT = null; // a fresh element: the tick poll must not see a phantom jump
+    seenSeekEvt = seekEventCount;
     if (!video) return;
     for (const [type, fn] of Object.entries(VIDEO_EVENTS)) video.addEventListener(type, fn);
     markSiteReset();
@@ -966,6 +1072,7 @@
 
     s.on("connect", () => {
       joined = true;
+      seenT = null; // the video moved while we were away: not a seek to broadcast
       everConnected = true;
       sync = { host: null, tsMap: null, done: false };
       delete host.dataset.synced;
@@ -1068,8 +1175,12 @@
     });
     s.on("REC:typing", (d) => {
       if (!d || typeof d.id !== "string" || !d.id) return;
-      if (d.typing) typingPeers[d.id] = Date.now() + 6000; // safety timeout
-      else delete typingPeers[d.id];
+      if (d.typing) {
+        // cap the map: a fresh peer evicts the one waiting longest
+        const ids = Object.keys(typingPeers);
+        if (!typingPeers[d.id] && ids.length >= MAX_TYPING) delete typingPeers[ids[0]];
+        typingPeers[d.id] = Date.now() + 6000; // safety timeout
+      } else delete typingPeers[d.id];
       renderTyping();
     });
     s.on("REC:siteUrl", (d) => {
@@ -1273,7 +1384,8 @@
     }
     if (joined && video && Number.isFinite(video.currentTime)) {
       emit("CMD:ts", video.currentTime);
-    }
+      checkSeekJump();
+    } else seenT = null;
     if (++driftCount % DRIFT_TICK_S === 0) driftCheck();
   }, 1000);
 })();
