@@ -683,9 +683,12 @@ export class Room {
         validateLock() && allowRelay() && this.addSubtitles(String(data));
       });
       on("CMD:lock", async (data: unknown) => {
+        // Rate gate before the owner check: a flooded socket must not get a
+        // postgres query per message (same result for an allowed call)
         const hasLock = validateLock();
-        const isOwner = await validateOwner();
-        (hasLock || isOwner) && allowRelay() && this.lockRoom(socket, data);
+        allowRelay() &&
+          (hasLock || (await validateOwner())) &&
+          this.lockRoom(socket, data);
       });
       on("CMD:buffering", (data: unknown) => this.setBuffering(socket, data));
       // Typing indicator from the browser extension: relayed to the other

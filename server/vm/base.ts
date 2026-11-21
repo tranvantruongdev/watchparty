@@ -270,78 +270,96 @@ export abstract class VMManager {
 
   public runBackgroundJobs = async () => {
     const resizeVMGroupIncr = async () => {
-      const availableCount = await this.getAvailableCount();
-      const stagingCount = await this.getStagingCount();
-      const currentSize = await this.getCurrentSize();
-      let launch = false;
-      launch =
-        availableCount + stagingCount < this.getTargetBuffer() &&
-        currentSize < (this.getLimitSize() || Infinity);
-      if (launch) {
-        console.log(
-          "[RESIZE-INCR]",
-          this.getPoolName(),
-          "target:",
-          this.getTargetBuffer(),
-          "available:",
-          availableCount,
-          "staging:",
-          stagingCount,
-          "currentSize:",
-          currentSize,
-          "limit:",
-          this.getLimitSize(),
-        );
-        try {
-          await this.startVMWrapper();
-        } catch (e: any) {
+      // One failed tick must not reject out of the interval callback and kill
+      // the worker (Node exits on unhandled rejections); log and keep going
+      try {
+        const availableCount = await this.getAvailableCount();
+        const stagingCount = await this.getStagingCount();
+        const currentSize = await this.getCurrentSize();
+        let launch = false;
+        launch =
+          availableCount + stagingCount < this.getTargetBuffer() &&
+          currentSize < (this.getLimitSize() || Infinity);
+        if (launch) {
           console.log(
-            e.response?.status,
-            JSON.stringify(e.response?.data),
-            e.config?.url,
-            e.config?.data,
+            "[RESIZE-INCR]",
+            this.getPoolName(),
+            "target:",
+            this.getTargetBuffer(),
+            "available:",
+            availableCount,
+            "staging:",
+            stagingCount,
+            "currentSize:",
+            currentSize,
+            "limit:",
+            this.getLimitSize(),
           );
+          try {
+            await this.startVMWrapper();
+          } catch (e: any) {
+            console.log(
+              e.response?.status,
+              JSON.stringify(e.response?.data),
+              e.config?.url,
+              e.config?.data,
+            );
+          }
         }
+      } catch (e: any) {
+        console.warn(
+          "[RESIZE-INCR-ERROR]",
+          this.getPoolName(),
+          e?.message ?? e,
+        );
       }
     };
 
     const resizeVMGroupDecr = async () => {
-      const availableCount = await this.getAvailableCount();
-      const stagingCount = await this.getStagingCount();
-      let unlaunch = false;
-      unlaunch = availableCount + stagingCount > this.getTargetBuffer();
-      if (unlaunch) {
-        // use SKIP LOCKED to delete to avoid deleting VM that might be assigning
-        // filter to only VMs eligible for deletion
-        // they must be up for long enough
-        // keep the oldest min pool size number of VMs
-        // Hetzner/DO/Scaleway rounds up to nearest hour
-        let modulo = 3600;
-        const { rows } = await postgres.query(
-          `
-          DELETE FROM vbrowser
-          WHERE id = (
-            SELECT id
-            FROM vbrowser
-            WHERE pool = $1
-            AND state = 'available'
-            AND id >= (SELECT id from vbrowser WHERE pool = $1 ORDER BY id ASC LIMIT 1 OFFSET $2)
-            AND CAST(extract(epoch from now() - "creationTime") as INT) % $3 > $4
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-          ) RETURNING vmid`,
-          [
-            this.getPoolName(),
-            this.getMinSize(),
-            modulo,
-            config.VM_MIN_UPTIME_MINUTES * 60, // to seconds
-          ],
-        );
-        const first = rows[0];
-        if (first) {
-          console.log("[RESIZE-DECR] %s: %s", this.getPoolName(), first.vmid);
-          await this.terminateVMWrapper(first.vmid);
+      try {
+        const availableCount = await this.getAvailableCount();
+        const stagingCount = await this.getStagingCount();
+        let unlaunch = false;
+        unlaunch = availableCount + stagingCount > this.getTargetBuffer();
+        if (unlaunch) {
+          // use SKIP LOCKED to delete to avoid deleting VM that might be assigning
+          // filter to only VMs eligible for deletion
+          // they must be up for long enough
+          // keep the oldest min pool size number of VMs
+          // Hetzner/DO/Scaleway rounds up to nearest hour
+          let modulo = 3600;
+          const { rows } = await postgres.query(
+            `
+            DELETE FROM vbrowser
+            WHERE id = (
+              SELECT id
+              FROM vbrowser
+              WHERE pool = $1
+              AND state = 'available'
+              AND id >= (SELECT id from vbrowser WHERE pool = $1 ORDER BY id ASC LIMIT 1 OFFSET $2)
+              AND CAST(extract(epoch from now() - "creationTime") as INT) % $3 > $4
+              FOR UPDATE SKIP LOCKED
+              LIMIT 1
+            ) RETURNING vmid`,
+            [
+              this.getPoolName(),
+              this.getMinSize(),
+              modulo,
+              config.VM_MIN_UPTIME_MINUTES * 60, // to seconds
+            ],
+          );
+          const first = rows[0];
+          if (first) {
+            console.log("[RESIZE-DECR] %s: %s", this.getPoolName(), first.vmid);
+            await this.terminateVMWrapper(first.vmid);
+          }
         }
+      } catch (e: any) {
+        console.warn(
+          "[RESIZE-DECR-ERROR]",
+          this.getPoolName(),
+          e?.message ?? e,
+        );
       }
     };
 
@@ -533,14 +551,18 @@ export abstract class VMManager {
     setInterval(resizeVMGroupIncr, incrInterval);
     setInterval(resizeVMGroupDecr, decrInterval);
     setInterval(async () => {
-      console.log(
-        "[STATS] %s: currentSize %s, available %s, staging %s, target %s",
-        this.getPoolName(),
-        await this.getCurrentSize(),
-        await this.getAvailableCount(),
-        await this.getStagingCount(),
-        this.getTargetBuffer(),
-      );
+      try {
+        console.log(
+          "[STATS] %s: currentSize %s, available %s, staging %s, target %s",
+          this.getPoolName(),
+          await this.getCurrentSize(),
+          await this.getAvailableCount(),
+          await this.getStagingCount(),
+          this.getTargetBuffer(),
+        );
+      } catch (e: any) {
+        console.warn("[STATS-ERROR]", this.getPoolName(), e?.message ?? e);
+      }
     }, 10000);
 
     // The following may take a while per iteration

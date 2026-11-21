@@ -4,6 +4,14 @@ import "./utils/redactError.ts";
 import express from "express";
 import bodyParser from "body-parser";
 
+// A stray rejection (an interval job, a request path) used to kill the whole
+// worker: Node's default for unhandled rejections is to exit. Log it (the
+// redactError import below keeps axios request configs out of the print) and
+// stay up. Same pattern as server.ts
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+
 const app = express();
 const vmManagers = getBgVMManagers();
 

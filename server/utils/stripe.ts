@@ -81,7 +81,8 @@ export async function recordCheckoutSession(sessionId: string) {
       recorded = true;
     } catch (e) {
       // Not fatal, syncSubs will pick the subscription up on its next run
-      console.warn("failed to record subscriber %s:", uid, e);
+      // uid is a Firebase uid; keep it out of the log
+      console.warn("failed to record a subscriber: %s", e);
     }
   }
   return { returnUrl, recorded };

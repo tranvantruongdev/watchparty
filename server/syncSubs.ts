@@ -72,8 +72,8 @@ async function syncSubscribers() {
   );
   console.log("%s deduped subs to insert", newResult.length);
   if (result.length !== newResult.length) {
-    // Log the difference
-    console.log(result.filter((x) => !newResult.includes(x)));
+    // Rows carry customer emails / Firebase uids; log the count only
+    console.log("%s duplicate subs dropped", result.length - newResult.length);
   }
   result = newResult;
 
