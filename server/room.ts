@@ -782,10 +782,16 @@ export class Room {
       });
       on("CMD:getRoomState", () => allowRelay() && this.getRoomState(socket));
       on("CMD:setRoomState", async (data: unknown) => {
-        (await validateOwner()) && this.setRoomState(socket, data);
+        // Rate gate before the owner check (same reason as CMD:lock): a
+        // flooded socket must not get a postgres query per message
+        allowRelay() &&
+          (await validateOwner()) &&
+          this.setRoomState(socket, data);
       });
       on("CMD:setRoomOwner", async (data: unknown) => {
-        (await validateOwner()) && this.setRoomOwner(socket, data);
+        allowRelay() &&
+          (await validateOwner()) &&
+          this.setRoomOwner(socket, data);
       });
       on("CMD:playlistNext", (data: unknown) => {
         // The client only ever sends the ended video's url. An empty/missing
@@ -806,10 +812,12 @@ export class Room {
         validateLock() && allowRelay() && this.playlistDelete(data);
       });
       on("CMD:kickUser", async (data: unknown) => {
-        (await validateOwner()) && this.kickUser(data);
+        allowRelay() && (await validateOwner()) && this.kickUser(data);
       });
       on("CMD:deleteChatMessages", async (data: unknown) => {
-        (await validateOwner()) && this.deleteChatMessages(data);
+        allowRelay() &&
+          (await validateOwner()) &&
+          this.deleteChatMessages(data);
       });
 
       // Signaling is unicast to one peer and bursts during connection setup
