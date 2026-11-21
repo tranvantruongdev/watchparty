@@ -10,7 +10,10 @@ if (config.FIREBASE_ADMIN_SDK_CONFIG) {
   });
 }
 
-export async function validateUserToken(uid: string, token: string) {
+export async function validateUserToken(
+  uid: string | undefined,
+  token: string,
+) {
   if (!config.FIREBASE_ADMIN_SDK_CONFIG) {
     return undefined;
   }
@@ -19,7 +22,9 @@ export async function validateUserToken(uid: string, token: string) {
   }
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    if (uid !== decoded.uid) {
+    // uid is undefined when the token came from the Authorization header,
+    // which carries no uid: trust the token's own subject then
+    if (uid !== undefined && uid !== decoded.uid) {
       // Valid but for wrong user
       return undefined;
     }

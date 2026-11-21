@@ -549,6 +549,23 @@ app.post("/iceServers", async (req, res) => {
   res.json({ iceServers: turnCache.iceServers });
 });
 
+// Firebase ID token: prefer the Authorization header ("Bearer <token>"), fall
+// back to the legacy uid+token pair from query/body so old clients keep
+// working. URLs carrying ?token= leak into access logs and proxies; headers
+// don't. The header carries no uid, so validation then trusts the token's own
+// subject — every route acts on the decoded uid either way.
+function requestIdToken(
+  req: Request,
+  legacyUid: unknown,
+  legacyToken: unknown,
+): { uid?: string; token: string } {
+  const header = req.headers.authorization;
+  if (typeof header === "string" && /^Bearer\s+\S/i.test(header)) {
+    return { token: header.replace(/^Bearer\s+/i, "").trim() };
+  }
+  return { uid: String(legacyUid), token: String(legacyToken) };
+}
+
 app.post("/createRoom", async (req, res) => {
   if (!hasRoomKey(req.body?.roomKey)) {
     res.status(403).json({ error: "roomKey" });
@@ -598,7 +615,12 @@ app.post("/createRoom", async (req, res) => {
   const newRoom = new Room(io, name);
   rooms.set(name, newRoom);
   try {
-    const decoded = await validateUserToken(req.body?.uid, req.body?.token);
+    const { uid, token } = requestIdToken(
+      req,
+      req.body?.uid,
+      req.body?.token,
+    );
+    const decoded = await validateUserToken(uid, token);
     newRoom.creator = decoded?.email;
     const preload =
       typeof req.body?.video === "string" && !isServerOnlyMedia(req.body.video)
@@ -643,10 +665,8 @@ app.post("/createRoom", async (req, res) => {
 });
 
 app.post("/checkoutSub", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.body?.uid),
-    String(req.body?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.body?.uid, req.body?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -729,10 +749,8 @@ app.post("/manageSub", async (req, res) => {
     res.status(400).json({ error: "invalid return_url" });
     return;
   }
-  const decoded = await validateUserToken(
-    String(req.body?.uid),
-    String(req.body?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.body?.uid, req.body?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -748,7 +766,8 @@ app.post("/manageSub", async (req, res) => {
 
 app.delete("/deleteAccount", async (req, res) => {
   // TODO pass this in req.query instead
-  const decoded = await validateUserToken(req.body?.uid, req.body?.token);
+  const { uid, token } = requestIdToken(req, req.body?.uid, req.body?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -767,10 +786,8 @@ app.delete("/deleteAccount", async (req, res) => {
 });
 
 app.get("/metadata", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.query?.uid),
-    String(req.query?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.query?.uid, req.query?.token);
+  const decoded = await validateUserToken(uid, token);
   let isSubscriber = await getIsSubscriberByUid(decoded?.uid);
   // Has the user ever been a subscriber?
   // const customer = await getCustomerByUid(decoded.uid);
@@ -822,10 +839,8 @@ app.get("/resolveShard/:roomId", async (req, res) => {
 });
 
 app.get("/listRooms", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.query?.uid),
-    String(req.query?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.query?.uid, req.query?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -838,10 +853,8 @@ app.get("/listRooms", async (req, res) => {
 });
 
 app.delete("/deleteRoom", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.query?.uid),
-    String(req.query?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.query?.uid, req.query?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -854,10 +867,8 @@ app.delete("/deleteRoom", async (req, res) => {
 });
 
 app.get("/linkAccount", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.query?.uid),
-    String(req.query?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.query?.uid, req.query?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -879,10 +890,8 @@ app.get("/linkAccount", async (req, res) => {
 });
 
 app.post("/linkAccount", async (req, res) => {
-  const decoded = await validateUserToken(
-    String(req.body?.uid),
-    String(req.body?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.body?.uid, req.body?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
@@ -925,10 +934,8 @@ app.post("/linkAccount", async (req, res) => {
 
 app.delete("/linkAccount", async (req, res) => {
   // TODO read from req.query instead
-  const decoded = await validateUserToken(
-    String(req.body?.uid),
-    String(req.body?.token),
-  );
+  const { uid, token } = requestIdToken(req, req.body?.uid, req.body?.token);
+  const decoded = await validateUserToken(uid, token);
   if (!decoded) {
     res.status(400).json({ error: "invalid user token" });
     return;
