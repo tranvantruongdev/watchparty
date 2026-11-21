@@ -75,6 +75,24 @@ export const isServerOnlyMedia = (media: string) =>
 // ever raises videoTS, so one 1e308 froze every late joiner at the end
 const MAX_MEDIA_SECONDS = 1e7;
 
+// The YouTube Data API key has a daily quota (videos.list 1 unit, search 100,
+// 10,000/day) shared by every room: one member spamming playlist adds at the
+// 25/s relay cap spent it in minutes (measured 100 adds = 100 lookups). Past
+// this budget an item is added untitled, the same fallback as a failed lookup.
+// ponytail: one process-wide window; per-room budgets if titles go missing
+// for normal use
+const YT_LOOKUPS_PER_10_MIN = 60;
+let ytLookupTimes: number[] = [];
+const allowYoutubeLookup = () => {
+  const now = Date.now();
+  ytLookupTimes = ytLookupTimes.filter((t) => now - t < 10 * 60 * 1000);
+  if (ytLookupTimes.length >= YT_LOOKUPS_PER_10_MIN) {
+    return false;
+  }
+  ytLookupTimes.push(now);
+  return true;
+};
+
 // Extend the interface
 declare module "socket.io" {
   interface Socket {
@@ -1203,7 +1221,7 @@ export class Room {
     };
     let video: PlaylistVideo | null = null;
     try {
-      if (youtubeVideoId) {
+      if (youtubeVideoId && allowYoutubeLookup()) {
         video = await fetchYoutubeVideo(youtubeVideoId);
       }
     } catch (e) {
