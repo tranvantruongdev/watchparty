@@ -348,6 +348,9 @@ const pageId = Math.random().toString(36).slice(2);
 // x-google-start-bitrate on each video codec tells the sender-side estimator
 // where to begin; the caller passes the same cap the share encoder uses
 // (capped at 2.5 Mbps) so a weak link is never flooded at start.
+// The DTLS certificate line identifies the remote PC: a new one means the peer rebuilt its side
+const sdpFingerprint = (sdp?: string) => sdp?.match(/^a=fingerprint:.*$/m)?.[0];
+
 const addShareStartBitrate = (sdp: string, startKbps: number): string => {
   const lines = sdp.split("\r\n");
   for (let i = 0; i < lines.length; i++) {
@@ -1542,12 +1545,14 @@ export class App extends React.Component<AppProps, AppState> {
             pc.addIceCandidate(new RTCIceCandidate(msg.ice)).catch(() => {});
           }
         } else if (msg.sdp && msg.sdp.type === "offer") {
-          // Our PC is stale (rebuilt after a network failure): replace it with
-          // a fresh one before answering, same pattern as VideoChat.handleSignal
+          // A PC that slept through the peer's rebuild still looks healthy; reuse costs ~3 s of measured DTLS restart.
           if (
             !pc ||
             pc.connectionState === "failed" ||
-            pc.connectionState === "closed"
+            pc.connectionState === "closed" ||
+            (pc.currentRemoteDescription &&
+              sdpFingerprint(pc.currentRemoteDescription.sdp) !==
+                sdpFingerprint(msg.sdp.sdp))
           ) {
             if (pc) {
               pc.close();
