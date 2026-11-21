@@ -72,6 +72,8 @@
   let titleSyncUntil = 0; // poll deadline for the new episode's video to become ready
   let followUrl = null; // url the follow bar points at while shown
   let adMode = false; // an ad was showing at the last 1 s check (drives status + re-sync)
+  let adFreeAt = 0; // when adMode last flipped to no-ad (the ad tail gap window, D1)
+  let adStartUrl = null; // our title when the current ad started (a mid-ad hop, D2)
   let askedHost = false; // waiting for the REC:host reply to re-sync after an ad
   let extController = null; // member currently holding playback control (null = free)
   let lastCtlAsk = 0; // last CMD:askHost sent because someone else controls (1 s rate limit)
@@ -656,6 +658,16 @@
   // PiP stay local too; tell them apart if users ask for it.
   const tabHidden = () =>
     document.visibilityState === "hidden" && !document.pictureInPictureElement;
+  // youtube clears .ad-showing ~250 ms before the ad->content media swap (R15W D1):
+  // a pause the ad end fires lands in that gap, adPlaying() is already false, and the
+  // broadcast would pause the whole room mid-video. Local play/pause/seek broadcasts
+  // stay local while the 1 s tick's ad state (adMode) still says ad and for AD_GAP_MS
+  // after it flips to no-ad — the media swap itself arms the emptied window on top.
+  // The window is deliberately bare (no gesture exception): a "Skip ad" click gestures
+  // and the ad teardown fires the same pause, so a gesture pass-through would re-open
+  // the bug through that path.
+  const AD_GAP_MS = 1500;
+  const adGapBlock = () => adMode || Date.now() - adFreeAt < AD_GAP_MS;
   function emit(ev, arg) {
     if (!socket || !socket.connected) return;
     if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || ev === "CMD:buffering")) return;
@@ -708,6 +720,12 @@
   }
   function applySeek(t) {
     if (!video || !Number.isFinite(t)) return;
+    // D3: a position from a member on a LONGER title must not run our media to its end
+    // (the R15V audit: a 635 s seek on a 22 s title, then youtube autoplayed a third
+    // title on us): clamp to just before our duration. No title gate: roomSiteUrl is
+    // only the latest OTHER member's announcement, so in a split room (A+B on one title,
+    // C on another) A and B would each look off-title and stop syncing with each other
+    if (Number.isFinite(video.duration) && t > video.duration - 0.5) t = video.duration - 0.5;
     cancelSeek(); // a remote seek took over: the pending local broadcast is stale
     rebasePos(t); // the room moved here (remote seek or host state): new anchor
     if (Math.abs(video.currentTime - t) < SEEK_EPSILON) return;
@@ -746,6 +764,7 @@
     // window was armed by a user drag tick that landed there after the apply (applySeek
     // cancels any older timer), and its position is not the apply's echo — it must go out
     if (Date.now() < titleResetUntil) return;
+    if (adGapBlock()) return; // the ad tail gap (D1): the drag's last tick may land there
     if (ctlBlocked()) return;
     const t = video.currentTime;
     emit("CMD:seek", t);
@@ -760,6 +779,7 @@
     if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     if (suppressed("play") || !joined) return;
     if (Date.now() < titleResetUntil) return;
+    if (adGapBlock()) return; // the ad tail gap (D1): the ad-end restart may land there
     if (ctlBlocked()) return;
     cancelSeek(); // the play broadcast below already carries our position
     // line everyone up on our position before they start
@@ -773,8 +793,12 @@
   };
   const onPause = () => {
     if (tabHidden()) return; // the site/browser in a hidden tab, not the user
+    // the end-of-media pause is the video finishing (R15W D4), not a user pause: the
+    // room keeps playing (youtube autonav moves on ~8 s later, nobody resumes the room)
+    if (video.ended) return;
     if (suppressed("pause") || !joined) return;
     if (Date.now() < titleResetUntil) return;
+    if (adGapBlock()) return; // the ad tail gap (D1): the ad's own end pause lands there
     if (ctlBlocked()) return;
     emit("CMD:pause");
     rebaseElapsed(); // the room pauses with us: freeze the anchor here
@@ -1125,6 +1149,7 @@
     typingOffTimer = null;
     roomSiteUrl = null;
     adMode = false;
+    adFreeAt = 0;
     askedHost = false;
     extController = null;
     hideFollow();
@@ -1483,11 +1508,21 @@
     if (inAd !== adMode) {
       adMode = inAd;
       if (inAd) {
+        adStartUrl = myUrl;
         setStatus("Ad playing — sync paused", "err");
       } else {
-        // the ad ended: pull the room state and apply it like a joiner would
-        askedHost = true;
-        emit("CMD:askHost");
+        adFreeAt = Date.now(); // the ad tail gap: local playback broadcasts stay local (D1)
+        if (myUrl !== adStartUrl) {
+          // D2: we changed title during the ad (the title-change path skips while an ad
+          // plays), so the room position belongs to the title we left: handle it as the
+          // hop it was — onTitleChange pulls only when we landed on the room's title
+          statusConnected();
+          if (myUrl) onTitleChange(adStartUrl);
+        } else {
+          // the ad ended: pull the room state and apply it like a joiner would
+          askedHost = true;
+          emit("CMD:askHost");
+        }
       }
     }
     if (joined && video && Number.isFinite(video.currentTime)) {
