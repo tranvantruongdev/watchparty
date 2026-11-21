@@ -2295,9 +2295,11 @@ export class Room {
     if (this.isChatDisabled === undefined) {
       this.isChatDisabled = Boolean(first?.isChatDisabled);
     }
-    // TODO only send the password if this is current owner
+    // The password goes only to the owner (the settings UI is the one consumer);
+    // everyone else gets the same state without it
+    const isOwner = Boolean(first?.owner) && socket.uid === first?.owner;
     socket.emit("REC:getRoomState", {
-      password: first?.password,
+      password: isOwner ? first?.password : undefined,
       vanity: first?.vanity,
       owner: first?.owner,
       isChatDisabled: first?.isChatDisabled,
@@ -2415,9 +2417,9 @@ export class Room {
         return;
       }
       this.isChatDisabled = Boolean(row.isChatDisabled);
-      // TODO only send password if current owner
-      this.io.of(this.roomId).emit("REC:getRoomState", {
-        password: row.password,
+      // The password stays owner-only: the room gets the state without it, and
+      // the caller — the UPDATE above matched on owner = uid — gets it privately
+      const roomState = {
         vanity: row.vanity,
         owner: row.owner,
         isChatDisabled: row.isChatDisabled,
@@ -2425,7 +2427,9 @@ export class Room {
         roomDescription: row.roomDescription,
         roomTitleColor: row.roomTitleColor,
         mediaPath: row.mediaPath,
-      });
+      };
+      this.io.of(this.roomId).emit("REC:getRoomState", roomState);
+      socket.emit("REC:getRoomState", { ...roomState, password: row.password });
       socket.emit("successMessage", "Saved admin settings");
     } catch (e) {
       console.warn(e);
