@@ -110,6 +110,9 @@ app.post("/updateSnapshot", async (req, res) => {
   res.send(result?.toString() + "\n");
 });
 
-app.listen(config.VMWORKER_PORT, () => {
+// No auth on these routes (assign/release VMs, stats): only the room server on
+// this machine calls them, via http://localhost. Listening on every interface
+// let anyone on the network release another room's VM
+app.listen(Number(config.VMWORKER_PORT), "127.0.0.1", () => {
   console.log("vmWorker listening on %s", config.VMWORKER_PORT);
 });
