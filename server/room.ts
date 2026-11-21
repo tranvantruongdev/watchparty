@@ -5,6 +5,7 @@ import { getUser, validateUserToken } from "./utils/firebase.ts";
 import { redis, redisCount, redisCountDistinct } from "./utils/redis.ts";
 import { getIsSubscriberByUid } from "./utils/stripe.ts";
 import { type AssignedVM } from "./vm/base.ts";
+import { isPoolRegion } from "./vm/utils.ts";
 import { getStartOfDay } from "./utils/time.ts";
 import { postgres, updateObject, upsertObject } from "./utils/postgres.ts";
 import {
@@ -675,7 +676,9 @@ export class Room {
         validateLock() && allowRelay() && this.resumeSharing(socket, data),
       );
       on("CMD:startVBrowser", (data: unknown) => {
-        validateLock() && this.startVBrowser(socket, data);
+        // Rate gate like the sibling handlers: a flooded socket must not get a
+        // Firebase getUser / redis / postgres round trip per message
+        validateLock() && allowRelay() && this.startVBrowser(socket, data);
       });
       on("CMD:stopVBrowser", () => {
         validateLock() && this.stopVBrowser();
@@ -1966,6 +1969,19 @@ export class Room {
     };
     if (!data) {
       socket.emit("errorMessage", "Invalid vBrowser input");
+      return;
+    }
+    // options.region is handed to the VM workers verbatim and they match pools
+    // by exact region, so it must name a region a pool actually runs in (see
+    // POOL_REGIONS in vm/utils.ts); no region (undefined, or "" which the
+    // VBrowserModal sends for "any") stays valid, workers then match any pool
+    const reqRegion = data.options?.region;
+    if (
+      reqRegion !== undefined &&
+      reqRegion !== "" &&
+      (typeof reqRegion !== "string" || !isPoolRegion(reqRegion))
+    ) {
+      socket.emit("errorMessage", "Invalid vBrowser region");
       return;
     }
     const { clientId, uid, isSub } = socket;

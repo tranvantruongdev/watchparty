@@ -9,6 +9,12 @@ import { Docker } from "./docker.ts";
 export const imageName = "howardc93/vbrowser";
 
 export type PoolRegion = "US" | "USW" | "EU";
+// The regions a VM pool can actually run in (what VM_MANAGER_CONFIG pools use,
+// and what vmWorker matches /assignVM requests against); CMD:startVBrowser
+// validates its options.region against this list
+export const POOL_REGIONS: PoolRegion[] = ["US", "USW", "EU"];
+export const isPoolRegion = (region: string): region is PoolRegion =>
+  POOL_REGIONS.includes(region as PoolRegion);
 export type PoolConfig = {
   provider: string;
   isLarge: boolean;
