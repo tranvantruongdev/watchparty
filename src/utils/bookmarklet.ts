@@ -6,14 +6,23 @@
 // cannot load the loader at all; there the bookmarklet alerts the fixed security-policy
 // message instead of dying silently.
 // A tab opened by the room's "Open Netflix" button is named "wpx:<room>\n<nonce>"
-// (NetflixSteps): that room beats the one baked in here, so one bookmark serves any room.
+// (NetflixSteps): that room beats the one baked in here, so one bookmark serves any
+// room — but both must match the room charset below: the server only creates
+// lowercase-word-hyphen names (server/utils/moniker.ts), and a name with other
+// characters (e.g. "%22)…" from a crafted /watch/ path or window.name) is either a
+// string-literal escape or a room that cannot exist.
+const roomCharset = /^[a-z]+(-[a-z]+)*$/;
 export function getBookmarklet(serverOrigin: string, roomName: string): string {
   const origin = serverOrigin.replace(/\/+$/, "");
-  // No "%" anywhere: the browser percent-decodes a javascript: URL before running it.
+  const room = roomCharset.test(roomName) ? roomName : "";
+  // The browser percent-decodes a javascript: URL before running it, so every "%"
+  // in the body — only user-controlled text can contain one — is escaped to "%25"
+  // below and decodes back to the exact original text.
   const code = `(function(o,r){
 var w=window;
 w.__wpServer=o;
-w.__wpRoom=/^wpx:/.test(w.name)?w.name.slice(4).split("\\n")[0]:r;
+var n=/^wpx:/.test(w.name)?w.name.slice(4).split("\\n")[0]:r;
+w.__wpRoom=/^[a-z]+(-[a-z]+)*$/.test(n)?n:r;
 if(w.__wpExtShow){w.__wpExtShow();return}
 var k=["define","exports","module"],S={};
 k.forEach(function(n){if(n in w){S[n]=w[n];try{w[n]=void 0}catch(e){}}});
@@ -32,9 +41,9 @@ s.onerror=function(){R();alert("WatchParty Sync: cannot load "+s.src)};
 document.head.appendChild(s)
 }
 L("vendor/socket.io.min.js",function(){R();L("page.js",function(){L("content.js",function(){L("ui.js")})})})
-})(${JSON.stringify(origin)},${JSON.stringify(roomName)})`;
+})(${JSON.stringify(origin)},${JSON.stringify(room)})`;
   // collapse the newlines (they are only for reading here) to keep the URL short
-  return "javascript:" + code.replace(/\n/g, "");
+  return "javascript:" + code.replace(/\n/g, "").replace(/%/g, "%25");
 }
 
 // The bookmark only works in a desktop Chromium browser with a bookmarks bar (phones have
