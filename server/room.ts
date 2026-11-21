@@ -1134,9 +1134,13 @@ export class Room {
     if (config.STREAM_PATH && data?.startsWith(config.STREAM_PATH)) {
       redisCount("streamStarts");
     }
+    // The resolved stream is only playable through TWITCH_PROXY_PATH; without
+    // it new URL("") below always threw after two outbound requests per
+    // CMD:host (a library with no timeout), so the URL is hosted as typed
     if (
-      data?.startsWith("https://www.twitch.tv") ||
-      data?.startsWith("https://twitch.tv")
+      config.TWITCH_PROXY_PATH &&
+      (data?.startsWith("https://www.twitch.tv") ||
+        data?.startsWith("https://twitch.tv"))
     ) {
       try {
         // Extract m3u8 data
