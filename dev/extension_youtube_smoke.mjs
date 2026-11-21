@@ -29,6 +29,7 @@ const BASE_FLAGS = [
   "--mute-audio",
   "--no-first-run",
   "--no-default-browser-check",
+  "--disable-component-update", // killed runs left ~9 GB of updater downloads in Temp
   "--disable-background-timer-throttling",
   "--disable-renderer-backgrounding",
   "--disable-backgrounding-occluded-windows",
