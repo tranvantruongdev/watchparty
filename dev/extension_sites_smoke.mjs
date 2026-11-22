@@ -517,7 +517,7 @@ async function main() {
 
   await sleep(3000); // joiner sync + the 3 s site-reset window
   // page-world video event trace (printed when g fails), re-armed on a swapped element
-  const TRACE = `(() => { const v = ${PICK}; if (!v || v.__wpTrace) return; v.__wpTrace = 1; window.__tr = window.__tr || []; const T0 = window.__tr0 = window.__tr0 || Date.now(); for (const e of ['play','pause','seeking','seeked','waiting','playing','ended','emptied','ratechange']) v.addEventListener(e, () => { window.__tr.push(((Date.now() - T0) / 1000).toFixed(2) + ' ' + e + ' t=' + v.currentTime.toFixed(2) + ' p=' + (v.paused ? 1 : 0) + ' rs=' + v.readyState); if (window.__tr.length > 300) window.__tr.shift(); }); })()`;
+  const TRACE = `(() => { const v = ${PICK}; if (!v || v.__wpTrace) return; v.__wpTrace = 1; window.__tr = window.__tr || []; const T0 = window.__tr0 = window.__tr0 || Date.now(); for (const e of ['play','pause','seeking','seeked','waiting','playing','ended','emptied','ratechange']) v.addEventListener(e, () => { window.__tr.push(((Date.now() - T0) / 1000).toFixed(2) + ' ' + e + ' t=' + v.currentTime.toFixed(2) + ' p=' + (v.paused ? 1 : 0) + ' rs=' + v.readyState + ' E=' + (() => { const m = JSON.parse(document.getElementById('wpx-host')?.dataset.emits || '{}'); return (m['CMD:pause'] || 0) + '/' + (m['CMD:play'] || 0); })() + ' vis=' + document.visibilityState); if (window.__tr.length > 1500) window.__tr.length = 1500; }); })()`;
   await ev(A, TRACE);
   await ev(B, TRACE);
   const wa = await warmup(A);
@@ -538,6 +538,13 @@ async function main() {
     c !== null,
     `B paused after ${c ?? "NEVER"} ms (B ${JSON.stringify(await vstate(B))})`,
   );
+
+  // a play/pause storm would overwrite the trace ring buffer by the end: dump it here too
+  if (c === null)
+    console.log(
+      `after c: B emits ${await dset(B, "emits")}\n  B trace:\n  ` +
+        ((await ev(B, "window.__tr || []")) || []).slice(-60).join("\n  "),
+    );
 
   // d) play
   await ev(A, `${PICK}.play().catch(() => {}); true`);
@@ -653,7 +660,7 @@ async function main() {
     gDetail = `A reached end after ${endA ?? "NEVER"} ms; CMD:pause A ${pA0}->${pA1} B ${pB0}->${pB1}; B furthest ${bMax.toFixed(2)} of ${dur}; A ${JSON.stringify(sA)} | B ${JSON.stringify(sB)}; urls A=${await ev(A, "location.pathname")} B=${await ev(B, "location.pathname")}`;
   }
   check("g. natural end: no pause broadcast, B plays to the end", gOk, gDetail);
-  if (!gOk)
+  if (results.some((r) => !r.ok))
     for (const [tag, p] of [
       ["A", A],
       ["B", B],
@@ -687,6 +694,18 @@ async function main() {
   console.log(
     `emits: A ${await dset(A, "emits")} | B ${await dset(B, "emits")}`,
   );
+  for (const [tag, p] of [
+    ["A", A],
+    ["B", B],
+  ]) {
+    const tr = (await ev(p, "window.__tr || []")) || [];
+    const i = tr.findIndex((x) => Number((/ E=(\d+)/.exec(x) || [])[1]) >= 20);
+    if (i >= 0)
+      console.log(
+        `STORM ${tag} (trace ${tr.length} entries, onset #${i}):\n  ` +
+          tr.slice(Math.max(0, i - 40), i + 40).join("\n  "),
+      );
+  }
   finish();
 }
 
