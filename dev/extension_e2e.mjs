@@ -166,10 +166,11 @@ async function isolatedEval(p, expression) {
   if (r.exceptionDetails) throw new Error("isolated eval failed: " + (r.exceptionDetails.exception?.description || r.exceptionDetails.text));
   return r.result.value;
 }
-// a real stall as content.js sees it: 'waiting' with readyState < 3 (run via isolatedEval);
-// UNSTALL restores the element's own readyState and fires the recovery
-const STALL = `(() => { const v = document.querySelector('video'); Object.defineProperty(v, 'readyState', { get: () => 2, configurable: true }); v.dispatchEvent(new Event('waiting')); return true; })()`;
-const UNSTALL = `(() => { const v = document.querySelector('video'); delete v.readyState; v.dispatchEvent(new Event('playing')); return true; })()`;
+// a real stall as content.js sees it: 'waiting' with readyState < 3 and nothing buffered
+// ahead (run via isolatedEval); UNSTALL restores the element's own readyState and
+// buffered ranges and fires the recovery
+const STALL = `(() => { const v = document.querySelector('video'); Object.defineProperty(v, 'readyState', { get: () => 2, configurable: true }); Object.defineProperty(v, 'buffered', { get: () => ({ length: 0, start: () => 0, end: () => 0 }), configurable: true }); v.dispatchEvent(new Event('waiting')); return true; })()`;
+const UNSTALL = `(() => { const v = document.querySelector('video'); delete v.readyState; delete v.buffered; delete v.duration; v.dispatchEvent(new Event('playing')); return true; })()`;
 
 async function waitFor(fn, timeoutMs, intervalMs = 50) {
   const t0 = Date.now();
@@ -743,6 +744,48 @@ async function main() {
     !jB.paused && s0a === jSysA + 1 && s0b === jSysB + 1,
     `B ${JSON.stringify(jB)}; sys lines A ${jSysA}->${s0a} B ${jSysB}->${s0b}`,
   );
+  // j1e (codex R17H): A's claim is out and an ad starts before A's next tick. The tick
+  // rescinds it (the ad owns the video) and that false must reach the server: emit()
+  // dropped every CMD:buffering during an ad, so the room paused on the claim 2.5 s
+  // later and stayed paused, waiting for a false that never came
+  {
+    const e0 = await emits(A);
+    await isolatedEval(A, STALL);
+    const tMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (e0["CMD:buffering"] || 0) + 1, 3500);
+    await ev(A, `(() => { const d = document.createElement('div'); d.id = 'movie_player'; d.className = 'ad-showing'; d.dataset.j1e = '1'; document.body.appendChild(d); return true; })()`);
+    await sleep(5000);
+    const e1 = await emits(A);
+    const bS = await vstate(B);
+    check(
+      "j1e. claim out, then an ad starts: A's rescind reaches the server (true + false), B not left paused",
+      tMs !== null && (e1["CMD:buffering"] || 0) === (e0["CMD:buffering"] || 0) + 2 && bS.paused === false,
+      `true after ${tMs} ms; A CMD:buffering emits since: ${(e1["CMD:buffering"] || 0) - (e0["CMD:buffering"] || 0)} (want 2); B ${JSON.stringify(bS)}`,
+    );
+    await ev(A, `(() => { document.querySelectorAll('[data-j1e]').forEach((d) => d.remove()); return true; })()`);
+    await isolatedEval(A, UNSTALL);
+    // past the ad-end gap (AD_GAP_MS) and A's askHost resync, so A plays and broadcasts again
+    await sleep(3500);
+    await waitFor(async () => (await vstate(A)).paused === false, 4000);
+  }
+  // j1f (codex R17H): a stall less than 3 s before the clip's end can never get 3 s
+  // buffered ahead; once everything up to the end is buffered the claim must go, or the
+  // room sits paused for good (and every Play re-pauses on the re-claim)
+  {
+    const f0 = await emits(A);
+    await isolatedEval(A, STALL);
+    const tMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (f0["CMD:buffering"] || 0) + 1, 3500);
+    const pMs = await waitFor(async () => (await vstate(B)).paused === true, 4000);
+    // the clip now ends 2 s from here and is buffered to its end (readyState stays 2)
+    await isolatedEval(A, `(() => { const v = document.querySelector('video'); const end = v.currentTime + 2; Object.defineProperty(v, 'duration', { get: () => end, configurable: true }); Object.defineProperty(v, 'buffered', { get: () => ({ length: 1, start: () => 0, end: () => end }), configurable: true }); return true; })()`);
+    const fMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (f0["CMD:buffering"] || 0) + 2, 3000);
+    const rMs = await waitFor(async () => (await vstate(B)).paused === false, 3000);
+    check(
+      "j1f. stalled < 3 s before the end, then buffered to the end: A sends false, the room resumes",
+      tMs !== null && pMs !== null && fMs !== null && rMs !== null,
+      `true after ${tMs} ms; B paused after ${pMs} ms; false ${fMs} ms after the end was buffered; B resumed after ${rMs} ms`,
+    );
+    await isolatedEval(A, UNSTALL);
+  }
   await ev(A, `document.querySelector('video').pause(); true`);
   await waitFor(async () => (await vstate(B)).paused === true, 3000);
 

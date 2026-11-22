@@ -674,7 +674,10 @@
     adMode || (Date.now() - adFreeAt < AD_GAP_MS && gestureAt <= adFreeAt);
   function emit(ev, arg) {
     if (!socket || !socket.connected) return;
-    if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || ev === "CMD:buffering")) return;
+    // a buffering claim stays silent too, but rescinding one always goes out: a claim
+    // sent just before an ad, rescinded during it, left the server pausing the room on
+    // it and waiting for a false that never came (codex R17H)
+    if ((roomMedia || adPlaying()) && (PLAYBACK.includes(ev) || (ev === "CMD:buffering" && arg))) return;
     emitCounts[ev] = (emitCounts[ev] || 0) + 1;
     host.dataset.emits = JSON.stringify(emitCounts);
     if (arg === undefined) socket.emit(ev);
@@ -1014,16 +1017,18 @@
     if (!waitingSince) waitingSince = Date.now();
   };
   // "my data is back" for a held claim (the web app's reportBuffering hold, App.tsx):
-  // a buffered range covering currentTime reaching >= 3 s ahead. Indexed loop: Edge's
-  // TimeRanges has no iterator
+  // a buffered range covering currentTime reaching >= 3 s ahead. No readyState gate:
+  // YouTube's player kept readyState 2 while paused with 120 s buffered, so the claim
+  // was never released (R17G). Indexed loop: Edge's TimeRanges has no iterator.
+  // Less than 3 s left in the clip: up to its end (a stall there could never reach 3 s
+  // and held the room paused for good, codex R17H)
   const bufferedAhead = () => {
-    if (!video || video.readyState < 3 || !video.buffered) return false;
+    if (!video || !video.buffered) return false;
+    const t = video.currentTime;
+    const need = Math.min(3, (video.duration || Infinity) - t - 0.25);
     for (let i = 0; i < video.buffered.length; i++) {
-      if (
-        video.buffered.start(i) <= video.currentTime + 0.5 &&
-        video.buffered.end(i) > video.currentTime
-      )
-        return video.buffered.end(i) - video.currentTime >= 3;
+      if (video.buffered.start(i) <= t + 0.5 && video.buffered.end(i) > t)
+        return video.buffered.end(i) - t >= need;
     }
     return false;
   };
@@ -1042,7 +1047,6 @@
     )
       return;
     waitingSince = 0;
-    if (roomMedia || adPlaying()) return;
     reportBuffering(false);
   };
 
