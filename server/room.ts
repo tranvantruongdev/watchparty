@@ -40,8 +40,10 @@ const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 
 // Buffer auto-pause recovery: how long the room waits for the stalled member's
 // "data is back" report, and how many auto-resumes one stall episode gets (a
-// member still offline re-stalls after each and the room re-pauses)
-const BUFFER_RESUME_WATCH_MS = 30000;
+// member still offline re-stalls after each and the room re-pauses). 120 s, not
+// 30: a paused YouTube embed only re-fetches 16-25 s after its network is back,
+// so 30 s dropped the report after a 20 s outage (R17B, 2/6 missed)
+const BUFFER_RESUME_WATCH_MS = 120000;
 const BUFFER_RESUME_MAX_ATTEMPTS = 2;
 
 // The only hostnames a CMD:siteUrl may announce: the streaming sites members'
@@ -198,10 +200,11 @@ export class Room {
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
-  // Who the last buffer auto-pause paused the room for: their CMD:buffering
-  // false (sent once they have data buffered again) resumes the room. null
-  // when a person paused, or the watch fired / expired / was cancelled
-  private bufferResumeWatch: { clientId: string; pausedAt: number } | null =
+  // Who the last buffer auto-pause paused the room for: once every one of them
+  // has sent CMD:buffering false (sent once they have data buffered again) or
+  // left, the room resumes. null when a person paused, or the watch fired /
+  // expired / was cancelled
+  private bufferResumeWatch: { clientIds: string[]; pausedAt: number } | null =
     null;
   // Auto-resumes since the last manual play / new media (cap above)
   private bufferResumeAttempts = 0;
@@ -1815,15 +1818,21 @@ export class Room {
     if (typeof data !== "boolean") {
       return;
     }
-    // The member the buffer auto-pause was for has data again: resume. Before
-    // the no-op check, since the pause consumed their claim
+    // A member the buffer auto-pause was for has data again: resume once the
+    // last of them has (two stuck at once: R17A resumed for the first while
+    // the second was still offline). Before the no-op check, since the pause
+    // consumed their claims
+    const watch = this.bufferResumeWatch;
     if (
       data === false &&
-      this.bufferResumeWatch?.clientId === socket.clientId &&
-      Date.now() - this.bufferResumeWatch.pausedAt < BUFFER_RESUME_WATCH_MS
+      watch?.clientIds.includes(socket.clientId) &&
+      Date.now() - watch.pausedAt < BUFFER_RESUME_WATCH_MS
     ) {
-      this.bufferResumeWatch = null;
-      this.fireBufferResume(socket.clientId);
+      watch.clientIds = watch.clientIds.filter((id) => id !== socket.clientId);
+      if (!watch.clientIds.length) {
+        this.bufferResumeWatch = null;
+        this.fireBufferResume(socket.clientId);
+      }
     }
     if (Boolean(this.bufferingMap[socket.clientId]) === data) {
       return;
@@ -1868,9 +1877,10 @@ export class Room {
       return;
     }
     this.bufferPauseTimer = setTimeout(() => {
-      const stuck = Object.keys(this.bufferPauseMap).find(
+      const stuckIds = Object.keys(this.bufferPauseMap).filter(
         (id) => this.bufferPauseMap[id],
       );
+      const stuck = stuckIds[0];
       if (this.paused || !stuck) {
         return;
       }
@@ -1891,7 +1901,7 @@ export class Room {
         msg: Math.round(this.videoTS).toString(),
       });
       if (this.bufferResumeAttempts < BUFFER_RESUME_MAX_ATTEMPTS) {
-        this.bufferResumeWatch = { clientId: stuck, pausedAt: Date.now() };
+        this.bufferResumeWatch = { clientIds: stuckIds, pausedAt: Date.now() };
       }
     }, 2500);
   };
@@ -2624,8 +2634,14 @@ export class Room {
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
       delete this.bufferPauseMap[clientId];
-      if (this.bufferResumeWatch?.clientId === clientId) {
-        this.bufferResumeWatch = null;
+      // A stuck member leaving drops out of the watch; when nobody it waited
+      // for is left, the room stays paused (nobody to have caught up)
+      const watch = this.bufferResumeWatch;
+      if (watch?.clientIds.includes(clientId)) {
+        watch.clientIds = watch.clientIds.filter((id) => id !== clientId);
+        if (!watch.clientIds.length) {
+          this.bufferResumeWatch = null;
+        }
       }
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
