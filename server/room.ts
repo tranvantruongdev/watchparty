@@ -45,6 +45,9 @@ const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 // so 30 s dropped the report after a 20 s outage (R17B, 2/6 missed)
 const BUFFER_RESUME_WATCH_MS = 120000;
 const BUFFER_RESUME_MAX_ATTEMPTS = 2;
+// A stall this long after the last auto-resume is a new episode with a fresh
+// budget: otherwise a long movie's third stall waited for someone to press Play
+const BUFFER_RESUME_EPISODE_MS = 60000;
 
 // The only hostnames a CMD:siteUrl may announce: the streaming sites members'
 // extensions watch, so the room can offer others "follow". Subdomains count
@@ -208,6 +211,7 @@ export class Room {
     null;
   // Auto-resumes since the last manual play / new media (cap above)
   private bufferResumeAttempts = 0;
+  private bufferResumeAt = 0;
   // Ends a dead sharer's share (round 44) after a grace window: a network
   // blip can drop the sharer's socket while their capture keeps running, and
   // they re-announce with CMD:resumeShare when the socket comes back
@@ -1467,6 +1471,10 @@ export class Room {
     // A seek moves everyone: resuming a buffer-paused room is the people's
     // call again, the stalled member's data was for the old position
     this.bufferResumeWatch = null;
+    // and a pending pause restarts its grace: the claim was for the old
+    // position, the member needs a moment to report it has the new one
+    // (codex R17H: a seek just before the timer paused the room anyway)
+    this.armBufferPause();
     socket.broadcast.emit("REC:seek", data);
     const chatMsg = { id: socket.clientId, cmd: "seek", msg: data?.toString() };
     this.addChatMessage(socket, chatMsg);
@@ -1900,6 +1908,9 @@ export class Room {
         cmd: "bufferPause",
         msg: Math.round(this.videoTS).toString(),
       });
+      if (Date.now() - this.bufferResumeAt > BUFFER_RESUME_EPISODE_MS) {
+        this.bufferResumeAttempts = 0;
+      }
       if (this.bufferResumeAttempts < BUFFER_RESUME_MAX_ATTEMPTS) {
         this.bufferResumeWatch = { clientIds: stuckIds, pausedAt: Date.now() };
       }
@@ -1915,6 +1926,7 @@ export class Room {
       return;
     }
     this.bufferResumeAttempts += 1;
+    this.bufferResumeAt = Date.now();
     this.paused = false;
     this.io.of(this.roomId).emit("REC:play", this.video);
     this.armBufferPause();
@@ -2634,14 +2646,14 @@ export class Room {
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
       delete this.bufferPauseMap[clientId];
-      // A stuck member leaving drops out of the watch; when nobody it waited
-      // for is left, the room stays paused (nobody to have caught up)
+      // A stuck member leaving drops out of the watch so the others' recovery
+      // resumes without them. The last one stays in it: an outage long enough
+      // to drop the socket reconnects with the same clientId, and its false
+      // still resumes within the TTL (codex R17H); if it never comes back the
+      // room stays paused, as before
       const watch = this.bufferResumeWatch;
-      if (watch?.clientIds.includes(clientId)) {
+      if (watch?.clientIds.includes(clientId) && watch.clientIds.length > 1) {
         watch.clientIds = watch.clientIds.filter((id) => id !== clientId);
-        if (!watch.clientIds.length) {
-          this.bufferResumeWatch = null;
-        }
       }
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
