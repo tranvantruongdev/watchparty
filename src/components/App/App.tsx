@@ -3821,7 +3821,18 @@ export class App extends React.Component<AppProps, AppState> {
     if (this.isPauseDisabled()) {
       return;
     }
-    const shouldPlay = this.Player().shouldPlay();
+    // A YouTube player that isn't there yet (widget API loading) or hasn't
+    // started has no local state to toggle: shouldPlay's PAUSED check read
+    // undefined === undefined and its end check 0 === 0, so a Pause tap sent
+    // CMD:play (R16V). Go by the room, as the button label does.
+    // undefined = no player yet; -1 unstarted, 5 cued (YT.PlayerState)
+    const yt = this.usingYoutube()
+      ? this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState()
+      : null;
+    const shouldPlay =
+      yt === undefined || yt === -1 || yt === 5
+        ? this.state.roomPaused
+        : this.Player().shouldPlay();
     if (shouldPlay) {
       this.socket.emit("CMD:play");
       this.localPlay();
