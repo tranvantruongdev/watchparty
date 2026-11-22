@@ -496,6 +496,9 @@ export class App extends React.Component<AppProps, AppState> {
   mediasoupPubSocket: Socket | null = null;
   mediasoupSubSocket: Socket | null = null;
   ytDebounce = true;
+  // One local playVideo retry after a suppressed PAUSED (R17C, see
+  // onStateChange); re-armed by every localPlay and by any PLAYING
+  ytPlayRetried = false;
   // Buffering report state: when a stall started, and whether we already
   // told the room it lasted long enough to show (> 1.5 s)
   bufferingSince = 0;
@@ -1809,10 +1812,21 @@ export class App extends React.Component<AppProps, AppState> {
               // server matches the playlist-next trigger against its own video
               this.onVideoEnded(this.state.roomMedia);
             }
+            if (e.data === window.YT?.PlayerState?.PLAYING)
+              this.ytPlayRetried = false;
             if (
               this.ytDebounce &&
               // Solo: pausing or playing our own player isn't a room action
               !this.state.exploring &&
+              // YouTube fires PLAYING/PAUSED itself right after the app drove
+              // the player (a playVideo on an ENDED video reports PAUSED ~10 ms
+              // later without starting, a seek landing re-buffers, R17C) — not
+              // a person clicking inside the iframe, don't move the room for it
+              !(
+                this.usingYoutube() &&
+                Date.now() - this.YouTubeInterface.lastAppCallAt <
+                  YouTube.SELF_EVENT_GRACE_MS
+              ) &&
               ((e.data === window.YT?.PlayerState?.PLAYING &&
                 this.state.roomPaused) ||
                 (e.data === window.YT?.PlayerState?.PAUSED &&
@@ -1835,6 +1849,23 @@ export class App extends React.Component<AppProps, AppState> {
                 this.localPause();
               }
               window.setTimeout(() => (this.ytDebounce = true), 500);
+            }
+            if (
+              this.usingYoutube() &&
+              e.data === window.YT?.PlayerState?.PAUSED &&
+              !this.state.exploring &&
+              Date.now() - this.YouTubeInterface.lastAppCallAt <
+                YouTube.SELF_EVENT_GRACE_MS &&
+              this.YouTubeInterface.lastAppCallWasPlay &&
+              !this.ytPlayRetried
+            ) {
+              // A PAUSED right after our own playVideo is YouTube's restart
+              // hiccup: the embed reset to 0 but stayed paused, so suppression
+              // alone left the room stuck (R17C). One local retry restarts it;
+              // no room command, so nobody else moves.
+              this.ytPlayRetried = true;
+              console.log("yt PAUSED right after our play, retrying once");
+              this.Player().playVideo();
             }
             if (
               this.usingYoutube() &&
@@ -3582,6 +3613,8 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   localPlay = async () => {
+    // re-arms the one-shot PAUSED retry (see onStateChange)
+    this.ytPlayRetried = false;
     if (!this.state.roomMedia) {
       return;
     }

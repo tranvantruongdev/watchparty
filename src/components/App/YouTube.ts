@@ -9,6 +9,14 @@ export class YouTube implements Player {
   clearDashState = () => {};
   setDashState = (player: MediaPlayerClass) => {};
 
+  // R17C: YouTube fires PLAYING/PAUSED by itself right after the app drives the
+  // embed (a playVideo on an ENDED video reports PAUSED ~10 ms later without
+  // starting, a seek re-buffers through PLAYING) — the App.tsx relay skips
+  // events within this window of an app call; real iframe clicks land later.
+  static readonly SELF_EVENT_GRACE_MS = 1000;
+  lastAppCallAt = 0;
+  lastAppCallWasPlay = false;
+
   getCurrentTime = () => {
     return this.watchPartyYTPlayer?.getCurrentTime() ?? 0;
   };
@@ -47,11 +55,16 @@ export class YouTube implements Player {
     let videoId = new URLSearchParams(url.search).get("v");
     // Link shortener https://youtu.be/ID
     let altVideoId = src.split("/").slice(-1)[0].split("?")[0];
+    this.lastAppCallAt = Date.now();
+    this.lastAppCallWasPlay = false;
     this.watchPartyYTPlayer?.cueVideoById(videoId || altVideoId, time);
     // this.watchPartyYTPlayer?.cuePlaylist({listType: 'playlist', list: 'OLAK5uy_mtoaOGQksRdPbwlNtQ9IiK67wir5QqyIc'});
   };
 
   playVideo = async () => {
+    // stamped at intent so the grace window spans the 200 ms delayed call
+    this.lastAppCallAt = Date.now();
+    this.lastAppCallWasPlay = true;
     setTimeout(() => {
       console.log("play yt");
       this.watchPartyYTPlayer?.playVideo();
@@ -59,10 +72,14 @@ export class YouTube implements Player {
   };
 
   pauseVideo = () => {
+    this.lastAppCallAt = Date.now();
+    this.lastAppCallWasPlay = false;
     this.watchPartyYTPlayer?.pauseVideo();
   };
 
   seekVideo = (time: number) => {
+    this.lastAppCallAt = Date.now();
+    this.lastAppCallWasPlay = false;
     this.watchPartyYTPlayer?.seekTo(time, true);
   };
 
@@ -121,6 +138,8 @@ export class YouTube implements Player {
   };
 
   stopVideo = () => {
+    this.lastAppCallAt = Date.now();
+    this.lastAppCallWasPlay = false;
     this.watchPartyYTPlayer?.stopVideo();
   };
 
