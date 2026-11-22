@@ -113,4 +113,37 @@ for (const volume of [0, 1, 2]) {
   );
 }
 
+// routeBelowFull (iOS, element volume ignored): below 100% the gain node plays
+// it at that level, element muted; exactly 100% stays on the element; above
+// 100%, self and mutedForMe are unchanged
+const ios = (volume: number, deaf = false, extra = {}) =>
+  voicePeerOutput({
+    self: false,
+    deaf,
+    volume,
+    routeBelowFull: true,
+    ...extra,
+  });
+eq("ios 0.3", ios(0.3), {
+  useGraph: true,
+  muted: true,
+  elementVolume: 1,
+  gain: 0.3,
+});
+eq("ios 0", ios(0), { useGraph: true, muted: true, elementVolume: 1, gain: 0 });
+eq("ios deaf 0.3", ios(0.3, true).gain, 0);
+eq("ios 1", ios(1), out(false, false, 1));
+eq("ios 2", ios(2), out(false, false, 2));
+eq("ios mutedForMe 0.3", ios(0.3, false, { mutedForMe: true }).useGraph, false);
+eq(
+  "ios self 0.3",
+  voicePeerOutput({
+    self: true,
+    deaf: false,
+    volume: 0.3,
+    routeBelowFull: true,
+  }),
+  out(true, false, 0.3),
+);
+
 console.log("voiceVolume checks passed");

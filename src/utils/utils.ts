@@ -219,6 +219,14 @@ export const isTouchPrimary = () =>
   window.matchMedia("(pointer: coarse)").matches ||
   window.matchMedia("(hover: none)").matches;
 
+// iOS ignores HTMLMediaElement.volume (it always reads back 1, and the YouTube
+// iframe's setVolume hits the same wall). Probed once at load
+export const volumeSettable = (() => {
+  const probe = document.createElement("audio");
+  probe.volume = 0.5;
+  return probe.volume === 0.5;
+})();
+
 export function shuffle(array: any[]) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * i);

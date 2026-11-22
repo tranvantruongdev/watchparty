@@ -11,6 +11,7 @@ import {
   iceServers,
   isTouchPrimary,
   softWhite,
+  volumeSettable,
 } from "../../utils/utils";
 import { UserMenu } from "../UserMenu/UserMenu";
 import { MetadataContext } from "../../MetadataContext";
@@ -87,6 +88,9 @@ const getVoiceVolume = () => {
   }
   return window.watchparty.voiceVolume;
 };
+// The gain path plays above 100%, and below it too where the element ignores
+// volume (iOS: a 30% slider played everyone at 100%)
+const voiceNeedsGraph = (v: number) => v > 1 || (!volumeSettable && v < 1);
 
 // HD voice: Chrome encodes opus at ~32 kbps mono by default. maxaveragebitrate
 // in the fmtp is the encoder cap (RFC 7587 §6.1) — raise it to 64 kbps, the
@@ -327,8 +331,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   };
 
   // The one place that sets how a seat's voice is played: its element's muted
-  // and volume, and (above 100%) its gain node. Called from attach and from
-  // every render's ref, so they cannot disagree
+  // and volume, and (above 100%, or below it on iOS) its gain node. Called
+  // from attach and from every render's ref, so they cannot disagree
   applyVoiceOutput = (id: string) => {
     const el = window.watchparty.videoRefs[id];
     if (!el) {
@@ -340,7 +344,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     const mutedForMe = !self && isMutedForMe(id);
     const volume = getVoiceVolume();
     const ctx =
-      !self && !mutedForMe && volume > 1 && hasAudio
+      !self && !mutedForMe && voiceNeedsGraph(volume) && hasAudio
         ? this.ensureAudioContext()
         : this.audioCtx;
     // Only use the graph when it can play now; else the element plays at <=100%
@@ -351,6 +355,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       deaf: this.props.deaf,
       volume: canRoute ? volume : Math.min(volume, 1),
       mutedForMe,
+      routeBelowFull: canRoute && !volumeSettable,
     });
     el.muted = out.muted;
     if (!self) {
@@ -470,7 +475,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       window.localStorage.setItem(VOICE_VOLUME_KEY, String(v));
     } catch {}
     this.setState({ voiceVolume: v });
-    if (v > 1) {
+    if (voiceNeedsGraph(v)) {
       // The slider drag is the user gesture that lets the context run
       this.ensureAudioContext();
     }
@@ -1121,7 +1126,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     this.setState({ deviceHint: "", micNotice: "" });
     // The mic-on click is a user gesture: a saved boost (>100%) can start its
     // audio context now (before the awaits), it cannot at page load
-    if (getVoiceVolume() > 1) {
+    if (voiceNeedsGraph(getVoiceVolume())) {
       this.ensureAudioContext();
     }
     const seq = this.teardownSeq;
