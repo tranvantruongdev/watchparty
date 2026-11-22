@@ -589,6 +589,8 @@ export class App extends React.Component<AppProps, AppState> {
   // The autoplay-blocked unlock listens on document gestures once (see
   // AUDIO_UNLOCK_EVENTS); the flag keeps a re-arm from stacking listeners
   audioUnlockArmed = false;
+  // When a gesture last unlocked playback (see videoClick)
+  unlockedAt = 0;
   // Per-second position reports, kept out of state: storing them in state
   // re-rendered the whole tree twice a second while a video plays. Sync logic
   // reads this field; state.tsMap is only refreshed for the ts badges while
@@ -3680,6 +3682,7 @@ export class App extends React.Component<AppProps, AppState> {
 
   // Both gesture unlocks (a tap anywhere, the Unmute overlay button)
   unlockPlayback = () => {
+    this.unlockedAt = Date.now();
     this.setState({ isAutoPlayable: true, playbackBlocked: false }, () => {
       this.localSetMute(false);
       // The gesture means "give me sound", not "full blast": keep the
@@ -3784,6 +3787,16 @@ export class App extends React.Component<AppProps, AppState> {
   // controller's REC:play/pause/seek/rate broadcasts keep us in sync
   otherControlsPlayback = () =>
     Boolean(this.state.extController && this.state.extController !== clientId);
+
+  // leftVideo's click. Right after an unlock it is the unlock tap's own click:
+  // the document pointerup unlock unmounts the Unmute overlay before the
+  // browser dispatches the click, which then lands here and would pause what
+  // the tap just started — the whole room in an unlocked room (R16P)
+  videoClick = () => {
+    if (Date.now() - this.unlockedAt > 500) {
+      this.roomTogglePlay();
+    }
+  };
 
   roomTogglePlay = () => {
     if (this.state.exploring) {
@@ -5498,7 +5511,7 @@ export class App extends React.Component<AppProps, AppState> {
                           }
                         }}
                         playsInline
-                        onClick={this.roomTogglePlay}
+                        onClick={this.videoClick}
                       ></video>
                     )}
                     <div
