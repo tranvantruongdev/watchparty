@@ -707,6 +707,19 @@ async function main() {
     `true emitted after ${jTrueMs} ms; B paused after ${ms} ms (2.5 s server grace); A ${JSON.stringify(await vstate(A))}`,
   );
   const jSysA = await sysLines(A), jSysB = await sysLines(B);
+  // j1d (R17D): while the room sits buffer-paused on A's claim, A must NOT rescind —
+  // its "false" is what the server resumes everyone on (bufferResume), so it must mean
+  // "my data is back", not "the pause stopped my stall". HEAD's tick sent false ~1 s
+  // after the pause and the room resumed while A was still stalled
+  await sleep(3000);
+  const jHold = await emits(A);
+  const jHoldB = await vstate(B);
+  check(
+    "j1d. 3 s after the auto-pause, still stalled: A sent no CMD:buffering false, B still paused",
+    (jHold["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 1 &&
+      jHoldB.paused === true,
+    `A CMD:buffering emits since the stall: ${(jHold["CMD:buffering"] || 0) - (j0a["CMD:buffering"] || 0)} (want 1: the true only); B ${JSON.stringify(jHoldB)}`,
+  );
   await isolatedEval(A, UNSTALL);
   const jEmits = await ev(A, PANEL(`return h.dataset.emits;`));
   const jRecover = ((await emits(A))["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 2;

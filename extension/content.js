@@ -1013,7 +1013,34 @@
     if (!joined || roomMedia || adPlaying() || !video || video.paused) return;
     if (!waitingSince) waitingSince = Date.now();
   };
+  // "my data is back" for a held claim (the web app's reportBuffering hold, App.tsx):
+  // a buffered range covering currentTime reaching >= 3 s ahead. Indexed loop: Edge's
+  // TimeRanges has no iterator
+  const bufferedAhead = () => {
+    if (!video || video.readyState < 3 || !video.buffered) return false;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (
+        video.buffered.start(i) <= video.currentTime + 0.5 &&
+        video.buffered.end(i) > video.currentTime
+      )
+        return video.buffered.end(i) - video.currentTime >= 3;
+    }
+    return false;
+  };
   const onBufferRecover = () => {
+    // paused while holding the claim (the room's buffer auto-pause paused us on it):
+    // a canplay/playing with < 3 s ahead is not "data back" — the server resumes
+    // everyone on our false (bufferResume). Keep the claim and waitingSince armed so
+    // the tick re-checks each second (R17D)
+    if (
+      buffering &&
+      video &&
+      video.paused &&
+      !roomMedia &&
+      !adPlaying() &&
+      !bufferedAhead()
+    )
+      return;
     waitingSince = 0;
     if (roomMedia || adPlaying()) return;
     reportBuffering(false);
@@ -1372,7 +1399,14 @@
         renderUnread();
       }
     });
-    s.on("REC:play", () => roomMedia || adPlaying() || applyPlay());
+    s.on("REC:play", () => {
+      if (roomMedia || adPlaying()) return;
+      // someone resumed while we still hold our stall claim (the pause consumed it on
+      // the server): claim again, our data is not back — the web app does the same on
+      // its REC:play (App.tsx), the room re-pauses if we are still short
+      if (buffering) emit("CMD:buffering", true);
+      applyPlay();
+    });
     s.on("REC:pause", () => roomMedia || adPlaying() || applyPause());
     s.on("REC:seek", (t) => roomMedia || adPlaying() || applySeek(Number(t)));
     s.on("REC:playbackRate", (r) => {
@@ -1585,8 +1619,23 @@
           waitingSince = 0;
           reportBuffering(false);
         }
+      } else if (
+        buffering &&
+        joined &&
+        video &&
+        video.paused &&
+        !roomMedia &&
+        !adPlaying()
+      ) {
+        // paused by the room's buffer auto-pause on OUR claim: hold it — the server
+        // resumes everyone on our "false" (bufferResume), so it must mean the data is
+        // back (>= 3 s buffered ahead), not that the pause stopped the stall (R17D)
+        if (bufferedAhead()) {
+          waitingSince = 0;
+          reportBuffering(false);
+        }
       } else {
-        waitingSince = 0; // paused / room media / ad / left: the stall context is gone
+        waitingSince = 0; // paused without a held claim / room media / ad / left: gone
         // rescind the claim too: a claim that outlives its stall (the video paused
         // while we were reporting buffering, so no playing/canplay ever rescinds it)
         // sits in the server's buffer map and re-pauses the room on the next play
