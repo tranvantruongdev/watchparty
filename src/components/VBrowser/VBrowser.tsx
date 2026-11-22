@@ -8,6 +8,10 @@ import { VIDEO_MAX_HEIGHT_CSS, isTouchPrimary } from "../../utils/utils";
 import { Button } from "@mantine/core";
 import { IconClipboard, IconKeyboardFilled } from "@tabler/icons-react";
 
+// Events after which a blocked element may be played (same list as App's
+// audio unlock and VideoChat's voice retry)
+const GESTURE_EVENTS = ["pointerdown", "pointerup", "touchend", "keydown"];
+
 export class VBrowser extends React.Component<{
   username: string;
   password: string;
@@ -76,7 +80,7 @@ export class VBrowser extends React.Component<{
           "iPhoneAudio",
         ) as HTMLAudioElement;
         audio.srcObject = new MediaStream([track]);
-        audio.play();
+        this.playIPhoneAudio();
       }
       await this.props.doPlay();
     });
@@ -143,7 +147,29 @@ export class VBrowser extends React.Component<{
     window.clearInterval(this.keepAliveInterval);
     this.$client.removeAllListeners();
     this.$client.logout();
+    this.stopIPhoneAudioRetry();
   }
+
+  // iPhone refuses play() before a user gesture, and nothing else starts this
+  // element (App's tap-to-unlock plays leftVideo only): retry on every gesture
+  // until it plays. A touch's pointerdown lands before activation and is
+  // refused, its pointerup/touchend is not
+  playIPhoneAudio = () => {
+    const audio = document.getElementById("iPhoneAudio") as HTMLAudioElement;
+    audio
+      ?.play()
+      .then(this.stopIPhoneAudioRetry, () =>
+        GESTURE_EVENTS.forEach((type) =>
+          document.addEventListener(type, this.playIPhoneAudio),
+        ),
+      );
+  };
+
+  stopIPhoneAudioRetry = () => {
+    GESTURE_EVENTS.forEach((type) =>
+      document.removeEventListener(type, this.playIPhoneAudio),
+    );
+  };
 
   takeControl = () => {
     if (this.$client.connected) {
