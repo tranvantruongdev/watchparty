@@ -802,8 +802,10 @@
   const onPause = () => {
     if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     // the end-of-media pause is the video finishing (R15W D4), not a user pause: the
-    // room keeps playing (youtube autonav moves on ~8 s later, nobody resumes the room)
-    if (video.ended) return;
+    // room keeps playing (youtube autonav moves on ~8 s later, nobody resumes the room).
+    // An MSE player can stop just short of its duration without ever setting ended (a
+    // twitch VOD pauses itself ~0.08 s before it, readyState 2): the last second counts too
+    if (video.ended || video.duration - video.currentTime < 1) return;
     if (suppressed("pause") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (adGapBlock()) return; // the ad tail gap (D1): the ad's own end pause lands there
