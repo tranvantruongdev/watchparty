@@ -13,8 +13,29 @@ import path from "node:path";
 import { getBookmarklet } from "../src/utils/bookmarklet.ts";
 
 const EDGE = process.env.EDGE || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
-const EXT = path.resolve(import.meta.dirname, "../extension");
-const SERVER = "http://localhost:8080";
+const SRC_EXT = path.resolve(import.meta.dirname, "../extension");
+const SERVER = process.env.WP_SERVER || "http://localhost:8080";
+// content.js bakes in http://localhost:8080: for another WP_SERVER, load a temp copy pointed at it
+const EXT = (() => {
+  if (SERVER === "http://localhost:8080") return SRC_EXT;
+  const dir = path.join(os.tmpdir(), "wp-ext-youtube-ext");
+  fs.rmSync(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 200,
+  });
+  fs.cpSync(SRC_EXT, dir, { recursive: true });
+  const cj = path.join(dir, "content.js");
+  fs.writeFileSync(
+    cj,
+    fs
+      .readFileSync(cj, "utf8")
+      .replace('"http://localhost:8080"', JSON.stringify(SERVER)),
+  );
+  return dir;
+})();
+
 const YT_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ";
 const CANON = "https://www.youtube.com/watch?v=aqz-KE-bpKQ";
 // Sintel (Blender open movie, public, unmonetised) — the --nav phase's in-page hop target
