@@ -3754,11 +3754,15 @@ export class App extends React.Component<AppProps, AppState> {
   reportBuffering = () => {
     let raw = false;
     if (this.usingYoutube()) {
+      // window.YT exists ({loading, loaded}) before the widget API defines
+      // PlayerState: without the second ?. the tick threw (R16B, 2 of 3 runs),
+      // and while both sides are undefined the equality read as a stall, so
+      // hosting during the widget load paused the room at 0 (R16U)
+      const buffering = window.YT?.PlayerState?.BUFFERING;
       raw =
+        buffering !== undefined &&
         this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
-        // window.YT exists ({loading, loaded}) before the widget API defines
-        // PlayerState: without the second ?. the tick threw (R16B, 2 of 3 runs)
-        window.YT?.PlayerState?.BUFFERING;
+          buffering;
     } else {
       const el = this.Player().getVideoEl();
       raw = Boolean(el && !el.paused && el.readyState < 3);
