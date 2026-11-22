@@ -869,6 +869,11 @@ export class App extends React.Component<AppProps, AppState> {
         this.setState({ roomPaused: false });
         return;
       }
+      // Someone resumed while we still hold a stall (paused, short of data):
+      // claim again, the pause consumed the old claim on the server
+      if (this.bufferingReported) {
+        socket.emit("CMD:buffering", true);
+      }
       this.localPlay();
     });
     socket.on("REC:pause", () => {
@@ -3753,19 +3758,30 @@ export class App extends React.Component<AppProps, AppState> {
   // clear it the moment it recovers. Runs from the 1 s CMD:ts tick.
   reportBuffering = () => {
     let raw = false;
+    let paused = false;
     if (this.usingYoutube()) {
       // window.YT exists ({loading, loaded}) before the widget API defines
       // PlayerState: without the second ?. the tick threw (R16B, 2 of 3 runs),
       // and while both sides are undefined the equality read as a stall, so
       // hosting during the widget load paused the room at 0 (R16U)
       const buffering = window.YT?.PlayerState?.BUFFERING;
-      raw =
-        buffering !== undefined &&
-        this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() ===
-          buffering;
+      const state = this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState();
+      raw = buffering !== undefined && state === buffering;
+      paused = state === 2;
     } else {
       const el = this.Player().getVideoEl();
       raw = Boolean(el && !el.paused && el.readyState < 3);
+      paused = Boolean(el?.paused);
+    }
+    // The room pausing (the buffer auto-pause too) ends the stall but not the
+    // shortage: the server resumes a buffer-paused room on our "false"
+    // (bufferResume), so hold it until 3 s are buffered ahead
+    if (paused && this.bufferingReported) {
+      const t = this.Player().getCurrentTime();
+      const range = this.Player()
+        .getTimeRanges()
+        .find((r) => r.start <= t + 0.5 && r.end > t);
+      raw = !range || range.end - t < 3;
     }
     const now = Date.now();
     if (raw) {

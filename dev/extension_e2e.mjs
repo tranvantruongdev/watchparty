@@ -706,6 +706,7 @@ async function main() {
     jTrueMs !== null && ms !== null,
     `true emitted after ${jTrueMs} ms; B paused after ${ms} ms (2.5 s server grace); A ${JSON.stringify(await vstate(A))}`,
   );
+  const jSysA = await sysLines(A), jSysB = await sysLines(B);
   await isolatedEval(A, UNSTALL);
   const jEmits = await ev(A, PANEL(`return h.dataset.emits;`));
   const jRecover = ((await emits(A))["CMD:buffering"] || 0) === (j0a["CMD:buffering"] || 0) + 2;
@@ -720,6 +721,17 @@ async function main() {
     jRecover && !Object.keys(jda).length && !Object.keys(jdb).length && s1a === s0a && s1b === s0b,
     `A emits=${jEmits}; idle diffs A=${JSON.stringify(jda)} B=${JSON.stringify(jdb)}; sys lines A ${s0a}->${s1a} B ${s0b}->${s1b}`,
   );
+  // j1c: A's recovery report resumes the buffer-paused room by itself (server
+  // bufferResume: REC:play + one "caught up" line); then A pauses so the steps below
+  // start from the paused room they were written for
+  const jB = await vstate(B);
+  check(
+    "j1c. A's recovery resumes the buffer-paused room: B playing again, one new system line in A's and B's logs",
+    !jB.paused && s0a === jSysA + 1 && s0b === jSysB + 1,
+    `B ${JSON.stringify(jB)}; sys lines A ${jSysA}->${s0a} B ${jSysB}->${s0b}`,
+  );
+  await ev(A, `document.querySelector('video').pause(); true`);
+  await waitFor(async () => (await vstate(B)).paused === true, 3000);
 
   // j2b: C clicks Leave -> 'Carol left' notice in A's log, still local-only
   const cLeft = await ev(C, PANEL(`r.getElementById('join').click(); return true;`));

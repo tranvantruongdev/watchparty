@@ -38,6 +38,12 @@ const MAX_VBROWSERS_PER_USER = 2;
 // The only emojis accepted for CMD:floatReaction, anything else is dropped
 const FLOAT_REACTIONS = ["😂", "❤️", "😮", "😢", "👏", "🔥"];
 
+// Buffer auto-pause recovery: how long the room waits for the stalled member's
+// "data is back" report, and how many auto-resumes one stall episode gets (a
+// member still offline re-stalls after each and the room re-pauses)
+const BUFFER_RESUME_WATCH_MS = 30000;
+const BUFFER_RESUME_MAX_ATTEMPTS = 2;
+
 // The only hostnames a CMD:siteUrl may announce: the streaming sites members'
 // extensions watch, so the room can offer others "follow". Subdomains count
 // (www.netflix.com); lookalike suffixes (evillnetflix.com) don't
@@ -192,6 +198,13 @@ export class Room {
   private tsInterval: NodeJS.Timeout | undefined = undefined;
   // Fires when a stalled viewer needs the room paused so nobody watches ahead
   private bufferPauseTimer: NodeJS.Timeout | undefined = undefined;
+  // Who the last buffer auto-pause paused the room for: their CMD:buffering
+  // false (sent once they have data buffered again) resumes the room. null
+  // when a person paused, or the watch fired / expired / was cancelled
+  private bufferResumeWatch: { clientId: string; pausedAt: number } | null =
+    null;
+  // Auto-resumes since the last manual play / new media (cap above)
+  private bufferResumeAttempts = 0;
   // Ends a dead sharer's share (round 44) after a grace window: a network
   // blip can drop the sharer's socket while their capture keeps running, and
   // they re-announce with CMD:resumeShare when the socket comes back
@@ -255,6 +268,7 @@ export class Room {
         this.paused = true;
         // The room pause means nobody is falling behind; drop any pending one
         this.clearBufferPause();
+        this.bufferResumeWatch = null;
         this.io.of(this.roomId).emit("REC:pause");
         // REC:pause unstalls every player, so stale stuck claims must not
         // re-pause the room after someone wakes up and presses play (same
@@ -1090,6 +1104,8 @@ export class Room {
     this.tsMap = {};
     this.bufferingMap = {};
     this.bufferPauseMap = {};
+    this.bufferResumeWatch = null;
+    this.bufferResumeAttempts = 0;
     // New media ends any intermission
     if (this.intermission) {
       this.intermission = null;
@@ -1395,6 +1411,9 @@ export class Room {
       msg: this.tsMap[socket.clientId]?.toString(),
     };
     this.paused = false;
+    // A person resumed: no auto-resume pending, and a new stall gets its own budget
+    this.bufferResumeWatch = null;
+    this.bufferResumeAttempts = 0;
     // Resuming the show ends any intermission
     if (this.intermission) {
       this.intermission = null;
@@ -1415,6 +1434,8 @@ export class Room {
     this.paused = true;
     // A manual pause means nobody is falling behind; drop any pending one
     this.clearBufferPause();
+    // and an auto-resume must not override the person who paused
+    this.bufferResumeWatch = null;
     this.addChatMessage(socket, chatMsg);
   };
 
@@ -1440,6 +1461,9 @@ export class Room {
         this.tsMap[key] = data;
       });
     }
+    // A seek moves everyone: resuming a buffer-paused room is the people's
+    // call again, the stalled member's data was for the old position
+    this.bufferResumeWatch = null;
     socket.broadcast.emit("REC:seek", data);
     const chatMsg = { id: socket.clientId, cmd: "seek", msg: data?.toString() };
     this.addChatMessage(socket, chatMsg);
@@ -1726,6 +1750,7 @@ export class Room {
     this.paused = true;
     // A manual pause means nobody is falling behind; drop any pending one
     this.clearBufferPause();
+    this.bufferResumeWatch = null;
     this.io.of(this.roomId).emit("REC:pause");
     this.io.of(this.roomId).emit("REC:intermission", this.intermission);
     this.addChatMessage(socket, {
@@ -1789,6 +1814,16 @@ export class Room {
     // Accept only booleans; ignore no-op updates so the roster isn't re-emitted
     if (typeof data !== "boolean") {
       return;
+    }
+    // The member the buffer auto-pause was for has data again: resume. Before
+    // the no-op check, since the pause consumed their claim
+    if (
+      data === false &&
+      this.bufferResumeWatch?.clientId === socket.clientId &&
+      Date.now() - this.bufferResumeWatch.pausedAt < BUFFER_RESUME_WATCH_MS
+    ) {
+      this.bufferResumeWatch = null;
+      this.fireBufferResume(socket.clientId);
     }
     if (Boolean(this.bufferingMap[socket.clientId]) === data) {
       return;
@@ -1855,7 +1890,29 @@ export class Room {
         cmd: "bufferPause",
         msg: Math.round(this.videoTS).toString(),
       });
+      if (this.bufferResumeAttempts < BUFFER_RESUME_MAX_ATTEMPTS) {
+        this.bufferResumeWatch = { clientId: stuck, pausedAt: Date.now() };
+      }
     }, 2500);
+  };
+
+  // Resume a buffer-paused room once the member it waited for has data again.
+  // Not playVideo(): no socket to attribute it to, and REC:play goes to
+  // everyone, the recovered member too. Re-arms like playVideo does, so
+  // someone still stuck pauses it again
+  private fireBufferResume = (clientId: string) => {
+    if (!this.paused || this.intermission) {
+      return;
+    }
+    this.bufferResumeAttempts += 1;
+    this.paused = false;
+    this.io.of(this.roomId).emit("REC:play", this.video);
+    this.armBufferPause();
+    this.addChatMessage(null, {
+      id: clientId,
+      cmd: "bufferResume",
+      msg: Math.round(this.videoTS).toString(),
+    });
   };
 
   private clearBufferPause = () => {
@@ -2567,6 +2624,9 @@ export class Room {
       delete this.tsMap[clientId];
       delete this.bufferingMap[clientId];
       delete this.bufferPauseMap[clientId];
+      if (this.bufferResumeWatch?.clientId === clientId) {
+        this.bufferResumeWatch = null;
+      }
       delete this.bufferingChangeTimes[clientId];
       delete this.socketIdMap[clientId];
       delete this.pageIdMap[clientId];
