@@ -933,12 +933,15 @@
       const p = e.composedPath();
       if (p.includes(host)) return;
       // Text entry only: a <select> or an <input type="range"> can BE a player control
-      // (keyboard seek), and its keys must keep reaching the room (R16J)
+      // (keyboard seek), and its keys must keep reaching the room (R16J). Date/time
+      // fields are typed into like text (R16N)
       const t = p[0];
       if (
         t &&
         ((t.tagName === "INPUT" &&
-          /^(text|search|email|url|tel|password|number)$/.test(t.type)) ||
+          /^(text|search|email|url|tel|password|number|date|time|month|week|datetime-local)$/.test(
+            t.type,
+          )) ||
           t.tagName === "TEXTAREA" ||
           t.isContentEditable)
       )
