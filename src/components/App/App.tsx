@@ -3581,12 +3581,13 @@ export class App extends React.Component<AppProps, AppState> {
       return;
     }
     // YouTube has its own seek pitfalls (see ensureYtPlaysAfterSeek right
-    // below) and its element is not a real video: only the one catch-up after
-    // a buffer auto-pause on our stall, which left us 5-6 s behind for good
-    // (R17F), once the embed plays and > 1.5 s behind
+    // below) and its element is not a real video: resync only once the embed
+    // plays and is > 1.5 s off, through the same streak / quiet window /
+    // back-off as below. It was armed only after a buffer auto-pause on our
+    // stall (R17F), so a member 2 s or 5 s off for any other reason never
+    // came back (R23A: 0/12 in 30 s; now 12/12 in ~4 s with one seek)
     if (this.usingYoutube()) {
       if (
-        !this.ytCatchUpArmed ||
         this.bufferingReported ||
         this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() !==
           window.YT?.PlayerState?.PLAYING
@@ -3595,6 +3596,7 @@ export class App extends React.Component<AppProps, AppState> {
       }
       if (Math.abs(delta) <= 1.5) {
         this.ytCatchUpArmed = false;
+        this.driftStreak = 0;
         return;
       }
     } else {
