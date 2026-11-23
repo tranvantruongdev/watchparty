@@ -187,6 +187,12 @@ export class Room {
   // clientId -> timestamps of relayed WebRTC signaling in the last second.
   // Own, higher budget: connection setup trickles dozens of candidates
   private signalTimes: { [clientId: string]: number[] } = {};
+  // clientId -> timestamps of relayed voice-state events (joinVideo /
+  // leaveVideo / userMute) in the last second. Own budget: a burst of mic
+  // toggles (one userMute each) used up the shared 25/s one, and the dropped
+  // tail carried the member's final mute flag, so the others kept showing the
+  // opposite state until the next toggle
+  private voiceTimes: { [clientId: string]: number[] } = {};
   // clientId -> timestamps of accepted typing notices in the last second
   private typingTimes: { [clientId: string]: number[] } = {};
   // clientId -> timestamps of accepted site-url announcements in the last 5s.
@@ -689,17 +695,19 @@ export class Room {
       on("CMD:sleep", (data: unknown) =>
         this.setSleepTimer(socket, data, validateLock()),
       );
+      // Voice-state events share voiceTimes (60/s: a 41-click burst sent up to 25
+      // userMute) so each still makes one roster broadcast, bounded per socket
       on("CMD:joinVideo", () => {
-        allowRelay() && this.joinVideo(socket);
+        allowRelay(60, this.voiceTimes) && this.joinVideo(socket);
       });
       on("CMD:leaveVideo", () => {
-        allowRelay() && this.leaveVideo(socket);
+        allowRelay(60, this.voiceTimes) && this.leaveVideo(socket);
       });
       on("CMD:joinScreenShare", (data) => {
         validateLock() && allowRelay() && this.joinScreenSharing(socket, data);
       });
       on("CMD:userMute", (data: unknown) => {
-        allowRelay() && this.setUserMute(socket, data);
+        allowRelay(60, this.voiceTimes) && this.setUserMute(socket, data);
       });
       on("CMD:leaveScreenShare", () => {
         allowRelay() && this.leaveScreenSharing(socket);
@@ -2664,6 +2672,7 @@ export class Room {
       delete this.relayTimes[clientId];
       delete this.pictureTimes[clientId];
       delete this.signalTimes[clientId];
+      delete this.voiceTimes[clientId];
       delete this.typingTimes[clientId];
       delete this.siteUrlTimes[clientId];
       delete this.extControlTimes[clientId];
