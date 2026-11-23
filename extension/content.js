@@ -789,12 +789,16 @@
   // A site's own play()/pause() loop (a twitch VOD at readyState 1 looped play -> waiting -> pause every
   // ~2 ms and the panel broadcast each turn: 3613 CMD:pause / 3124 CMD:play from one tab, 2026-11-22) is
   // not a person: past 4 gesture-less broadcasts in 1 s the rest stay local until the element has been
-  // quiet 2 s (each further event while latched extends it). A trusted gesture always passes and clears it.
+  // quiet 2 s (each further event while latched extends it). A trusted gesture's event always passes and
+  // clears it — once per gesture: the loop's own events inside that gesture's 1 s window are counted again
+  // (a click during a loop let all of them through: 200 play+pause in 1 s, codex R24A)
   let loopTimes = [];
   let loopUntil = 0;
+  let gesturePassed = 0; // the gestureAt whose event already went through
   const siteLoop = () => {
     const now = Date.now();
-    if (now - gestureAt < 1000) {
+    if (now - gestureAt < 1000 && gesturePassed !== gestureAt) {
+      gesturePassed = gestureAt;
       loopTimes = [];
       loopUntil = 0;
       return false;

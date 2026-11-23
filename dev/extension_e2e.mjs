@@ -748,6 +748,48 @@ async function main() {
     );
   }
 
+  // f3c. a person clicks while the site loops (codex R24A): the click's own event passes, but the loop's
+  // events inside that click's 1 s gesture window must still be counted and latched, not all let through
+  {
+    const cb0 = await emits(B);
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"])
+      await B.s("Input.dispatchMouseEvent", {
+        type,
+        x: 30,
+        y: 25,
+        button: "left",
+        clickCount: 1,
+      });
+    await B.s("Runtime.evaluate", {
+      expression: `(async () => { const v = document.querySelector('video'); for (let i = 0; i < 200; i++) { if (i % 2 === 0) v.play().catch(() => {}); else v.pause(); await new Promise((r) => setTimeout(r, 2)); } return true; })()`,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: false,
+    });
+    await sleep(1000);
+    const cdb = nonTs(cb0, await emits(B));
+    const cpp = (cdb["CMD:play"] || 0) + (cdb["CMD:pause"] || 0);
+    check(
+      "f3c. click then the site's 200x play/pause loop inside the click's 1 s window: B emits <= 6 CMD:play+pause and <= 6 CMD:seek",
+      cpp <= 6 && (cdb["CMD:seek"] || 0) <= 6,
+      `B non-ts=${JSON.stringify(cdb)} (play+pause=${cpp})`,
+    );
+    // back to "A and B paused at 30 s, rate 0.75", as after f3
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await ev(B, `document.querySelector('video').pause(); true`);
+    await sleep(3500); // past the latch quiet period (~2 s)
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await waitFor(
+      async () =>
+        (await vstate(B)).paused === true && (await vstate(A)).paused === true,
+      3000,
+    );
+    await sleep(800);
+    await ev(A, `document.querySelector('video').currentTime = 30; true`);
+    await waitFor(async () => Math.abs((await vstate(B)).t - 30) < 1, 3000);
+    await sleep(1500);
+  }
+
   // g. late joiner
   const C = await newPage("C", TEST_URL);
   await startPanel(C);
