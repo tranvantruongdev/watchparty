@@ -3944,10 +3944,18 @@ export class App extends React.Component<AppProps, AppState> {
     // is noise while it loads (no player, -1 unstarted, 5 cued: R16V), buffers
     // (3) or has ended (0: currentTime 19.021 vs duration 19 read as "not at
     // the end", so Play sent CMD:pause, R16W). Only a paused embed (2) in a
-    // playing room plays, to unstick our own player as before
+    // playing room plays, to unstick our own player as before — but not within
+    // the grace window of our own Play: the embed is still paused until its
+    // delayed playVideo lands, and a Pause tapped 100-150 ms after Play read
+    // that as "stuck" and sent a second CMD:play (R22C: 0/6 paused at GAP
+    // 100/150 ms, 3/3 at 200+)
+    const yt = this.YouTubeInterface;
+    const justPlayed =
+      yt.lastAppCallWasPlay &&
+      Date.now() - yt.lastAppCallAt < YouTube.SELF_EVENT_GRACE_MS;
     const shouldPlay = this.usingYoutube()
       ? this.state.roomPaused ||
-        this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() === 2
+        (yt.watchPartyYTPlayer?.getPlayerState() === 2 && !justPlayed)
       : this.Player().shouldPlay();
     if (shouldPlay) {
       this.socket.emit("CMD:play");
