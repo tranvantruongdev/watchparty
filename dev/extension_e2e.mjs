@@ -672,10 +672,47 @@ async function main() {
       returnByValue: true,
       userGesture: false,
     });
-    await sleep(3000);
+    // f3b. still latched (the loop ended just now): B pauses/plays the way a person does, a trusted CDP
+    // mouse press+release on the page, then the state flip within 1 s. The gesture always passes the guard:
+    // B emits that one CMD:play/CMD:pause and A follows within 2 s.
+    const gwasPaused = (await vstate(B)).paused;
+    const gaPre = (await vstate(A)).paused; // A must start in B's state, so A changing below is the gesture's doing
+    const gcmd = gwasPaused ? "CMD:play" : "CMD:pause";
+    const gb0 = await emits(B);
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"])
+      await B.s("Input.dispatchMouseEvent", {
+        type,
+        x: 30,
+        y: 25,
+        button: "left",
+        clickCount: 1,
+      });
+    await ev(
+      B,
+      `(() => { const v = document.querySelector('video'); ${gwasPaused ? "v.play().catch(() => {})" : "v.pause()"}; return true; })()`,
+    );
+    const gms = await waitFor(
+      async () => (await vstate(A)).paused === !gwasPaused,
+      2000,
+    );
+    await sleep(500);
+    const gb1 = await emits(B);
+    const gdb = nonTs(gb0, gb1);
+    check(
+      "f3b. still latched after the loop: B's trusted click + " +
+        (gwasPaused ? "play" : "pause") +
+        " reaches the room (B emits exactly one " +
+        gcmd +
+        ", A follows within 2 s)",
+      gaPre === gwasPaused && gdb[gcmd] === 1 && gms !== null,
+      `B was ${gwasPaused ? "paused" : "playing"} after the loop, A paused=${gaPre} before the click; B non-ts during the gesture=${JSON.stringify(gdb)}; A followed after ${gms} ms; A ${JSON.stringify(await vstate(A))}`,
+    );
+    await sleep(2500);
     const fa1 = await emits(A),
       fb1 = await emits(B);
     const fdb = nonTs(fb0, fb1);
+    for (const [k, n] of Object.entries(gdb)) fdb[k] = (fdb[k] || 0) - n; // the gesture's own emits belong to f3b
+    for (const k of Object.keys(fdb)) if (!fdb[k]) delete fdb[k];
     const flips = [];
     for (let i = 0; i < 6; i++) {
       flips.push((await vstate(A)).paused);
