@@ -554,6 +554,8 @@ export class App extends React.Component<AppProps, AppState> {
   publisherConns: PCDict = {};
   // Inaudible tone that keeps a hidden file-share tab unthrottled (setupRTCConnections)
   shareKeepAwake?: AudioContext;
+  // A file share's audio re-sourced through shareKeepAwake (see setupRTCConnections)
+  shareAudioOut?: MediaStreamTrack;
   consumerConn?: RTCPeerConnection;
   shareStatsTimer?: number;
   shareStatsLast?: { bytes: number; ts: number };
@@ -2857,6 +2859,7 @@ export class App extends React.Component<AppProps, AppState> {
     this.localStreamToPublish = undefined;
     this.shareKeepAwake?.close();
     this.shareKeepAwake = undefined;
+    this.shareAudioOut = undefined;
     if (wasSharing) {
       // Drop the sharer preview mirror with the capture; a viewer's consumer
       // stream lives in srcObject too, but only the publisher gets here with
@@ -2992,6 +2995,32 @@ export class App extends React.Component<AppProps, AppState> {
         }
       });
 
+      // A file share is encoded from leftVideo.captureStream(), which Chrome
+      // throttles once the tab is hidden (window covered/minimized) AND not
+      // audible (player muted, a silent scene): measured 20-25 viewer freezes
+      // per 60 s vs 0. A 20 Hz tone at -63 dBFS is inaudible but keeps the
+      // page "playing audio", which exempts it. Screen shares don't need it
+      // (their frames don't go through the page: 0 freezes hidden)
+      if (this.isLocalStreamAFile && !this.shareKeepAwake) {
+        const ctx = new AudioContext();
+        const tone = ctx.createOscillator();
+        const gain = ctx.createGain();
+        tone.frequency.value = 20;
+        gain.gain.value = 0.001;
+        tone.connect(gain).connect(ctx.destination);
+        tone.start();
+        this.shareKeepAwake = ctx;
+        // Viewers heard a file share's audio ~100 ms before its picture
+        // (+101 / +92 ms, box + beep clip, headless chromium). Sending the
+        // captured audio through this context first (no delay node) gave
+        // +19 / +28 / +16 ms in 3 runs, viewer video jitter buffer 83-104 -> 34-45 ms
+        const audio = this.localStreamToPublish?.getAudioTracks()[0];
+        if (audio) {
+          const dest = ctx.createMediaStreamDestination();
+          ctx.createMediaStreamSource(new MediaStream([audio])).connect(dest);
+          this.shareAudioOut = dest.stream.getAudioTracks()[0];
+        }
+      }
       this.state.participants.forEach((user) => {
         const id = user.id;
         if (id === selfId) {
@@ -3079,7 +3108,10 @@ export class App extends React.Component<AppProps, AppState> {
                 tr.sender.setParameters(params).catch(() => {});
               }
             } else {
-              pc.addTrack(track, this.localStreamToPublish);
+              pc.addTrack(
+                this.shareAudioOut ?? track,
+                this.localStreamToPublish,
+              );
             }
           });
           pc.onicecandidate = (event) => {
@@ -3170,22 +3202,6 @@ export class App extends React.Component<AppProps, AppState> {
           }, 3000);
         }
       });
-      // A file share is encoded from leftVideo.captureStream(), which Chrome
-      // throttles once the tab is hidden (window covered/minimized) AND not
-      // audible (player muted, a silent scene): measured 20-25 viewer freezes
-      // per 60 s vs 0. A 20 Hz tone at -63 dBFS is inaudible but keeps the
-      // page "playing audio", which exempts it. Screen shares don't need it
-      // (their frames don't go through the page: 0 freezes hidden)
-      if (this.isLocalStreamAFile && !this.shareKeepAwake) {
-        const ctx = new AudioContext();
-        const tone = ctx.createOscillator();
-        const gain = ctx.createGain();
-        tone.frequency.value = 20;
-        gain.gain.value = 0.001;
-        tone.connect(gain).connect(ctx.destination);
-        tone.start();
-        this.shareKeepAwake = ctx;
-      }
       // The sharer shows what their own encoder does (pollSendStats) instead
       // of the viewer's arrival stats
       window.clearInterval(this.shareStatsTimer);
