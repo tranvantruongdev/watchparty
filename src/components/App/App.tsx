@@ -884,6 +884,9 @@ export class App extends React.Component<AppProps, AppState> {
         this.setState({ roomPaused: true });
         return;
       }
+      // A pause landing on our stall (the buffer auto-pause): the others played
+      // on until it did, allow one YouTube catch-up after the resume
+      this.ytCatchUpArmed = this.bufferingReported;
       this.localPause();
     });
     socket.on("REC:seek", (data: number) => {
@@ -3518,6 +3521,8 @@ export class App extends React.Component<AppProps, AppState> {
   // connection) is not seek-pumped into re-buffering every ~14 s
   driftLastFixAt = 0;
   driftFailedFixes = 0;
+  // YouTube's one drift resync, armed by a pause that landed on our stall
+  ytCatchUpArmed = false;
 
   maybeCorrectDrift = (delta: number) => {
     if (!Number.isFinite(delta)) {
@@ -3539,23 +3544,37 @@ export class App extends React.Component<AppProps, AppState> {
       }
       return;
     }
-    // HTML <video> only — the YouTube player has its own seek pitfalls (see
-    // ensureYtPlaysAfterSeek right below) and its element is not a real video
+    // YouTube has its own seek pitfalls (see ensureYtPlaysAfterSeek right
+    // below) and its element is not a real video: only the one catch-up after
+    // a buffer auto-pause on our stall, which left us 5-6 s behind for good
+    // (R17F), once the embed plays and > 1.5 s behind
     if (this.usingYoutube()) {
-      return;
-    }
-    const el = this.Player().getVideoEl();
-    // Mid-seek, locally paused, or not playing smoothly (stalled or our own
-    // buffering report armed): seeking now would only re-buffer — wait for a
-    // healthy player
-    if (
-      !el ||
-      el.seeking ||
-      el.paused ||
-      el.readyState < 3 ||
-      this.bufferingReported
-    ) {
-      return;
+      if (
+        !this.ytCatchUpArmed ||
+        this.bufferingReported ||
+        this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() !==
+          window.YT?.PlayerState?.PLAYING
+      ) {
+        return;
+      }
+      if (Math.abs(delta) <= 1.5) {
+        this.ytCatchUpArmed = false;
+        return;
+      }
+    } else {
+      const el = this.Player().getVideoEl();
+      // Mid-seek, locally paused, or not playing smoothly (stalled or our own
+      // buffering report armed): seeking now would only re-buffer — wait for a
+      // healthy player
+      if (
+        !el ||
+        el.seeking ||
+        el.paused ||
+        el.readyState < 3 ||
+        this.bufferingReported
+      ) {
+        return;
+      }
     }
     if (Math.abs(delta) <= 0.5) {
       this.driftStreak = 0;
@@ -3576,6 +3595,7 @@ export class App extends React.Component<AppProps, AppState> {
       delta.toFixed(2),
       "s survived 4 ticks, resyncing self to leader",
     );
+    this.ytCatchUpArmed = false;
     this.localSeek(this.getLeaderTime() + (Date.now() - this.tsMapAt) / 1000);
   };
 
