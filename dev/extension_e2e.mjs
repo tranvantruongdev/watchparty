@@ -660,6 +660,57 @@ async function main() {
   await sleep(1500);
   console.log("   before g: A", JSON.stringify(await vstate(A)), "B", JSON.stringify(await vstate(B)));
 
+  // f3. a site's own play/pause loop (twitch VOD at readyState 1: play -> waiting -> pause every ~2 ms,
+  // measured 3613 CMD:pause / 3124 CMD:play / 3124 CMD:seek from one tab) must not flood the room:
+  // 200 gesture-less toggles on B at ~2 ms spacing, then the room ends in one steady state
+  {
+    const fa0 = await emits(A),
+      fb0 = await emits(B);
+    await B.s("Runtime.evaluate", {
+      expression: `(async () => { const v = document.querySelector('video'); for (let i = 0; i < 200; i++) { if (i % 2 === 0) v.play().catch(() => {}); else v.pause(); await new Promise((r) => setTimeout(r, 2)); } return true; })()`,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: false,
+    });
+    await sleep(3000);
+    const fa1 = await emits(A),
+      fb1 = await emits(B);
+    const fdb = nonTs(fb0, fb1);
+    const flips = [];
+    for (let i = 0; i < 6; i++) {
+      flips.push((await vstate(A)).paused);
+      await sleep(250);
+    }
+    const flipped = flips.some((x) => x !== flips[0]);
+    const fpp = (fdb["CMD:play"] || 0) + (fdb["CMD:pause"] || 0),
+      fsk = fdb["CMD:seek"] || 0;
+    check(
+      "f3. site's own 200x play/pause loop on B (no gesture, ~2 ms): B emits <= 6 CMD:play+pause and <= 6 CMD:seek; A ends in one steady state",
+      fpp <= 6 && fsk <= 6 && !flipped,
+      `B non-ts=${JSON.stringify(fdb)} (play+pause=${fpp} seek=${fsk}); A non-ts=${JSON.stringify(nonTs(fa0, fa1))}; A paused samples ${JSON.stringify(flips)}`,
+    );
+    // back to "A and B paused at 30 s, rate 0.75" for the steps below
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await ev(B, `document.querySelector('video').pause(); true`);
+    await sleep(3500); // past the latch quiet period (~2 s)
+    await ev(A, `document.querySelector('video').pause(); true`);
+    await waitFor(
+      async () =>
+        (await vstate(B)).paused === true && (await vstate(A)).paused === true,
+      3000,
+    );
+    await sleep(800);
+    await ev(A, `document.querySelector('video').currentTime = 30; true`);
+    await waitFor(async () => Math.abs((await vstate(B)).t - 30) < 1, 3000);
+    await sleep(1500);
+    console.log(
+      "   after f3: A",
+      JSON.stringify(await vstate(A)),
+      "B",
+      JSON.stringify(await vstate(B)),
+    );
+  }
+
   // g. late joiner
   const C = await newPage("C", TEST_URL);
   await startPanel(C);

@@ -786,12 +786,36 @@
       applyRate(roomRate);
     }
   };
+  // A site's own play()/pause() loop (a twitch VOD at readyState 1 looped play -> waiting -> pause every
+  // ~2 ms and the panel broadcast each turn: 3613 CMD:pause / 3124 CMD:play from one tab, 2026-11-22) is
+  // not a person: past 4 gesture-less broadcasts in 1 s the rest stay local until the element has been
+  // quiet 2 s (each further event while latched extends it). A trusted gesture always passes and clears it.
+  let loopTimes = [];
+  let loopUntil = 0;
+  const siteLoop = () => {
+    const now = Date.now();
+    if (now - gestureAt < 1000) {
+      loopTimes = [];
+      loopUntil = 0;
+      return false;
+    }
+    if (now < loopUntil) {
+      loopUntil = now + 2000;
+      return true;
+    }
+    loopTimes = loopTimes.filter((t) => now - t < 1000);
+    loopTimes.push(now);
+    if (loopTimes.length <= 4) return false;
+    loopUntil = now + 2000;
+    return true;
+  };
   const onPlay = () => {
     if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     if (suppressed("play") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (adGapBlock()) return; // the ad tail gap (D1): the ad-end restart may land there
     if (ctlBlocked()) return;
+    if (siteLoop()) return;
     cancelSeek(); // the play broadcast below already carries our position
     // line everyone up on our position before they start
     emit("CMD:seek", video.currentTime);
@@ -813,6 +837,7 @@
     if (Date.now() < titleResetUntil) return;
     if (adGapBlock()) return; // the ad tail gap (D1): the ad's own end pause lands there
     if (ctlBlocked()) return;
+    if (siteLoop()) return;
     emit("CMD:pause");
     rebaseElapsed(); // the room pauses with us: freeze the anchor here
   };
