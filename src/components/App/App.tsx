@@ -4503,6 +4503,9 @@ export class App extends React.Component<AppProps, AppState> {
           title={talking ? "Turn off mic" : "Turn on mic"}
           aria-label={talking ? "Mute microphone" : "Unmute microphone"}
           color={talking ? "red" : "green"}
+          // VideoChat (videoChatRef) mounts only once connected: a click before
+          // that hit a null ref and was dropped with no sign of it
+          disabled={this.state.state !== "connected"}
           onClick={() =>
             talking
               ? this.videoChatRef.current?.micOff()
