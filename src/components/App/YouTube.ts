@@ -16,6 +16,9 @@ export class YouTube implements Player {
   static readonly SELF_EVENT_GRACE_MS = 1000;
   lastAppCallAt = 0;
   lastAppCallWasPlay = false;
+  // playVideo's delayed call: a pause / stop / cue that comes after it within
+  // the 200 ms must win, or the room's Play-then-Pause ends up playing (R17L)
+  playTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
   getCurrentTime = () => {
     return this.watchPartyYTPlayer?.getCurrentTime() ?? 0;
@@ -57,6 +60,7 @@ export class YouTube implements Player {
     let altVideoId = src.split("/").slice(-1)[0].split("?")[0];
     this.lastAppCallAt = Date.now();
     this.lastAppCallWasPlay = false;
+    clearTimeout(this.playTimer);
     this.watchPartyYTPlayer?.cueVideoById(videoId || altVideoId, time);
     // this.watchPartyYTPlayer?.cuePlaylist({listType: 'playlist', list: 'OLAK5uy_mtoaOGQksRdPbwlNtQ9IiK67wir5QqyIc'});
   };
@@ -65,7 +69,8 @@ export class YouTube implements Player {
     // stamped at intent so the grace window spans the 200 ms delayed call
     this.lastAppCallAt = Date.now();
     this.lastAppCallWasPlay = true;
-    setTimeout(() => {
+    clearTimeout(this.playTimer);
+    this.playTimer = setTimeout(() => {
       console.log("play yt");
       this.watchPartyYTPlayer?.playVideo();
     }, 200);
@@ -74,6 +79,7 @@ export class YouTube implements Player {
   pauseVideo = () => {
     this.lastAppCallAt = Date.now();
     this.lastAppCallWasPlay = false;
+    clearTimeout(this.playTimer);
     this.watchPartyYTPlayer?.pauseVideo();
   };
 
@@ -140,6 +146,7 @@ export class YouTube implements Player {
   stopVideo = () => {
     this.lastAppCallAt = Date.now();
     this.lastAppCallWasPlay = false;
+    clearTimeout(this.playTimer);
     this.watchPartyYTPlayer?.stopVideo();
   };
 
