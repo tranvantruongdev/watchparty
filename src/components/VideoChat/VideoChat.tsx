@@ -1597,8 +1597,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       this.setupWebRTC();
       return;
     }
-    // Push-to-talk owns the mic: the key opens it, the button does not
+    // Push-to-talk owns opening the mic (the key): the button turns it off
     if (getPushToTalk().enabled) {
+      this.micOff();
       return;
     }
     audioTrack.enabled = !audioTrack.enabled;
@@ -2105,7 +2106,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                           aria-label={
                             getPushToTalk().enabled &&
                             ourStream.getAudioTracks().length
-                              ? "Push to talk is on"
+                              ? "Push to talk is on: turn off mic"
                               : this.getAudioWebRTC()
                                 ? "Mute microphone"
                                 : "Unmute microphone"

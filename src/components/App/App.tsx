@@ -43,6 +43,7 @@ import { ChatOverlay } from "./ChatOverlay";
 import { NewRoomButton, TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
+import { getPushToTalk } from "../VideoChat/voicePrefs";
 import { getCurrentSettings } from "../Settings/LocalSettings";
 import { ComboBox } from "../ComboBox/ComboBox";
 import { SearchComponent } from "../SearchComponent/SearchComponent";
@@ -4500,7 +4501,9 @@ export class App extends React.Component<AppProps, AppState> {
     const audio = inVoice
       ? window.watchparty.ourStream?.getAudioTracks()[0]
       : undefined;
-    const talking = !!audio?.enabled;
+    // A push-to-talk mic is on while closed: the key only gates it (measured:
+    // after a roster render this read "Turn on mic" and the click did nothing)
+    const talking = !!audio && (audio.enabled || getPushToTalk().enabled);
     const deaf = this.state.voiceDeaf;
     return (
       <>
