@@ -792,6 +792,12 @@ async function main() {
   // buffered ahead; once everything up to the end is buffered the claim must go, or the
   // room sits paused for good (and every Play re-pauses on the re-claim)
   {
+    // start from a playing room whatever j1e left (a failed j1e leaves it paused)
+    if ((await vstate(B)).paused) {
+      await ev(A, `document.querySelector('video').play().then(() => true)`);
+      await waitFor(async () => (await vstate(B)).paused === false, 4000);
+      await sleep(600);
+    }
     const f0 = await emits(A);
     await isolatedEval(A, STALL);
     const tMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (f0["CMD:buffering"] || 0) + 1, 3500);
@@ -1807,7 +1813,7 @@ async function main() {
     await isolatedEval(A, STALL);
     const bufMs = await waitFor(async () => ((await emits(A))["CMD:buffering"] || 0) === (a0["CMD:buffering"] || 0) + 1, 3500);
     await ev(A, PANEL(`r.getElementById('join').click(); return true;`)); // Leave
-    await isolatedEval(A, `(() => { delete document.querySelector('video').readyState; return true; })()`);
+    await isolatedEval(A, `(() => { const v = document.querySelector('video'); delete v.readyState; delete v.buffered; return true; })()`);
     const leftMs = await waitFor(async () => (await statusOf(A)).ds !== "on", 4000);
     await sleep(3500); // past the server's 2.5 s buffer-pause grace
     const bF = await vstate(B), cF = await vstate(C);
