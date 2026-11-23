@@ -3868,15 +3868,23 @@ export class App extends React.Component<AppProps, AppState> {
     // end when less is left, a stall there never got 3 s and held the room
     // paused for good (codex R17H, as the extension's bufferedAhead)
     if (paused && this.bufferingReported) {
-      const t = this.Player().getCurrentTime();
-      const range = this.Player()
-        .getTimeRanges()
-        .find((r) => r.start <= t + 0.5 && r.end > t);
-      const need = Math.min(
-        3,
-        (this.Player().getDuration() || Infinity) - t - 0.25,
-      );
-      raw = !range || range.end - t < need;
+      const liveEl = this.usingYoutube() ? null : this.Player().getVideoEl();
+      if (liveEl?.srcObject) {
+        // A share's MediaStream never has buffered ranges: the range test below
+        // would hold the claim for good and the buffer-paused room (sharer
+        // included) never resumed after the viewer's link came back (R21A)
+        raw = liveEl.readyState < 3;
+      } else {
+        const t = this.Player().getCurrentTime();
+        const range = this.Player()
+          .getTimeRanges()
+          .find((r) => r.start <= t + 0.5 && r.end > t);
+        const need = Math.min(
+          3,
+          (this.Player().getDuration() || Infinity) - t - 0.25,
+        );
+        raw = !range || range.end - t < need;
+      }
     }
     const now = Date.now();
     if (raw) {
