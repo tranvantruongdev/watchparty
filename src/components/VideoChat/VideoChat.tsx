@@ -1174,6 +1174,15 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
+    // No mic (denied / missing: getOwnStream fell back to its disabled black
+    // canvas track): stay listen-only. Added, that track made autoListen read us
+    // as a talker, so we never left voice once alone (codex R24A); the last
+    // talker may have left while the prompt was up, so re-check now
+    if (!stream.getAudioTracks().length) {
+      stream.getTracks().forEach((track) => track.stop());
+      this.autoListen();
+      return;
+    }
     stream.getTracks().forEach((track) => {
       ourStream.addTrack(track);
       Object.entries(window.watchparty.videoPCs).forEach(([id, pc]) => {
