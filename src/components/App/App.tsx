@@ -3828,13 +3828,19 @@ export class App extends React.Component<AppProps, AppState> {
     }
     // The room pausing (the buffer auto-pause too) ends the stall but not the
     // shortage: the server resumes a buffer-paused room on our "false"
-    // (bufferResume), so hold it until 3 s are buffered ahead
+    // (bufferResume), so hold it until 3 s are buffered ahead — or up to the
+    // end when less is left, a stall there never got 3 s and held the room
+    // paused for good (codex R17H, as the extension's bufferedAhead)
     if (paused && this.bufferingReported) {
       const t = this.Player().getCurrentTime();
       const range = this.Player()
         .getTimeRanges()
         .find((r) => r.start <= t + 0.5 && r.end > t);
-      raw = !range || range.end - t < 3;
+      const need = Math.min(
+        3,
+        (this.Player().getDuration() || Infinity) - t - 0.25,
+      );
+      raw = !range || range.end - t < need;
     }
     const now = Date.now();
     if (raw) {
