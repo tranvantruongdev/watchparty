@@ -527,6 +527,9 @@ export class App extends React.Component<AppProps, AppState> {
   };
   localStreamToPublish?: MediaStream;
   isLocalStreamAFile = false;
+  // What the share that just stopped was: "share again" reopens that modal
+  // (isLocalStreamAFile is already cleared by then)
+  shareEndedWasFile = false;
   // Set when the stop was the user's own doing (Stop Share button, failed
   // conversion): stopPublishingLocalStream stays quiet instead of offering
   // "share again"
@@ -2898,6 +2901,7 @@ export class App extends React.Component<AppProps, AppState> {
       pc.close();
     });
     this.publisherConns = {};
+    const wasFile = this.isLocalStreamAFile;
     this.isLocalStreamAFile = false;
     if (this.mediasoupPubSocket) {
       this.mediasoupPubSocket.close();
@@ -2911,6 +2915,7 @@ export class App extends React.Component<AppProps, AppState> {
       // The capture ended without the user asking (display unplugged, browser
       // ended it, the room cleared a dead-looking share): say so and offer the
       // re-share one click away
+      this.shareEndedWasFile = wasFile;
       this.setState({ shareEndedPrompt: true });
     }
   };
@@ -5073,9 +5078,8 @@ export class App extends React.Component<AppProps, AppState> {
                             onClick={() => {
                               this.openModalTrackingFocus({
                                 shareEndedPrompt: false,
-                                isScreenShareModalOpen:
-                                  !this.isLocalStreamAFile,
-                                isFileShareModalOpen: this.isLocalStreamAFile,
+                                isScreenShareModalOpen: !this.shareEndedWasFile,
+                                isFileShareModalOpen: this.shareEndedWasFile,
                               });
                             }}
                           >
