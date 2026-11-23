@@ -1265,7 +1265,15 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       // Same closed-PC race as setupWebRTC's mic-on loop (measured round 58)
       if (pc.connectionState === "closed") return;
       pc.getTransceivers().forEach((t) => {
-        if (t.sender.track) {
+        // A mic-on click right before this one has set the direction but its
+        // replaceTrack has not resolved, so sender.track is still null: key on
+        // the direction too, or that transceiver keeps sending the track we
+        // stop below (rapid toggles left sendrecv ones with an ended track)
+        if (
+          t.sender.track ||
+          t.direction === "sendrecv" ||
+          t.direction === "sendonly"
+        ) {
           t.sender.replaceTrack(null);
           t.direction = "recvonly";
         }
