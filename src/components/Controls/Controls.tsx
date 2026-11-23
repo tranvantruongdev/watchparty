@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Menu, Progress, Slider } from "@mantine/core";
-import { formatTimestamp, softWhite } from "../../utils/utils";
+import { formatTimestamp, softWhite, volumeSettable } from "../../utils/utils";
 import styles from "./Controls.module.css";
 import { MetadataContext } from "../../MetadataContext";
 import type { AudioTrackInfo } from "../../utils/clientTranscode";
@@ -109,15 +109,6 @@ interface ControlsProps {
   audioTrackId?: number;
   localSetAudioTrack?: (id: number) => void;
 }
-
-// iOS ignores HTMLMediaElement.volume (it always reads back 1, and the YouTube
-// iframe's setVolume hits the same wall): the slider moved with no effect
-// there. The mute button still works
-const volumeSettable = (() => {
-  const probe = document.createElement("audio");
-  probe.volume = 0.5;
-  return probe.volume === 0.5;
-})();
 
 export const Controls = (props: ControlsProps) => {
   const [hoverState, setHoverState] = useState({
@@ -581,6 +572,7 @@ export const Controls = (props: ControlsProps) => {
           className={` ${styles.action}`}
         />
       )}
+      {/* iOS: the slider would move with no effect; mute still works */}
       {volumeSettable && (
         <div style={{ width: "100px" }}>
           <Slider

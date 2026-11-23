@@ -15,7 +15,8 @@ export const parseStoredVoiceVolume = (raw: string | null | undefined) =>
   raw == null || raw.trim() === "" ? 1 : clampVoiceVolume(Number(raw));
 
 export interface VoicePeerOutput {
-  // Route the peer's stream through a GainNode (volume > 1 only)
+  // Route the peer's stream through a GainNode (volume > 1, or below 1 with
+  // routeBelowFull)
   useGraph: boolean;
   // What the peer's <video> element's muted must be
   muted: boolean;
@@ -35,12 +36,15 @@ export const voicePeerOutput = ({
   deaf,
   volume,
   mutedForMe = false,
+  routeBelowFull = false,
 }: {
   self: boolean;
   deaf: boolean;
   volume: number;
   // This listener muted this seat locally (VoiceTileMenu)
   mutedForMe?: boolean;
+  // The element ignores volume (iOS): below 100% the gain node plays it too
+  routeBelowFull?: boolean;
 }): VoicePeerOutput => {
   const v = clampVoiceVolume(volume);
   if (self) {
@@ -51,7 +55,7 @@ export const voicePeerOutput = ({
   if (mutedForMe) {
     return { useGraph: false, muted: true, elementVolume: 1, gain: 0 };
   }
-  if (v > 1) {
+  if (v > 1 || (routeBelowFull && v < 1)) {
     return {
       useGraph: true,
       muted: true,
