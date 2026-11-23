@@ -140,7 +140,8 @@ async function launch(variant) {
 
 function killEdge() {
   try {
-    if (proc?.pid) execFileSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+    // taskkill exists only on Windows; elsewhere a leftover browser kept node alive after the summary
+    if (proc?.pid) process.platform === "win32" ? execFileSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" }) : proc.kill("SIGKILL");
   } catch {}
   try {
     browser?.ws.close();
