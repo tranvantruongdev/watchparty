@@ -738,8 +738,12 @@
     if (Math.abs(video.currentTime - t) < SEEK_EPSILON) return;
     remoteSeek = { t, at: Date.now() };
     suppress("seeking", "seeked");
-    // the Netflix player must be seeked from the page's own JS world (page.js)
-    window.postMessage({ source: "wp-ext", type: "seek", seconds: t }, "*");
+    // the Netflix player must be seeked from the page's own JS world (page.js); anywhere
+    // else seek the element we are bound to — page.js picks its own largest light-DOM
+    // video, which misses a player inside a shadow root (archive.org's <play-av>)
+    if (location.hostname.endsWith("netflix.com"))
+      window.postMessage({ source: "wp-ext", type: "seek", seconds: t }, "*");
+    else video.currentTime = t;
   }
 
   // ---- local -> room ----
@@ -801,8 +805,10 @@
   const onPause = () => {
     if (tabHidden()) return; // the site/browser in a hidden tab, not the user
     // the end-of-media pause is the video finishing (R15W D4), not a user pause: the
-    // room keeps playing (youtube autonav moves on ~8 s later, nobody resumes the room)
-    if (video.ended) return;
+    // room keeps playing (youtube autonav moves on ~8 s later, nobody resumes the room).
+    // An MSE player can stop just short of its duration without ever setting ended (a
+    // twitch VOD pauses itself ~0.08 s before it, readyState 2): the last second counts too
+    if (video.ended || video.duration - video.currentTime < 1) return;
     if (suppressed("pause") || !joined) return;
     if (Date.now() < titleResetUntil) return;
     if (adGapBlock()) return; // the ad tail gap (D1): the ad's own end pause lands there
@@ -1097,10 +1103,29 @@
     updateRates();
   }
 
+  // <video>s inside open shadow roots (web-component players such as archive.org's
+  // <play-av>), our own panel skipped
+  const shadowVideos = (root, out = []) => {
+    for (const e of root.querySelectorAll("*")) {
+      if (e.tagName === "VIDEO") out.push(e);
+      if (e.shadowRoot && e !== host) shadowVideos(e.shadowRoot, out);
+    }
+    return out;
+  };
+
   function findVideo() {
+    return (
+      pickVideo(document.querySelectorAll("video")) ||
+      // ponytail: the deep walk runs only when the light DOM has no visible video, so a
+      // light-DOM preview beside a shadow-root player still wins; merge both if one shows up
+      pickVideo(shadowVideos(document))
+    );
+  }
+
+  function pickVideo(list) {
     let best = null;
     let bestArea = -1;
-    for (const v of document.querySelectorAll("video")) {
+    for (const v of list) {
       const r = v.getBoundingClientRect();
       const area = r.width * r.height;
       // tiny hover previews / hidden nodes must never win: skip zero-size and
