@@ -253,6 +253,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // Bumped by every teardown (Leave, mic-off, auto-listen's leave): a capture
   // that started before the teardown must not resurrect voice when it resolves
   teardownSeq = 0;
+  // Our own mic-on device open is pending (setupWebRTC awaiting getOwnStream)
+  micOpening = false;
   // A camera reopen is in flight (serialize reopenCamera — see the guard there)
   cameraReopening = false;
   // The camera was off at the last mic-off teardown: the next mic-on re-capture
@@ -921,7 +923,12 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     );
     if (!ourStream && !this.props.deaf && others.some((p) => !p.isMuted)) {
       this.setupWebRTC(true);
-    } else if (listening && (this.props.deaf || !others.length)) {
+    } else if (
+      listening &&
+      // Not while our own mic-on is opening: the last talker leaving would
+      // bump teardownSeq and drop the capture the user just asked for
+      (this.props.deaf || (!others.length && !this.micOpening))
+    ) {
       this.stopWebRTC();
     }
   };
@@ -1130,7 +1137,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       this.ensureAudioContext();
     }
     const seq = this.teardownSeq;
+    this.micOpening = true;
     const stream = await this.getOwnStream();
+    this.micOpening = false;
     // A Leave landed while the device was opening: the fresh capture is
     // dropped instead of silently re-joining voice with the mic on (measured
     // round 136 — the !ourStream branch below would otherwise re-join ~250ms
