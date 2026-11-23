@@ -22,6 +22,14 @@ import {
 } from "./voiceVolume";
 import { isMutedForMe, mutedForMeIds, setMutedForMe } from "./localVoice";
 import { VoiceTileMenu } from "./VoiceTileMenu";
+import { VoiceSettings } from "./VoiceSettings";
+import { pttMicClosed, startPushToTalk } from "./pushToTalk";
+import {
+  anySeatBoosted,
+  getPushToTalk,
+  processingConstraints,
+  seatVoiceVolume,
+} from "./voicePrefs";
 import {
   IconDotsVertical,
   IconMicrophone,
@@ -46,16 +54,6 @@ interface VideoChatProps {
   deaf: boolean;
 }
 
-// Headset-style mic: keep the close voice, drop the room. voiceIsolation is
-// Chrome's ML voice filter (ignored where unsupported); auto gain off so quiet
-// far-away sounds aren't boosted up to speech level
-const micConstraints = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: false,
-  voiceIsolation: true,
-} as MediaTrackConstraints;
-
 // The mic the user picked (a deviceId); asked for as "ideal" so an unplugged
 // device falls back to the default one instead of failing the capture
 const MIC_KEY = "watchparty-mic";
@@ -67,13 +65,17 @@ const readSavedMic = () => {
     return "";
   }
 };
+// Headset-style mic: keep the close voice, drop the room. The processing flags
+// (noise suppression, echo cancellation, auto gain; defaults: first two on, auto
+// gain off so quiet far-away sounds aren't boosted up to speech level) are this
+// listener's saved choice, read at every capture (voicePrefs.ts)
 const micAudio = (deviceId: string, exact = false): MediaTrackConstraints =>
   deviceId
     ? {
-        ...micConstraints,
+        ...processingConstraints(),
         deviceId: exact ? { exact: deviceId } : { ideal: deviceId },
       }
-    : micConstraints;
+    : processingConstraints();
 
 // Voice volume 0..300%, saved so it survives reloads. window.watchparty is
 // (re)created by App.tsx after this module loads, so seed it on first read
@@ -248,6 +250,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   } = {};
   // A mic switch is in flight (serialize changeMic — see the guard there)
   micSwitching = false;
+  // A voice-processing toggle landed during a switch: re-capture when it ends
+  processingPending = false;
   lastMicAutoReopenAt = 0;
   micNoticeTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   // Bumped by every teardown (Leave, mic-off, auto-listen's leave): a capture
@@ -265,6 +269,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   rootEl: HTMLDivElement | null = null;
   // Watches the root's width so tiles can two-up on narrow panels (round 167)
   resizeObs?: ResizeObserver;
+  // Stops the push-to-talk key listeners (see pushToTalk.ts)
+  stopPtt?: () => void;
 
   // The shared AudioContext, made on first need. A context made outside a user
   // gesture starts suspended: resume now (works inside a click) and on the
@@ -344,7 +350,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     const stream = this.remoteStreams[id];
     const hasAudio = !!stream?.getAudioTracks().length;
     const mutedForMe = !self && isMutedForMe(id);
-    const volume = getVoiceVolume();
+    // Global voice volume x this seat's own volume (clamped to the global max
+    // by voicePeerOutput)
+    const volume = seatVoiceVolume(id, getVoiceVolume());
     const ctx =
       !self && !mutedForMe && voiceNeedsGraph(volume) && hasAudio
         ? this.ensureAudioContext()
@@ -495,6 +503,51 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     this.applyVoiceOutput(id);
   };
 
+  // One seat's own volume changed (VoiceTileMenu already saved it). Local only,
+  // like the mute above. Above 100% the slider drag is the user gesture that
+  // lets the audio context run
+  onMemberVolume = (id: string) => {
+    if (voiceNeedsGraph(seatVoiceVolume(id, getVoiceVolume()))) {
+      this.ensureAudioContext();
+    }
+    this.applyVoiceOutput(id);
+  };
+
+  // A voice-processing toggle changed (already saved): re-capture the live mic
+  // with the new flags (changeMic swaps the new track into every sender, so the
+  // peers need no renegotiation). Not applyConstraints: Chromium resolves it
+  // for these flags yet leaves getSettings() unchanged (measured in Edge: ideal
+  // values change nothing, exact ones reject). Not capturing: the saved flags
+  // are read by the next getUserMedia
+  applyProcessing = async () => {
+    if (this.micSwitching) {
+      // A switch is in flight (changeMic drops overlapping ones; a re-capture
+      // has stopped its track): redo it with the latest flags once it lands
+      this.processingPending = true;
+      return;
+    }
+    const track = window.watchparty.ourStream?.getAudioTracks()[0];
+    if (!track || track.readyState !== "live") {
+      return;
+    }
+    await this.changeMic(track.getSettings().deviceId ?? "", true);
+  };
+
+  // Push-to-talk: the mic is open only while its key is held (and always while
+  // the mode is off). The same close as the tile's mute (enabled flip plus
+  // applyMute, which stops the RTP instead of streaming silence). Runs on key
+  // down/up, window blur and when the mode itself is switched
+  pttSync = () => {
+    const track = window.watchparty.ourStream?.getAudioTracks()[0];
+    if (!track) {
+      return;
+    }
+    track.enabled = !pttMicClosed();
+    this.applyMute("audio", !track.enabled);
+    this.emitUserMute();
+    this.forceUpdate();
+  };
+
   // Microphones the browser lists. Labels are empty until mic permission, so
   // this runs again after each capture and whenever a device is plugged/unplugged
   refreshMics = async () => {
@@ -525,7 +578,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   // next mic-on. Capturing: open the new device, then swap its track into our
   // stream and into every connection's audio sender (same sender, so the 64
   // kbps cap stays). Any failure keeps the old mic and does not save the pick
-  changeMic = async (deviceId: string) => {
+  // recapture = the same device again for new voice-processing flags: the old
+  // track is stopped BEFORE the new capture opens (while it is live Chromium
+  // shares its audio source with the new capture and keeps the old flags), the
+  // pick is not saved, and a failed capture means no mic (micOff), not "old kept"
+  changeMic = async (deviceId: string, recapture = false) => {
     // One switch at a time: two switches started while the old track is live
     // share the same oldTrack, so the stale checks below cannot tell them
     // apart and both would finish — ourStream ends with two captures while
@@ -543,6 +600,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         this.saveMic(deviceId);
         return;
       }
+      if (recapture) {
+        oldTrack.stop();
+      }
       let fresh: MediaStream;
       try {
         fresh = await navigator.mediaDevices.getUserMedia({
@@ -550,6 +610,9 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
         });
       } catch (e) {
         console.warn("mic switch failed", e);
+        if (recapture) {
+          this.micOff(true);
+        }
         return;
       }
       const newTrack = fresh.getAudioTracks()[0];
@@ -592,11 +655,17 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       ourStream.addTrack(newTrack);
       oldTrack.stop();
       newTrack.addEventListener("ended", () => this.micEnded(newTrack));
-      this.saveMic(deviceId);
+      if (!recapture) {
+        this.saveMic(deviceId);
+      }
       this.refreshMics();
       this.clearDeviceHint("Microphone");
     } finally {
       this.micSwitching = false;
+      if (this.processingPending) {
+        this.processingPending = false;
+        this.applyProcessing();
+      }
     }
   };
 
@@ -677,6 +746,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     this.socket.on("roster", this.onRoster);
     this.socket.on("connect", this.onSocketConnect);
     navigator.mediaDevices?.addEventListener("devicechange", this.refreshMics);
+    this.stopPtt = startPushToTalk(this.pttSync);
     this.refreshMics();
     // The speaking poll has work only while a voice PC exists: a remount into
     // an active voice session restarts it here; a fresh room stays timer-less
@@ -697,6 +767,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
   }
 
   componentWillUnmount() {
+    // Releases a held key too: the mic closes with the panel, never stays open
+    this.stopPtt?.();
     this.resizeObs?.disconnect();
     this.socket.off("signal", this.handleSignal);
     this.socket.off("roster", this.onRoster);
@@ -933,9 +1005,16 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     }
   };
 
+  // An idle push-to-talk mic is armed, not muted: peers' auto-listen and the mute
+  // icon read this flag, and flipping it on every key press would broadcast a
+  // room-wide roster each time. Only with a mic: a listener stays muted
+  micArmed = () =>
+    getPushToTalk().enabled &&
+    !!window.watchparty.ourStream?.getAudioTracks().length;
+
   emitUserMute = () => {
     this.socket.emit("CMD:userMute", {
-      isMuted: !this.getAudioWebRTC(),
+      isMuted: !this.getAudioWebRTC() && !this.micArmed(),
       isCameraOff: !this.getVideoWebRTC(),
     });
   };
@@ -1133,7 +1212,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     this.setState({ deviceHint: "", micNotice: "" });
     // The mic-on click is a user gesture: a saved boost (>100%) can start its
     // audio context now (before the awaits), it cannot at page load
-    if (voiceNeedsGraph(getVoiceVolume())) {
+    if (voiceNeedsGraph(getVoiceVolume()) || anySeatBoosted(getVoiceVolume())) {
       this.ensureAudioContext();
     }
     const seq = this.teardownSeq;
@@ -1222,6 +1301,8 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     // in the loop, so clear them again — the transceiver stays sendrecv but
     // sends nothing, and a later tile camera-on restores the track on every PC
     if (this.keepCameraOff) this.applyMute("video", true);
+    // Same for a push-to-talk mic that starts closed (getOwnStream disabled it)
+    if (pttMicClosed()) this.applyMute("audio", true);
     this.emitUserMute();
     this.forceUpdate();
   };
@@ -1336,6 +1417,11 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
     // present; before this, members stayed listen-only and silent until clicking
     // the mic.
     const audioTrack = stream.getAudioTracks()[0];
+    // Push-to-talk on: a fresh capture starts closed, like every other mic
+    // path (the roster flag is sent by the caller via emitUserMute)
+    if (audioTrack && pttMicClosed()) {
+      audioTrack.enabled = false;
+    }
     audioTrack?.addEventListener("ended", () => this.micEnded(audioTrack));
     // Same for the camera: unplugging ends the track and the button would keep
     // showing a live camera over a frozen frame for everyone — show the manual
@@ -1509,6 +1595,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
       // chat-bar mic button (it used to be a silent no-op here, measured
       // round 165: 0 bytes out for the whole 30 s window)
       this.setupWebRTC();
+      return;
+    }
+    // Push-to-talk owns the mic: the key opens it, the button does not
+    if (getPushToTalk().enabled) {
       return;
     }
     audioTrack.enabled = !audioTrack.enabled;
@@ -1900,6 +1990,10 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                 })),
               ]}
             />
+            <VoiceSettings
+              onProcessingChange={this.applyProcessing}
+              onPushToTalkChange={this.pttSync}
+            />
           </div>
         )}
         {participants.map((p) => {
@@ -1962,6 +2056,7 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                       name={nameMap[p.id] || p.id}
                       muted={this.state.mutedForMe.includes(p.id)}
                       onToggle={this.toggleMutedForMe}
+                      onVolume={this.onMemberVolume}
                       right={hostMenuVisible ? 30 : 0}
                     />
                   )}
@@ -2008,9 +2103,12 @@ export class VideoChat extends React.Component<VideoChatProps, VideoChatState> {
                           color={this.getAudioWebRTC() ? "green" : "red"}
                           onClick={this.toggleAudioWebRTC}
                           aria-label={
-                            this.getAudioWebRTC()
-                              ? "Mute microphone"
-                              : "Unmute microphone"
+                            getPushToTalk().enabled &&
+                            ourStream.getAudioTracks().length
+                              ? "Push to talk is on"
+                              : this.getAudioWebRTC()
+                                ? "Mute microphone"
+                                : "Unmute microphone"
                           }
                         >
                           <IconMicrophone />
