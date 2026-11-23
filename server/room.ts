@@ -1989,13 +1989,24 @@ export class Room {
       return;
     }
     const match = this.roster.find((user) => user.id === socket.clientId);
-    if (match) {
-      match.isMuted = data.isMuted;
-      if (data.isCameraOff !== undefined) {
-        match.isCameraOff = data.isCameraOff;
-      }
+    if (!match) {
+      return;
     }
-    this.io.of(this.roomId).emit("roster", this.getRosterForApp());
+    const changed =
+      match.isMuted !== data.isMuted ||
+      (data.isCameraOff !== undefined &&
+        match.isCameraOff !== data.isCameraOff);
+    match.isMuted = data.isMuted;
+    if (data.isCameraOff !== undefined) {
+      match.isCameraOff = data.isCameraOff;
+    }
+    // A repeated flag changes nothing, and outside voice nobody shows it (a
+    // reconnect's userMute can land before its CMD:joinVideo, whose roster then
+    // carries the flag): either way no roster broadcast, so a burst under the
+    // 60/s voice budget cannot fan out 60 room-wide rosters a second
+    if (changed && match.isVideoChat) {
+      this.io.of(this.roomId).emit("roster", this.getRosterForApp());
+    }
   };
 
   private joinScreenSharing = (socket: Socket, raw: unknown) => {
