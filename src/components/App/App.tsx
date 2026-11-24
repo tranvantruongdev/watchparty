@@ -1547,7 +1547,7 @@ export class App extends React.Component<AppProps, AppState> {
     socket.on(
       "signalSS",
       async (data: {
-        msg: { ice: any; sdp: any; reoffer?: boolean };
+        msg: { ice: any; sdp: any; reoffer?: boolean; stereoAudio?: boolean };
         from: string;
         sharer: boolean;
       }) => {
@@ -1637,15 +1637,12 @@ export class App extends React.Component<AppProps, AppState> {
               "useinbandfec=1; stereo=1; maxaveragebitrate=510000",
             );
             // console.log(answer.sdp);
-            // Allow multichannel audio if Chromium. Not for a file share: its
-            // audio is already stereo (the keep-awake MediaStreamDestination),
-            // and the sharer sends RED only around plain opus
+            // Allow multichannel audio if Chromium. Not when the sharer says
+            // its audio has at most 2 channels: the rewrite carries nothing
+            // then, and the sharer sends RED only around plain opus
             //@ts-expect-error
             const isChromium = Boolean(window.chrome);
-            if (
-              isChromium &&
-              !this.state.roomMedia.startsWith("fileshare://")
-            ) {
+            if (isChromium && !msg.stereoAudio) {
               answer.sdp = answer.sdp
                 ?.replace("opus/48000/2", "multiopus/48000/6")
                 .replace(
@@ -3193,12 +3190,23 @@ export class App extends React.Component<AppProps, AppState> {
               rebuildShare();
             }
           };
+          // Tells a Chromium viewer to skip its multiopus rewrite (and so get
+          // RED): a file share is stereo (keep-awake re-source), tab capture
+          // reports 1-2 channels; an unknown count keeps the rewrite
+          const stereoAudio =
+            this.isLocalStreamAFile ||
+            (this.localStreamToPublish?.getAudioTracks()[0]?.getSettings()
+              .channelCount ?? 99) <= 2;
           pc.onnegotiationneeded = async () => {
             // Start connection for peer's video
             try {
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-              this.sendSignalSS(id, { sdp: pc.localDescription }, true);
+              this.sendSignalSS(
+                id,
+                { sdp: pc.localDescription, stereoAudio },
+                true,
+              );
             } catch (e) {
               // The PC can be closed out from under this offer (share
               // rebuild, viewer roster change): drop it, the replacement PC
@@ -3222,7 +3230,11 @@ export class App extends React.Component<AppProps, AppState> {
               pc.signalingState === "have-local-offer" &&
               pc.localDescription
             ) {
-              this.sendSignalSS(id, { sdp: pc.localDescription }, true);
+              this.sendSignalSS(
+                id,
+                { sdp: pc.localDescription, stereoAudio },
+                true,
+              );
             }
           }, 3000);
         }
