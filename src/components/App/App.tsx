@@ -1631,10 +1631,13 @@ export class App extends React.Component<AppProps, AppState> {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
             const answer = await pc.createAnswer();
-            // Allow stereo audio
+            // Allow stereo audio. A 2-channel share gets 96 kbps: asked for
+            // 510 kbps it sent 200-260 and starved the video on a 1.5 Mbps
+            // link (freezes 3 -> 15-28 a minute); at 96 its concealment under
+            // loss also dropped (5 %: ~75 -> ~7 events a minute, R26K)
             answer.sdp = answer.sdp?.replace(
               "useinbandfec=1",
-              "useinbandfec=1; stereo=1; maxaveragebitrate=510000",
+              `useinbandfec=1; stereo=1; maxaveragebitrate=${msg.stereoAudio ? 96000 : 510000}`,
             );
             // console.log(answer.sdp);
             // Allow multichannel audio if Chromium. Not when the sharer says
