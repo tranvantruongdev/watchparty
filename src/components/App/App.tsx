@@ -1637,10 +1637,15 @@ export class App extends React.Component<AppProps, AppState> {
               "useinbandfec=1; stereo=1; maxaveragebitrate=510000",
             );
             // console.log(answer.sdp);
-            // Allow multichannel audio if Chromium
+            // Allow multichannel audio if Chromium. Not for a file share: its
+            // audio is already stereo (the keep-awake MediaStreamDestination),
+            // and the sharer sends RED only around plain opus
             //@ts-expect-error
             const isChromium = Boolean(window.chrome);
-            if (isChromium) {
+            if (
+              isChromium &&
+              !this.state.roomMedia.startsWith("fileshare://")
+            ) {
               answer.sdp = answer.sdp
                 ?.replace("opus/48000/2", "multiopus/48000/6")
                 .replace(
@@ -3114,10 +3119,24 @@ export class App extends React.Component<AppProps, AppState> {
                 tr.sender.setParameters(params).catch(() => {});
               }
             } else {
-              pc.addTrack(
+              const sender = pc.addTrack(
                 this.shareAudioOut ?? track,
                 this.localStreamToPublish,
               );
+              // Audio has no retransmission: at 2-5 % loss viewers heard 50-230
+              // concealment glitches a minute. RED (as VideoChat's
+              // preferRedVoice) repeats each frame in the next packet; a viewer
+              // without RED still answers plain opus from the same offer
+              const codecs = RTCRtpSender.getCapabilities?.("audio")?.codecs;
+              const isRed = (c: { mimeType: string }) =>
+                c.mimeType.toLowerCase() === "audio/red";
+              const tr = pc.getTransceivers().find((t) => t.sender === sender);
+              if (codecs?.some(isRed) && tr?.setCodecPreferences) {
+                tr.setCodecPreferences([
+                  ...codecs.filter(isRed),
+                  ...codecs.filter((c) => !isRed(c)),
+                ]);
+              }
             }
           });
           pc.onicecandidate = (event) => {
