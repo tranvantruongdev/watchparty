@@ -211,6 +211,23 @@ export const SettingsModal = ({
               setUpdateTS(Date.now());
             }}
           />
+          <SettingRow
+            toggle
+            updateTS={updateTS}
+            name="Don't pause the room when my video buffers"
+            description="Keep playing for everyone else while your video loads; you catch up on your own once it does"
+            checked={Boolean(getCurrentSettings().noBufferPause)}
+            disabled={false}
+            onChange={(e) => {
+              updateSettings(
+                JSON.stringify({
+                  ...getCurrentSettings(),
+                  noBufferPause: e.currentTarget.checked,
+                }),
+              );
+              setUpdateTS(Date.now());
+            }}
+          />
         </div>
 
         <Divider my="lg" />

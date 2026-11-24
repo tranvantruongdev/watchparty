@@ -50,6 +50,7 @@ interface ChatMessage extends ChatMessageBase {
 
 interface Settings {
   disableChatSound?: boolean;
+  noBufferPause?: boolean;
 }
 
 interface PlaylistVideo {

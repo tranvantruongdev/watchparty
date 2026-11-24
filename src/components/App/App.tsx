@@ -882,7 +882,7 @@ export class App extends React.Component<AppProps, AppState> {
       }
       // Someone resumed while we still hold a stall (paused, short of data):
       // claim again, the pause consumed the old claim on the server
-      if (this.bufferingReported) {
+      if (this.bufferingReported && !getCurrentSettings().noBufferPause) {
         socket.emit("CMD:buffering", true);
       }
       this.localPlay();
@@ -3936,6 +3936,11 @@ export class App extends React.Component<AppProps, AppState> {
       }
     }
     const now = Date.now();
+    // "Don't pause the room when my video buffers" (local setting): never claim
+    // a stall; a claim already held is released by the false below
+    if (raw && getCurrentSettings().noBufferPause) {
+      raw = false;
+    }
     if (raw) {
       if (!this.bufferingSince) {
         this.bufferingSince = now;
