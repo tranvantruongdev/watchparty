@@ -3266,6 +3266,13 @@ export class App extends React.Component<AppProps, AppState> {
         }
       };
       pc.ontrack = (event: RTCTrackEvent) => {
+        // A movie, not a call: a deeper jitter buffer leaves time for
+        // retransmits on a lossy high-RTT link (viewers trail the sharer by
+        // ~0.35 s more). Both receivers, so lip sync holds; browsers without
+        // it keep their default
+        if ("jitterBufferTarget" in event.receiver) {
+          event.receiver.jitterBufferTarget = 500;
+        }
         // Mount the stream from sharer
         // console.log(stream);
         const leftVideo = this.HTMLInterface.getVideoEl();
