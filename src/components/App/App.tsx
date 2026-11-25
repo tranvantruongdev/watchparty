@@ -1321,6 +1321,12 @@ export class App extends React.Component<AppProps, AppState> {
                 this.setState({
                   isLiveStream,
                 });
+                this.publishDashMenus();
+              });
+              window.watchparty.dash.on("trackChangeRendered", (e: any) => {
+                if (e.mediaType === "audio") {
+                  this.setState({ audioTrackId: this.dashAudioTrackId() });
+                }
               });
             }
             window.watchparty.dash.initialize(leftVideo, src);
@@ -2177,6 +2183,13 @@ export class App extends React.Component<AppProps, AppState> {
     try {
       if (this.transcoder) {
         await this.transcoder.selectAudioTrack(id);
+      } else if (window.watchparty.dash && isDash(this.state.roomMedia)) {
+        // DASH stream (audio adaptation sets), local to this device
+        const track = window.watchparty.dash.getTracksFor("audio")[id];
+        if (track) {
+          // noSettingsSave: the pick must not become the language the next stream starts with
+          window.watchparty.dash.setCurrentTrack(track, true);
+        }
       } else if (window.watchparty.hls) {
         // HLS stream (audio renditions), local to this device
         window.watchparty.hls.audioTrack = id;
@@ -2189,9 +2202,78 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
-  // Picks the video quality of the HLS stream on this device only; -1 = Auto
+  // Index of the playing audio adaptation set among the DASH audio tracks
+  dashAudioTrackId = () => {
+    const dash = window.watchparty.dash;
+    const current = dash?.getCurrentTrackFor("audio");
+    const index = dash
+      ?.getTracksFor("audio")
+      .findIndex((t) => t.index === current?.index && t.id === current?.id);
+    return index == null || index < 0 ? undefined : index;
+  };
+
+  // Fills the quality and audio track menus (the HLS ones) from the DASH manifest
+  publishDashMenus = () => {
+    const dash = window.watchparty.dash;
+    if (!dash) return;
+    // A manual pick on the previous stream must not carry over
+    dash.updateSettings({
+      streaming: { abr: { autoSwitchBitrate: { video: true } } },
+    });
+    const reps = dash.getRepresentationsByType("video");
+    const labels = reps.map((r) =>
+      r.height ? `${r.height}p` : `${Math.round(r.bitrateInKbit)} kbps`,
+    );
+    const tracks = dash.getTracksFor("audio");
+    this.setState({
+      hlsLevels: reps.map((r, id) => ({
+        id,
+        // Same height at several bitrates: tell them apart
+        label:
+          labels.indexOf(labels[id]) !== labels.lastIndexOf(labels[id])
+            ? `${labels[id]} ${Math.round(r.bitrateInKbit)} kbps`
+            : labels[id],
+      })),
+      hlsLevelId: -1,
+      audioTracks: tracks.map((t, id) => {
+        const text = t.labels?.[0]?.text;
+        return {
+          id,
+          label:
+            text && t.lang && text !== t.lang
+              ? `${text} (${t.lang})`
+              : text || t.lang || `Track ${id + 1}`,
+          languageCode: t.lang ?? "und",
+          name: text || null,
+          codec: null,
+          channels: 0,
+        };
+      }),
+      audioTrackId: this.dashAudioTrackId(),
+    });
+  };
+
+  // Picks the video quality of the HLS / DASH stream on this device only; -1 = Auto
   localSetVideoLevel = (id: number) => {
-    if (window.watchparty.hls) {
+    const dash = window.watchparty.dash;
+    if (dash && isDash(this.state.roomMedia)) {
+      if (id < 0) {
+        dash.updateSettings({
+          streaming: { abr: { autoSwitchBitrate: { video: true } } },
+        });
+      } else {
+        const rep = dash.getRepresentationsByType("video")[id];
+        if (rep) {
+          dash.updateSettings({
+            streaming: { abr: { autoSwitchBitrate: { video: false } } },
+          });
+          // forceReplace drops the buffered ahead part so the pick shows now
+          // (like hls.js currentLevel), not after the old buffer plays out
+          dash.setRepresentationForTypeById("video", rep.id, true);
+        }
+      }
+      this.setState({ hlsLevelId: id });
+    } else if (window.watchparty.hls) {
       window.watchparty.hls.currentLevel = id;
       this.setState({ hlsLevelId: id });
     }
