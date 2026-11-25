@@ -1093,6 +1093,14 @@ export class App extends React.Component<AppProps, AppState> {
       }
       // /fb must not jump into the new media at the old media's time
       this.lastSeekFrom = undefined;
+      // A stall claim held on the old media dies with it (the server drops
+      // every claim on a new video): kept latched, the new media's own stall
+      // is never reported while it loads, so the room does not wait for us
+      this.bufferingSince = 0;
+      if (this.bufferingReported) {
+        this.bufferingReported = false;
+        this.socket.emit("CMD:buffering", false);
+      }
       // A new video from someone else makes a pending "share again" moot
       const newVideoCame =
         !!currentMedia &&
