@@ -5261,6 +5261,43 @@ export class App extends React.Component<AppProps, AppState> {
       : this.closeModalRestoreFocus({ settingsModalOpen });
   };
 
+  // Settings > "Copy debug info": what a bug report needs to say what this
+  // client was doing. Deliberately no names, chat, tokens, emails or media URL
+  getDebugInfo = () => {
+    const media = this.state.roomMedia;
+    const mediaType = !media
+      ? "none"
+      : isScreenShare(media) || isFileShare(media)
+        ? "share"
+        : isVBrowser(media)
+          ? "vbrowser"
+          : isYouTube(media)
+            ? "youtube"
+            : isHls(media)
+              ? "hls"
+              : isDash(media)
+                ? "dash"
+                : isLocalCopy(media)
+                  ? "localcopy"
+                  : isMagnet(media)
+                    ? "magnet"
+                    : "file";
+    const share = shareStatsStore.getSnapshot();
+    return {
+      build: { mode: import.meta.env.MODE },
+      time: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      roomId: this.state.roomId.replace(/^\//, ""),
+      socketConnected: Boolean(this.socket?.connected),
+      online: navigator.onLine,
+      mediaType,
+      roomPaused: this.state.roomPaused,
+      isAutoPlayable: this.state.isAutoPlayable,
+      playbackBlocked: this.state.playbackBlocked,
+      shareStats: share.stats || share.send ? share : null,
+    };
+  };
+
   setTheaterMode = (theaterMode: boolean) => {
     this.setState({ theaterMode });
     window.localStorage.setItem(
@@ -5473,6 +5510,7 @@ export class App extends React.Component<AppProps, AppState> {
               setRoomTitleColor={this.setRoomTitleColor}
               mediaPath={this.state.mediaPath}
               setMediaPath={this.setMediaPath}
+              getDebugInfo={this.getDebugInfo}
             />
           </React.Suspense>
         )}

@@ -20,6 +20,7 @@ import { HexColorPicker, HexColorInput } from "react-colorful";
 import { MetadataContext } from "../../MetadataContext";
 import {
   IconCheck,
+  IconCopy,
   IconDeviceFloppy,
   IconHelpCircle,
   IconPaintFilled,
@@ -57,6 +58,7 @@ interface SettingsModalProps {
   setRoomTitleColor: (color: string) => void;
   mediaPath: string | undefined;
   setMediaPath: (path: string) => void;
+  getDebugInfo: () => object;
 }
 
 export const SettingsModal = ({
@@ -79,8 +81,10 @@ export const SettingsModal = ({
   roomTitleColor,
   mediaPath,
   setMediaPath,
+  getDebugInfo,
 }: SettingsModalProps) => {
   const { user, isSubscriber } = useContext(MetadataContext);
+  const [debugCopy, setDebugCopy] = useState<"" | "ok" | "failed">("");
   const [updateTS, setUpdateTS] = useState(0);
   const [permModalOpen, setPermModalOpen] = useState(false);
   const [validVanity, setValidVanity] = useState(true);
@@ -227,6 +231,42 @@ export const SettingsModal = ({
               );
               setUpdateTS(Date.now());
             }}
+          />
+          <SettingRow
+            disabled={false}
+            content={
+              <div>
+                <Button
+                  variant="default"
+                  size="xs"
+                  data-testid="copy-debug-info"
+                  leftSection={<IconCopy size={14} />}
+                  onClick={() => {
+                    // Clipboard can legitimately fail (permission denied, stale
+                    // focus): the message must not lie
+                    navigator.clipboard
+                      .writeText(JSON.stringify(getDebugInfo(), null, 2))
+                      .then(() => setDebugCopy("ok"))
+                      .catch(() => setDebugCopy("failed"));
+                  }}
+                >
+                  Copy debug info
+                </Button>
+                <Text size="xs" c="grey">
+                  Paste it into a bug report. No names, chat or links.
+                </Text>
+                {debugCopy === "ok" && (
+                  <Text size="xs" c="green" role="status">
+                    Debug info copied to clipboard.
+                  </Text>
+                )}
+                {debugCopy === "failed" && (
+                  <Text size="xs" c="red" role="status">
+                    Couldn't copy automatically.
+                  </Text>
+                )}
+              </div>
+            }
           />
         </div>
 
