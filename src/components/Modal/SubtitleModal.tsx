@@ -41,6 +41,9 @@ export class SubtitleModal extends React.Component<{
     loading: false,
     uploadFailed: false,
     localFailed: false,
+    localUrl: "",
+    localUrlLoading: false,
+    localUrlFailed: false,
     searchFailed: false,
     searchResults: [],
     titleQuery: this.props
@@ -116,6 +119,29 @@ export class SubtitleModal extends React.Component<{
       this.setState({ localFailed: false });
     } catch {
       this.setState({ localFailed: true });
+    }
+  };
+  // A subtitle URL just for me: fetched here and handed to the same local
+  // loader as a device file, so nothing is sent to the room
+  loadLocalSubtitleUrl = async () => {
+    const url = this.state.localUrl.trim();
+    if (!url) {
+      return;
+    }
+    this.setState({ localUrlLoading: true });
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error(String(resp.status));
+      }
+      const blob = await resp.blob();
+      const name = new URL(url).pathname.split("/").pop() || "subtitle.vtt";
+      await this.props.loadLocalSubtitle(new File([blob], name));
+      this.setState({ localUrlFailed: false });
+    } catch {
+      this.setState({ localUrlFailed: true });
+    } finally {
+      this.setState({ localUrlLoading: false });
     }
   };
   // Local only: saved in this browser and applied to our own player
@@ -210,6 +236,35 @@ export class SubtitleModal extends React.Component<{
             >
               Load subtitle file from this device
             </Button>
+            <TextInput
+              placeholder="Subtitle URL just for me (.vtt / .srt)"
+              aria-label="Subtitle URL just for me"
+              value={this.state.localUrl}
+              onChange={(e) => this.setState({ localUrl: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  this.loadLocalSubtitleUrl();
+                }
+              }}
+              rightSectionWidth={80}
+              rightSection={
+                <Button
+                  size="compact-sm"
+                  variant="default"
+                  loading={this.state.localUrlLoading}
+                  disabled={!this.state.localUrl.trim()}
+                  onClick={() => this.loadLocalSubtitleUrl()}
+                >
+                  Load
+                </Button>
+              }
+            />
+            {this.state.localUrlFailed && (
+              <Text c="red" size="xs">
+                Could not load that subtitle URL (check the link, and that the
+                host allows cross-origin requests).
+              </Text>
+            )}
             {this.state.localFailed && (
               <Text c="red" size="xs">
                 Could not read that subtitle file. Try picking it again.
