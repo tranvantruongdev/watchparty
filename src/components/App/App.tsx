@@ -575,6 +575,9 @@ export class App extends React.Component<AppProps, AppState> {
   // Set by advanceFileQueue so stopPublishingLocalStream keeps the queue
   // (every other stop of a share clears it)
   fileQueueAdvancing = false;
+  // startNextQueuedFile waits on this: called each time the REC:host state
+  // callback has applied the room's new media (clearState done)
+  roomMediaApplied?: () => void;
   transcoder?: ClientTranscoder;
   publisherConns: PCDict = {};
   // Inaudible tone that keeps a hidden file-share tab unthrottled (setupRTCConnections)
@@ -1165,6 +1168,7 @@ export class App extends React.Component<AppProps, AppState> {
           if (!this.isLocalStreamAFile) {
             this.Player().clearState();
           }
+          this.roomMediaApplied?.();
           if (data.subtitle) {
             this.Player().loadSubtitles(data.subtitle);
           }
@@ -2363,17 +2367,31 @@ export class App extends React.Component<AppProps, AppState> {
       return;
     }
     this.setFileQueue(this.fileQueue.slice(1));
-    const waitStart = Date.now();
-    while (
-      !fromPick &&
-      this.playingFileShare() &&
-      Date.now() - waitStart < 3000
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!fromPick && this.playingFileShare()) {
+      // Event-driven (a hidden tab throttles timers to ~1 s): wake when the
+      // REC:host callback has applied media that is no file share and run
+      // clearState, capped at 3 s
+      await new Promise<void>((resolve) => {
+        const cap = setTimeout(resolve, 3000);
+        this.roomMediaApplied = () => {
+          if (!this.playingFileShare()) {
+            clearTimeout(cap);
+            resolve();
+          }
+        };
+      });
+      this.roomMediaApplied = undefined;
+    } else {
+      // Nothing to wait for: let a failed attempt's play() settle first
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    // Let the REC:host callback (clearState) finish before attaching the file
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    if (this.localStreamToPublish || (!fromPick && this.state.roomMedia)) {
+    // The server starts the room playlist's next item right after the "" (a
+    // second REC:host), so a non-empty playlist means the room is about to
+    // play something else
+    if (
+      this.localStreamToPublish ||
+      (!fromPick && (this.state.roomMedia || this.state.playlist.length))
+    ) {
       // Someone else took the room meanwhile, or the room playlist did: the
       // server starts its next item when a share leaves (cmdHost "" ->
       // playlistNext). shortcut: the queue yields to the playlist; skipping
