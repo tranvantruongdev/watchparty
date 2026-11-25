@@ -35,6 +35,10 @@ import {
   getSavedResume,
   saveResume,
   type SavedResume,
+  getWatchHistory,
+  addWatchHistory,
+  removeWatchHistory,
+  type WatchHistoryEntry,
 } from "../../utils/utils";
 import { generateName } from "../../utils/generateName";
 import { Chat, type SeekCommand } from "../Chat/Chat";
@@ -70,6 +74,7 @@ import {
   Button,
   Modal,
   Switch,
+  Text,
   Tooltip,
 } from "@mantine/core";
 import {
@@ -289,6 +294,9 @@ interface AppState {
   // The media the user already declined to reopen, so the 1s tick doesn't
   // offer it again
   resumeDismissed: string | undefined;
+  // Last few http(s) videos played in this room (per browser), loaded when the
+  // History menu opens and after every change
+  watchHistory: WatchHistoryEntry[];
   isSubtitleModalOpen: boolean;
   isMultiSelectModalOpen: boolean;
   roomLock: string;
@@ -450,6 +458,7 @@ export class App extends React.Component<AppProps, AppState> {
     localCopyNeeded: false,
     resumeOffer: undefined,
     resumeDismissed: undefined,
+    watchHistory: [],
     isSubtitleModalOpen: false,
     isMultiSelectModalOpen: false,
     roomLock: "",
@@ -1080,6 +1089,23 @@ export class App extends React.Component<AppProps, AppState> {
         !!currentMedia &&
         !isScreenShare(currentMedia) &&
         !isFileShare(currentMedia);
+      // Every member records what the room starts playing (not a reconnect to
+      // the same media), so everyone present gets the same history
+      if (currentMedia && currentMedia !== this.state.roomMedia) {
+        let title: string | undefined;
+        try {
+          title =
+            decodeURIComponent(
+              new URL(currentMedia).pathname.split("/").filter(Boolean).pop() ??
+                "",
+            ) || undefined;
+        } catch {
+          // Not a parseable URL: the list shows the URL itself
+        }
+        this.setState({
+          watchHistory: addWatchHistory(this.state.roomId, currentMedia, title),
+        });
+      }
       this.setState(
         {
           roomMedia: currentMedia,
@@ -4558,6 +4584,16 @@ export class App extends React.Component<AppProps, AppState> {
     this.socket.emit("CMD:host", value);
   };
 
+  loadWatchHistory = () => {
+    this.setState({ watchHistory: getWatchHistory(this.state.roomId) });
+  };
+
+  roomHistoryRemove = (url: string) => {
+    this.setState({
+      watchHistory: removeWatchHistory(this.state.roomId, url),
+    });
+  };
+
   setConvertEnabled = (convertEnabled: boolean) => {
     window.localStorage.setItem(
       "watchparty-convert",
@@ -5468,6 +5504,63 @@ export class App extends React.Component<AppProps, AppState> {
                               );
                             },
                           )}
+                        </Menu.Dropdown>
+                      </Menu>
+                      <Menu onOpen={this.loadWatchHistory}>
+                        <Menu.Target>
+                          <Button
+                            color="violet"
+                            leftSection={<IconHistory />}
+                            className={styles.shareButton}
+                            data-testid="history-button"
+                          >
+                            History
+                          </Button>
+                        </Menu.Target>
+                        <Menu.Dropdown
+                          style={{
+                            maxHeight: 400,
+                            maxWidth: isMobile() ? 400 : 600,
+                          }}
+                        >
+                          {this.state.watchHistory.length === 0 && (
+                            <Menu.Item disabled>
+                              Nothing watched in this room yet.
+                            </Menu.Item>
+                          )}
+                          {this.state.watchHistory.map((entry) => (
+                            <div
+                              key={entry.url}
+                              data-testid="history-entry"
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <Menu.Item
+                                style={{ flex: 1, minWidth: 0 }}
+                                disabled={!this.haveLock()}
+                                title={entry.url}
+                                onClick={() => this.roomSetMedia(entry.url)}
+                              >
+                                <Text size="sm" truncate>
+                                  {entry.title ?? entry.url}
+                                </Text>
+                              </Menu.Item>
+                              <ActionIcon
+                                variant="subtle"
+                                color="gray"
+                                aria-label="Remove from history"
+                                data-testid="history-delete"
+                                onClick={() =>
+                                  this.roomHistoryRemove(entry.url)
+                                }
+                              >
+                                <IconX size={16} />
+                              </ActionIcon>
+                            </div>
+                          ))}
                         </Menu.Dropdown>
                       </Menu>
                       <ConvertToggle

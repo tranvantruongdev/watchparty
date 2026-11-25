@@ -606,3 +606,101 @@ function uuidv4() {
 // Subtract header, URL row, button row, 3 gaps, controls
 export const VIDEO_MAX_HEIGHT_CSS =
   "calc(100vh - 64px - 36px - 36px - 4px - 4px - 4px - 32px)";
+
+// Watch history: the last few http(s) videos played in a room, kept per room
+// in this browser. Later this should move into the room state on the server so
+// it is shared and survives across devices
+export interface WatchHistoryEntry {
+  url: string;
+  title?: string;
+  at: number;
+}
+
+const WATCH_HISTORY_KEY = "watchparty-history";
+const WATCH_HISTORY_MAX = 5;
+
+function readWatchHistoryStore(): Record<string, WatchHistoryEntry[]> {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(WATCH_HISTORY_KEY) ?? "{}",
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    const clean: Record<string, WatchHistoryEntry[]> = {};
+    for (const [roomId, list] of Object.entries(parsed)) {
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      clean[roomId] = list
+        .filter(
+          (e: Partial<WatchHistoryEntry>) =>
+            !!e && typeof e.url === "string" && typeof e.at === "number",
+        )
+        .map((e: WatchHistoryEntry) => ({
+          url: e.url,
+          title: typeof e.title === "string" ? e.title : undefined,
+          at: e.at,
+        }));
+    }
+    return clean;
+  } catch (e) {
+    console.warn("[ALERT] Could not parse watch history");
+  }
+  return {};
+}
+
+function writeWatchHistoryStore(store: Record<string, WatchHistoryEntry[]>) {
+  try {
+    // Keep the most recently watched rooms only
+    const rooms = Object.entries(store)
+      .filter(([, list]) => list.length > 0)
+      .sort((a, b) => b[1][0].at - a[1][0].at)
+      .slice(0, 20);
+    window.localStorage.setItem(
+      WATCH_HISTORY_KEY,
+      JSON.stringify(Object.fromEntries(rooms)),
+    );
+  } catch (e) {
+    console.warn("[ALERT] Could not save watch history");
+  }
+}
+
+export function getWatchHistory(roomId: string): WatchHistoryEntry[] {
+  return readWatchHistoryStore()[roomId] ?? [];
+}
+
+// Newest first, no duplicates. Screen share, file share, VBrowser, local copy
+// and empty media are not http(s) URLs and are not recorded
+export function addWatchHistory(
+  roomId: string,
+  url: string,
+  title?: string,
+): WatchHistoryEntry[] {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    return getWatchHistory(roomId);
+  }
+  const store = readWatchHistoryStore();
+  const list = [
+    { url, title, at: Date.now() },
+    ...(store[roomId] ?? []).filter((e) => e.url !== url),
+  ].slice(0, WATCH_HISTORY_MAX);
+  store[roomId] = list;
+  writeWatchHistoryStore(store);
+  return list;
+}
+
+export function removeWatchHistory(
+  roomId: string,
+  url: string,
+): WatchHistoryEntry[] {
+  const store = readWatchHistoryStore();
+  const list = (store[roomId] ?? []).filter((e) => e.url !== url);
+  store[roomId] = list;
+  writeWatchHistoryStore(store);
+  return list;
+}
