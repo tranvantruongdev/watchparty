@@ -238,6 +238,10 @@ export class ClientTranscoder {
   private sessionRunning = false;
   /** True while a (re)start is in progress, so stalls caused by the restart itself don't trigger another one */
   private beginning = false;
+  /** True while the copied video track is SD, see tagUnspecifiedColorAsBt601 */
+  private tagSdCopyAsBt601 = false;
+  /** Generation whose init segment (moov) has been checked by tagUnspecifiedColorAsBt601 */
+  private initPatchedGeneration = -1;
   /** Generation whose output is currently being appended to the SourceBuffer */
   private readyGeneration = -1;
   /** Output chunks that arrived before the SourceBuffer existed (we need the first packets to know the codecs) */
@@ -592,6 +596,11 @@ export class ClientTranscoder {
     if (this.isStale(generation)) {
       return Promise.resolve();
     }
+    if (this.initPatchedGeneration !== generation) {
+      if (!this.tagSdCopyAsBt601 || tagUnspecifiedColorAsBt601(chunk)) {
+        this.initPatchedGeneration = generation;
+      }
+    }
     if (this.readyGeneration !== generation) {
       // No SourceBuffer yet; don't block, since the conversion needs to keep going to reveal the codecs
       this.pending.push(chunk);
@@ -772,8 +781,10 @@ export class ClientTranscoder {
       new mb.Mp4OutputFormat().getSupportedCodecs().includes(track.codec) &&
       MediaSource.isTypeSupported(`video/mp4; codecs="${codecString}"`)
     ) {
+      this.tagSdCopyAsBt601 = track.displayHeight < 720;
       return {};
     }
+    this.tagSdCopyAsBt601 = false;
     const tooTall = track.displayHeight > MAX_TRANSCODE_HEIGHT;
     const height = tooTall ? MAX_TRANSCODE_HEIGHT : track.displayHeight;
     const width = Math.round(
@@ -841,6 +852,47 @@ export class ClientTranscoder {
     );
   }
 }
+
+// colr box: size 19, "colr", "nclx", primaries / transfer / matrix all 2 (unspecified), range byte 0
+const UNSPECIFIED_COLR = Uint8Array.from([
+  0, 0, 0, 19, 0x63, 0x6f, 0x6c, 0x72, 0x6e, 0x63, 0x6c, 0x78, 0, 2, 0, 2, 0, 2,
+  0,
+]);
+
+/**
+ * A file with no colour description (common for SD / ffmpeg-made H.264) plays as BT.601 when Chrome opens it directly
+ * (below 720p; BT.709 from 720p up) but as BT.709 through MediaSource, so a copied track would come out visibly
+ * shifted (measured on a 640x360 clip: pure green 20 levels darker than the plain file). Tagging the copy as BT.601
+ * in the init segment restores what the plain file shows. Patches the "unspecified" colr box that mediabunny writes,
+ * in place. Returns true once the chunk holding the init segment (moov) has been looked at.
+ */
+const tagUnspecifiedColorAsBt601 = (chunk: Uint8Array): boolean => {
+  const head = Math.min(chunk.length - 4, 64);
+  for (let i = 4; i < head; i++) {
+    // "moov" at i, its 4-byte size just before
+    if (
+      chunk[i] === 0x6d &&
+      chunk[i + 1] === 0x6f &&
+      chunk[i + 2] === 0x6f &&
+      chunk[i + 3] === 0x76
+    ) {
+      const size = new DataView(
+        chunk.buffer,
+        chunk.byteOffset + i - 4,
+        4,
+      ).getUint32(0);
+      const end =
+        Math.min(chunk.length, i - 4 + size) - UNSPECIFIED_COLR.length;
+      for (let j = i; j <= end; j++) {
+        if (UNSPECIFIED_COLR.every((byte, k) => chunk[j + k] === byte)) {
+          chunk.set([0, 6, 0, 6, 0, 6], j + 12);
+        }
+      }
+      return true;
+    }
+  }
+  return false;
+};
 
 const describeDiscardedTracks = (conversion: Conversion): string => {
   const reasons = conversion.discardedTracks
