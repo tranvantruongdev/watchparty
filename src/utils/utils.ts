@@ -364,13 +364,14 @@ export async function getYouTubeResults(
   return data.map((d: any) => ({ ...d, type: "youtube" }));
 }
 
-export async function openFileSelector(accept?: string) {
+export async function openFileSelector(accept?: string, multiple?: boolean) {
   return new Promise<FileList | null>((resolve) => {
     // Create an input element
     const inputElement = document.createElement("input");
 
     // Set its type to file
     inputElement.type = "file";
+    inputElement.multiple = Boolean(multiple);
 
     // Set accept to the file types you want the user to select.
     // Include both the file extension and the mime type

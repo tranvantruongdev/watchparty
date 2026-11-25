@@ -563,6 +563,15 @@ export class App extends React.Component<AppProps, AppState> {
   // The blob URL a non-converted file share plays leftVideo from; revoked when
   // the share ends so the file's handle doesn't stay pinned until tab close
   fileShareObjectUrl?: string;
+  // Sharer-side queue of the other files picked together with the one now
+  // shared (in memory only). Rendered from the field: setFileQueue re-renders
+  fileQueue: File[] = [];
+  fileQueueOptions: { useMediaSoup: boolean; convert?: boolean } = {
+    useMediaSoup: false,
+  };
+  // Set by advanceFileQueue so stopPublishingLocalStream keeps the queue
+  // (every other stop of a share clears it)
+  fileQueueAdvancing = false;
   transcoder?: ClientTranscoder;
   publisherConns: PCDict = {};
   // Inaudible tone that keeps a hidden file-share tab unthrottled (setupRTCConnections)
@@ -2156,15 +2165,22 @@ export class App extends React.Component<AppProps, AppState> {
 
   // Shares a file from this device. With convert, the file is first transcoded in this browser using WebCodecs
   // into a format browsers can play (see clientTranscode.ts), then shared the same way as an unconverted file.
+  // Several files picked at once: the first is shared now, the rest are queued
+  // (advanceFileQueue passes the next queued file as `queued`, skipping the picker)
   startFileShare = async (
     useMediaSoup: boolean,
     options?: { convert?: boolean },
+    queued?: File,
   ) => {
-    const files = await openFileSelector();
+    const files = queued ? [queued] : await openFileSelector(undefined, true);
     if (!files) {
       return;
     }
     const file = files[0];
+    if (!queued) {
+      this.fileQueueOptions = { useMediaSoup, convert: options?.convert };
+      this.setFileQueue(Array.from(files).slice(1));
+    }
     if (options?.convert) {
       // Downloaded on demand (round 123): only a conversion actually starting
       // needs the module
@@ -2276,6 +2292,12 @@ export class App extends React.Component<AppProps, AppState> {
       this.HTMLInterface.pauseVideo();
       this.showError("This file can't be played in your browser");
       this.restorePreShareVideo();
+      if (this.fileQueue.length) {
+        // A file that can't play is skipped, the next one is tried. The
+        // user's own first pick never joined the room, so there is no leave
+        // to wait for and the room's current media is not someone else's
+        this.startNextQueuedFile(!queued);
+      }
       return;
     }
     this.isLocalStreamAFile = true;
@@ -2287,6 +2309,58 @@ export class App extends React.Component<AppProps, AppState> {
       file: true,
       mediasoup: useMediaSoup,
     });
+  };
+
+  setFileQueue = (queue: File[]) => {
+    this.fileQueue = queue;
+    this.forceUpdate();
+  };
+
+  // Shares the next queued file through the normal path. The room must have
+  // processed our leave first: its REC:host "" would otherwise land after the
+  // new file is attached and clearState would wipe it
+  startNextQueuedFile = async (fromPick = false) => {
+    const next = this.fileQueue[0];
+    if (!next) {
+      return;
+    }
+    this.setFileQueue(this.fileQueue.slice(1));
+    const waitStart = Date.now();
+    while (
+      !fromPick &&
+      this.playingFileShare() &&
+      Date.now() - waitStart < 3000
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    // Let the REC:host callback (clearState) finish before attaching the file
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (this.localStreamToPublish || (!fromPick && this.state.roomMedia)) {
+      // Someone else took the room meanwhile, or the room playlist did: the
+      // server starts its next item when a share leaves (cmdHost "" ->
+      // playlistNext). shortcut: the queue yields to the playlist; skipping
+      // that needs a flag on CMD:leaveScreenShare in server/room.ts
+      this.showError(
+        `File queue stopped: the room started other media (${this.fileQueue.length + 1} not played)`,
+        6000,
+      );
+      this.setFileQueue([]);
+      return;
+    }
+    await this.startFileShare(
+      this.fileQueueOptions.useMediaSoup,
+      { convert: this.fileQueueOptions.convert },
+      next,
+    );
+  };
+
+  // The shared file ended (or "skip to next"): stop this share without the
+  // "share again" prompt and start the next queued file
+  advanceFileQueue = () => {
+    this.fileQueueAdvancing = true;
+    this.shareStopSilent = true;
+    this.stopPublishingLocalStream();
+    this.startNextQueuedFile();
   };
 
   startScreenShare = async (useMediaSoup: boolean) => {
@@ -2882,6 +2956,13 @@ export class App extends React.Component<AppProps, AppState> {
     const wasSharing = Boolean(this.localStreamToPublish);
     const silent = this.shareStopSilent;
     this.shareStopSilent = false;
+    // Stopping a live share but not through advanceFileQueue ends the queue
+    // with it (the room's own REC:host "" after an advance arrives here with
+    // no live share left and must keep it)
+    if (wasSharing && !this.fileQueueAdvancing && this.fileQueue.length) {
+      this.setFileQueue([]);
+    }
+    this.fileQueueAdvancing = false;
     this.stopConvert();
     if (this.localStreamToPublish) {
       this.socket.emit("CMD:leaveScreenShare");
@@ -2966,7 +3047,13 @@ export class App extends React.Component<AppProps, AppState> {
     // viewer clock counting to 34 s and beyond)
     this.localStreamToPublish?.getTracks().forEach((track) => {
       if (!track.onended) {
-        track.onended = () => this.stopPublishingLocalStream();
+        track.onended = () => {
+          if (this.isLocalStreamAFile && this.fileQueue.length) {
+            this.advanceFileQueue();
+          } else {
+            this.stopPublishingLocalStream();
+          }
+        };
       }
     });
     // The sharer's own preview: no PC connects to ourselves, so nothing ever
@@ -5218,6 +5305,45 @@ export class App extends React.Component<AppProps, AppState> {
                           Stop Share
                         </Button>
                       )}
+                      {this.isLocalStreamAFile &&
+                        this.localStreamToPublish &&
+                        this.fileQueue.length > 0 && (
+                          <Menu closeOnItemClick={false}>
+                            <Menu.Target>
+                              <Button leftSection={<IconList />}>
+                                Up next ({this.fileQueue.length})
+                              </Button>
+                            </Menu.Target>
+                            <Menu.Dropdown>
+                              <Menu.Item onClick={this.advanceFileQueue}>
+                                Skip to next
+                              </Menu.Item>
+                              {this.fileQueue.map((f, i) => (
+                                <Menu.Item
+                                  key={i + f.name}
+                                  rightSection={
+                                    <ActionIcon
+                                      size="xs"
+                                      variant="subtle"
+                                      aria-label={`Remove ${f.name}`}
+                                      onClick={() =>
+                                        this.setFileQueue(
+                                          this.fileQueue.filter(
+                                            (_, j) => j !== i,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      <IconX />
+                                    </ActionIcon>
+                                  }
+                                >
+                                  {f.name}
+                                </Menu.Item>
+                              ))}
+                            </Menu.Dropdown>
+                          </Menu>
+                        )}
                       {this.isSharingScreen() && (
                         <Button
                           onClick={this.toggleSharePreview}

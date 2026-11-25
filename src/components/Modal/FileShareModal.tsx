@@ -30,7 +30,10 @@ export const FileShareModal = (props: {
       size="auto"
       centered
     >
-      <div>You're about to share a file from your device.</div>
+      <div>
+        You're about to share a file from your device. Pick several files to
+        play them one after another.
+      </div>
       {!canShareFile && (
         <Alert color="red" my="sm">
           This browser can't share a file. Open WatchParty in Chrome or Edge on
