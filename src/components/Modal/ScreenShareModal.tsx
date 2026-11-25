@@ -30,6 +30,51 @@ export const getShareCapMbps = (viewers: number) => {
   return getShareMbps();
 };
 
+// Max height of a share, picked by the sharer. 0 = Auto: the pre-picker
+// behaviour (capture asks for 1080 and the sender only caps at 2560x1440)
+const SHARE_RES = ["auto", "720", "1080", "1440"];
+export const getShareRes = () => {
+  let v: string | null = null;
+  try {
+    v = window.localStorage.getItem("watchparty-share-res");
+  } catch {}
+  return v && SHARE_RES.includes(v) ? Number(v) || 0 : 0;
+};
+
+export const ShareResPicker = () => {
+  const [res, setRes] = useState(String(getShareRes() || "auto"));
+  return (
+    <div style={{ marginTop: 6 }}>
+      Resolution (max height):{" "}
+      {[
+        ["auto", "Auto"],
+        ["720", "720p"],
+        ["1080", "1080p"],
+        ["1440", "1440p"],
+      ].map(([v, label]) => (
+        <Button
+          key={v}
+          size="xs"
+          mr={6}
+          variant={res === v ? "filled" : "default"}
+          style={
+            res === v ? { background: "#e8b84a", color: "#1a1a1a" } : undefined
+          }
+          onClick={() => {
+            setRes(v);
+            try {
+              window.localStorage.setItem("watchparty-share-res", v);
+            } catch {}
+          }}
+        >
+          {res === v ? "✓ " : ""}
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+};
+
 export const ScreenShareModal = ({
   closeModal,
   startScreenShare,
@@ -103,6 +148,7 @@ export const ScreenShareModal = ({
           </Button>
         ))}
       </div>
+      <ShareResPicker />
       <br />
       <Table striped>
         <Table.Thead>

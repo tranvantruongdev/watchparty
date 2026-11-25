@@ -58,6 +58,7 @@ import {
   ScreenShareModal,
   getShareMbps,
   getShareCapMbps,
+  getShareRes,
 } from "../Modal/ScreenShareModal";
 import type firebase from "firebase/compat/app";
 import { HTML } from "./HTML";
@@ -2587,9 +2588,16 @@ export class App extends React.Component<AppProps, AppState> {
     if (navigator.mediaDevices.getDisplayMedia) {
       // The pre-round-122 constraints; the picker-hint attempt below spreads
       // them so the TypeError fallback can retry with exactly these
+      // Resolution picked in the share dialog (0 = Auto = the 1080 below)
+      const shareRes = getShareRes();
       const baseOptions = () => ({
         // Full HD when the screen has it; the direct share sends up to 16 Mbps
-        video: { height: { ideal: 1080 }, logicalSurface: true },
+        video: {
+          height: shareRes
+            ? { ideal: shareRes, max: shareRes }
+            : { ideal: 1080 },
+          logicalSurface: true,
+        },
         audio: {
           autoGainControl: false,
           channelCount: 2,
@@ -3406,9 +3414,13 @@ export class App extends React.Component<AppProps, AppState> {
               // both dimensions down; a factor of 1 (any <=1440p source,
               // incl. the usual 1080p capture) leaves the encodings untouched
               const trackSettings = track.getSettings();
+              // A resolution picked in the share dialog scales the sender
+              // down to that height too (Auto picks 0: nothing added)
+              const shareRes = getShareRes();
               const shareScaleDown = Math.max(
                 (trackSettings.width || 0) / 2560,
                 (trackSettings.height || 0) / 1440,
+                shareRes ? (trackSettings.height || 0) / shareRes : 0,
                 1,
               );
               // Browsers cap a peer video near 2 Mbps and drop 720p to 540p; let it use more

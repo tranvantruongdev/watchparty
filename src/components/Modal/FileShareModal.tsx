@@ -3,6 +3,7 @@ import { Modal, Button, Table, Checkbox, Alert } from "@mantine/core";
 import { SubscribeButton } from "../SubscribeButton/SubscribeButton";
 import { MetadataContext } from "../../MetadataContext";
 import { isClientTranscodeSupported } from "../../utils/clientTranscode";
+import { ShareResPicker } from "./ScreenShareModal";
 
 export const FileShareModal = (props: {
   closeModal: () => void;
@@ -41,6 +42,8 @@ export const FileShareModal = (props: {
           all; you can still watch what others share.
         </Alert>
       )}
+      <ShareResPicker />
+      <br />
       <Table striped>
         <Table.Thead>
           <Table.Tr>
