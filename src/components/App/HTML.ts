@@ -1,5 +1,9 @@
 import { default as toWebVTT } from "srt-webvtt";
 import { Player } from "./Player";
+import { getCurrentSettings } from "../Settings/LocalSettings";
+
+// VTTCue line numbers (snapToLines): negative counts up from the bottom
+const SUBTITLE_LINES = { higher: -4, top: 0 };
 
 export class HTML implements Player {
   elId: string;
@@ -151,9 +155,59 @@ export class HTML implements Player {
         track.label = "English";
         track.srclang = "en";
         track.src = url;
+        track.addEventListener("load", this.applySubtitleStyle);
         leftVideo.appendChild(track);
         leftVideo.textTracks[0].mode = "showing";
+        this.applySubtitleStyle();
       }
+    }
+  };
+
+  // Local (per-browser) subtitle size and position from the saved settings.
+  // Size is a ::cue rule scoped to the player video; position moves the cues
+  // of the active track, and runs again once a track's cues have loaded.
+  applySubtitleStyle = () => {
+    const { subtitleSize, subtitlePosition } = getCurrentSettings();
+    const styleId = "wp-subtitle-style";
+    let style = document.getElementById(styleId);
+    if (subtitleSize && subtitleSize !== 100) {
+      if (!style) {
+        style = document.createElement("style");
+        style.id = styleId;
+        document.head.appendChild(style);
+      }
+      style.textContent = `#${this.elId}::cue { font-size: ${subtitleSize}%; }`;
+    } else {
+      style?.remove();
+    }
+    const track = this.getVideoEl()?.textTracks[0];
+    const cues = track?.cues;
+    if (!track || !cues) {
+      return;
+    }
+    let moved = false;
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i] as VTTCue & {
+        origLine?: { line: LineAndPositionSetting; snap: boolean };
+      };
+      if (!cue.origLine) {
+        cue.origLine = { line: cue.line, snap: cue.snapToLines };
+      }
+      const line =
+        subtitlePosition === "higher" || subtitlePosition === "top"
+          ? SUBTITLE_LINES[subtitlePosition]
+          : cue.origLine.line;
+      if (cue.line !== line) {
+        cue.snapToLines = line === cue.origLine.line ? cue.origLine.snap : true;
+        cue.line = line;
+        moved = true;
+      }
+    }
+    // Chromium keeps drawing an already shown cue where it was; re-showing
+    // the track makes it lay the cues out again
+    if (moved && track.mode === "showing") {
+      track.mode = "hidden";
+      track.mode = "showing";
     }
   };
 
@@ -191,8 +245,10 @@ export class HTML implements Player {
     track.kind = "captions";
     track.label = file.name;
     track.src = url;
+    track.addEventListener("load", this.applySubtitleStyle);
     leftVideo.appendChild(track);
     leftVideo.textTracks[0].mode = "showing";
+    this.applySubtitleStyle();
   };
 
   syncSubtitles = (sharerTime: number) => {

@@ -51,6 +51,9 @@ interface ChatMessage extends ChatMessageBase {
 interface Settings {
   disableChatSound?: boolean;
   noBufferPause?: boolean;
+  // Percent of the default subtitle size, 100 = untouched
+  subtitleSize?: number;
+  subtitlePosition?: "bottom" | "higher" | "top";
 }
 
 interface PlaylistVideo {

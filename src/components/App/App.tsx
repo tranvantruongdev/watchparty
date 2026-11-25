@@ -4851,6 +4851,7 @@ export class App extends React.Component<AppProps, AppState> {
               setSubtitleMode={this.Player().setSubtitleMode}
               getSubtitleMode={this.Player().getSubtitleMode}
               loadLocalSubtitle={this.HTMLInterface.loadLocalSubtitle}
+              applySubtitleStyle={this.HTMLInterface.applySubtitleStyle}
             />
           </React.Suspense>
         )}

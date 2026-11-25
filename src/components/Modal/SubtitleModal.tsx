@@ -9,7 +9,9 @@ import {
   TextInput,
   ActionIcon,
   Divider,
+  SegmentedControl,
 } from "@mantine/core";
+import { getCurrentSettings, updateSettings } from "../Settings/LocalSettings";
 import { Socket } from "socket.io-client";
 import { openFileSelector, serverPath, getRoomKey } from "../../utils/utils";
 import config from "../../config";
@@ -31,6 +33,7 @@ export class SubtitleModal extends React.Component<{
   setSubtitleMode: (mode?: TextTrackMode) => void;
   getSubtitleMode: () => TextTrackMode;
   loadLocalSubtitle: (file: File) => Promise<void>;
+  applySubtitleStyle: () => void;
 }> {
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
@@ -115,8 +118,15 @@ export class SubtitleModal extends React.Component<{
       this.setState({ localFailed: true });
     }
   };
+  // Local only: saved in this browser and applied to our own player
+  setStyle = (change: Partial<Settings>) => {
+    updateSettings(JSON.stringify({ ...getCurrentSettings(), ...change }));
+    this.props.applySubtitleStyle();
+    this.forceUpdate();
+  };
   render() {
     const { closeModal } = this.props;
+    const { subtitleSize, subtitlePosition } = getCurrentSettings();
     return (
       <Modal
         closeButtonProps={{ "aria-label": "Close" }}
@@ -133,6 +143,35 @@ export class SubtitleModal extends React.Component<{
             onClick={() => {
               this.props.setSubtitleMode();
             }}
+          />
+          <Text size="sm" mt="xs">
+            Size (only for me)
+          </Text>
+          <SegmentedControl
+            aria-label="Subtitle size"
+            value={String(subtitleSize ?? 100)}
+            onChange={(v) => this.setStyle({ subtitleSize: Number(v) })}
+            data={["75", "100", "125", "150", "200"].map((v) => ({
+              value: v,
+              label: `${v}%`,
+            }))}
+          />
+          <Text size="sm" mt="xs">
+            Position (only for me)
+          </Text>
+          <SegmentedControl
+            aria-label="Subtitle position"
+            value={subtitlePosition ?? "bottom"}
+            onChange={(v) =>
+              this.setStyle({
+                subtitlePosition: v as Settings["subtitlePosition"],
+              })
+            }
+            data={[
+              { value: "bottom", label: "Bottom" },
+              { value: "higher", label: "Higher" },
+              { value: "top", label: "Top" },
+            ]}
           />
           <Divider my="lg" />
           <Title order={6}>Room subtitles</Title>
