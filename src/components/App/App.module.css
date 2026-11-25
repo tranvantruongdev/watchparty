@@ -507,6 +507,8 @@
 .chatOverlayInput {
   pointer-events: auto;
   width: min(420px, 40%);
+  /* The 40% is of a shrink-to-fit parent, so with no messages it was ~78px */
+  min-width: min(320px, 80vw);
   padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid rgba(190, 150, 255, 0.25);
@@ -780,6 +782,12 @@
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: thin;
+  }
+
+  /* Only .shareButton has a min-width: Stop Share / Up next shrank to an icon
+     (their labels clipped) once the row overflowed */
+  :global(#playerColumn) > div[class*="mobileStack"]:has(> button) > button {
+    flex-shrink: 0;
   }
 }
 

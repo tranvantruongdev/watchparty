@@ -2352,12 +2352,13 @@ export class App extends React.Component<AppProps, AppState> {
     }
     if (preShare.srcObject) {
       leftVideo.srcObject = preShare.srcObject;
-      leftVideo.play();
+      leftVideo.play().catch(() => {});
     } else if (preShare.src) {
       leftVideo.src = preShare.src;
       leftVideo.currentTime = preShare.time;
       if (!this.state.roomPaused) {
-        leftVideo.play();
+        // Rejects with NotSupportedError when the restored src won't load
+        leftVideo.play().catch(() => {});
       }
     }
   };
@@ -2453,7 +2454,9 @@ export class App extends React.Component<AppProps, AppState> {
     }
     const fileShareSrc = leftVideo.src;
     const fileShareTranscoder = options?.convert ? this.transcoder : undefined;
-    leftVideo.play();
+    // A file the browser can't decode rejects this with NotSupportedError;
+    // the readyState wait below and the capture check report it to the user
+    leftVideo.play().catch(() => {});
     if (leftVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
       // captureStream() of a media element starts with no tracks until the
       // first frame decodes; publishers need tracks to negotiate, so wait for
