@@ -514,6 +514,9 @@ export class App extends React.Component<AppProps, AppState> {
   bufferingSince = 0;
   bufferingReported = false;
   ytNeedsFirstPlaySync = false;
+  // Waits for the room's live position when a freshly cued embed reports
+  // ENDED without ever having played (see settleYtCuedAtEnd)
+  ytCuedAtEndTimer: number | undefined = undefined;
   // Counts 1s ts ticks so the resume point is saved every ~10s
   resumeTicker = 0;
   // Position to pull the room to after the "continue watching" reopen loads
@@ -1868,9 +1871,23 @@ export class App extends React.Component<AppProps, AppState> {
               e.data === window.YT?.PlayerState?.ENDED
             ) {
               console.log(e.data, e.target.getVideoUrl());
-              // The room's url string, not the player's normalized one — the
-              // server matches the playlist-next trigger against its own video
-              this.onVideoEnded(this.state.roomMedia);
+              if (this.ytNeedsFirstPlaySync && !this.state.roomPaused) {
+                // Never played since the cue: the cue landed at or past the end
+                // (a joiner gets the room's furthest position, still parked at
+                // the end of a video that is replaying from 0, R28B). That is not
+                // this video finishing — pausing here left the embed ended
+                // while the room plays. Wait for the room's live position
+                const media = this.state.roomMedia;
+                window.clearTimeout(this.ytCuedAtEndTimer);
+                this.ytCuedAtEndTimer = window.setTimeout(
+                  () => this.settleYtCuedAtEnd(media),
+                  2500,
+                );
+              } else {
+                // The room's url string, not the player's normalized one — the
+                // server matches the playlist-next trigger against its own video
+                this.onVideoEnded(this.state.roomMedia);
+              }
             }
             if (e.data === window.YT?.PlayerState?.PLAYING)
               this.ytPlayRetried = false;
@@ -1936,7 +1953,20 @@ export class App extends React.Component<AppProps, AppState> {
               // YouTube's play button after autoplay was blocked): jump to the room
               // position, same as the Sync button, since the cued position is stale
               this.ytNeedsFirstPlaySync = false;
-              this.localSeek();
+              // A leader parked at the end is our own stale report (this embed
+              // sat ended), or a finished room, or a replay whose first report
+              // has not landed yet: seeking there ends this embed again (R28B).
+              // Follow only what the others report; if that is the end too,
+              // stay at 0 — the drift resync moves us once the position is real
+              const duration = this.getDuration();
+              if (duration > 0 && this.getLeaderTime() >= duration - 1) {
+                const others = this.getOthersTime();
+                if (others < duration - 1) {
+                  this.localSeek(others);
+                }
+              } else {
+                this.localSeek();
+              }
               // A "continue watching" reopen pulls the room to the saved spot
               // once the video actually plays (YouTube has no canplay event)
               this.consumePendingResume();
@@ -3837,6 +3867,44 @@ export class App extends React.Component<AppProps, AppState> {
       this.Player().playVideo();
       this.checkPlaybackStarted();
     }, 1200);
+  };
+
+  // A freshly cued YouTube embed that reported ENDED without ever playing (see
+  // onStateChange): by now the room's position has arrived. Mid-video — the
+  // room replays from 0 while the server still holds the old end as the join
+  // position — restart this embed (playVideo on an ENDED one restarts it from
+  // 0, and its first PLAYING syncs to the room). At the end — the room really
+  // is finished — treat it as the end it is, as before
+  // The other members' position (median, one other = theirs), without our own
+  // entry: that one is still the end we just reported while the embed sat ended
+  getOthersTime = () => {
+    const others = Object.entries(this.tsMapData)
+      .filter(([id]) => id !== clientId)
+      .map(([, ts]) => ts);
+    if (!others.length) {
+      return Number.NEGATIVE_INFINITY;
+    }
+    return others.length > 1 ? calculateMedian(others) : others[0];
+  };
+
+  settleYtCuedAtEnd = (media: string) => {
+    if (
+      !this.usingYoutube() ||
+      this.state.roomMedia !== media ||
+      this.state.exploring ||
+      !this.ytNeedsFirstPlaySync ||
+      this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState() !==
+        window.YT?.PlayerState?.ENDED
+    ) {
+      return;
+    }
+    const others = this.getOthersTime();
+    if (Number.isFinite(others) && others < this.getDuration() - 1) {
+      console.log("yt cued past the end, room is mid-video: restarting");
+      this.localPlay();
+    } else {
+      this.onVideoEnded(media);
+    }
   };
 
   localPlay = async () => {
