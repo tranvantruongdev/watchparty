@@ -124,9 +124,34 @@
    fullscreen no longer has, so a 1080p screen showed at 1600x900 on a
    1920x1080 display. Only the 32px controls row + 4px gap remain. */
 @media only screen and (min-width: 901px) {
-  :global(#playerColumn):fullscreen :global(#leftVideo) {
+  :global(#playerColumn):fullscreen :global(#leftVideo),
+  :global(#playerColumn[data-pseudofs]) :global(#leftVideo) {
     max-height: calc(100vh - 36px) !important;
   }
+}
+
+/* Pseudo-fullscreen (App.tsx setPseudoFs, R32C, upstream #725): browsers with
+   no element fullscreen for the player (iPhone + YouTube iframe / VBrowser)
+   get #playerColumn pinned over the whole viewport. !important beats its
+   inline position: relative / height: 100%. 250 is above the page and below
+   Mantine's popover layer (300), so the controls' menus still open over it. */
+:global(#playerColumn[data-pseudofs]) {
+  position: fixed !important;
+  inset: 0;
+  z-index: 250;
+  box-sizing: border-box;
+  width: 100vw;
+  width: 100dvw;
+  height: 100vh !important;
+  height: 100dvh !important;
+  background: #000;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* the page behind must not scroll under a touch drag on the overlay */
+:global(body:has(#playerColumn[data-pseudofs])) {
+  overflow: hidden;
 }
 
 /* Fullscreen idle-hide (App.tsx fsIdleWake): cursor goes with the controls */
@@ -830,7 +855,9 @@
      fullscreen it keeps the picture at its windowed size (round 171: video
      content 366x206 both before and after clicking Fullscreen at 844x390).
      Let the wrapper grow into the freed top bar. */
-  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]) {
+  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]),
+  :global(#playerColumn[data-pseudofs])
+    > div:has(> [class*="playerContainer"]) {
     height: auto;
     flex-grow: 1;
     min-height: 0;
@@ -853,7 +880,9 @@
    lifting. Desktop windows wide enough for the desktop layout are covered
    by the min-width: 901px fullscreen rule instead. */
 @media only screen and (max-width: 900px) and (orientation: portrait) {
-  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]) {
+  :global(#playerColumn):fullscreen > div:has(> [class*="playerContainer"]),
+  :global(#playerColumn[data-pseudofs])
+    > div:has(> [class*="playerContainer"]) {
     height: auto;
     flex-grow: 1;
     min-height: 0;
@@ -861,7 +890,8 @@
 
   /* Scoped to fullscreen: the windowed portrait wrapper is not sized, so an
      uncapped video there would follow its intrinsic height */
-  :global(#playerColumn):fullscreen .playerContainer :global(#leftVideo) {
+  :global(#playerColumn):fullscreen .playerContainer :global(#leftVideo),
+  :global(#playerColumn[data-pseudofs]) .playerContainer :global(#leftVideo) {
     height: 100%;
     /* beats the inline calc() cap: the fullscreen wrapper already bounds it */
     max-height: none !important;

@@ -4621,8 +4621,32 @@ export class App extends React.Component<AppProps, AppState> {
     return target;
   };
 
+  // Pseudo-fullscreen (R32C, upstream #725): where the browser has no element
+  // fullscreen for the player (iPhone: no requestFullscreen, and neither the
+  // YouTube iframe nor a VBrowser has webkitEnterFullscreen), #playerColumn
+  // is pinned over the viewport by CSS ([data-pseudofs] in App.module.css).
+  // It feeds the same state.fullScreen / chat overlay / idle-hide as real
+  // fullscreen; the fullscreen buttons and Escape exit it
+  pseudoFs = false;
+
+  setPseudoFs = (on: boolean) => {
+    const col = document.getElementById("playerColumn");
+    if (!col) {
+      return;
+    }
+    this.pseudoFs = on;
+    if (on) {
+      col.setAttribute("data-pseudofs", "true");
+    } else {
+      col.removeAttribute("data-pseudofs");
+    }
+    this.onFullScreenChange();
+  };
+
   onFullScreenChange = () => {
-    this.setState({ fullScreen: Boolean(document.fullscreenElement) });
+    this.setState({
+      fullScreen: Boolean(document.fullscreenElement) || this.pseudoFs,
+    });
     setTimeout(() => this.chatRef.current?.scrollToBottom(), 100);
     this.fsIdleSync();
   };
@@ -4679,11 +4703,16 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   fsIdleSync = () => {
-    const fs = document.fullscreenElement;
+    const fs =
+      document.fullscreenElement ??
+      (this.pseudoFs ? document.getElementById("playerColumn") : null);
     const want =
       fs instanceof HTMLElement &&
       fs.id === "playerColumn" &&
-      !this.playingVBrowser();
+      !this.playingVBrowser() &&
+      // A tap on the cross-origin YouTube iframe never reaches the page, so
+      // hidden controls could only come back from a tap on the black bars
+      !(this.pseudoFs && this.usingYoutube());
     if (want && !this.fsIdleEl) {
       this.fsIdleEl = fs;
       this.fsIdleEvents.forEach((type) =>
@@ -4754,6 +4783,18 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   onKeydown = (e: any) => {
+    if (
+      e.key === "Escape" &&
+      this.pseudoFs &&
+      !["INPUT", "TEXTAREA"].includes(e.target?.tagName)
+    ) {
+      // The browser exits real fullscreen on Escape itself; the pseudo one
+      // needs this. Not from the overlay input: its own Escape closes the
+      // input first. Runs for any other focused element (a tapped button
+      // keeps focus)
+      this.setPseudoFs(false);
+      return;
+    }
     if (!document.activeElement || document.activeElement.tagName === "BODY") {
       if (e.key === " ") {
         e.preventDefault();
@@ -4783,6 +4824,11 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   localFullScreen = async (bVideoOnly: boolean) => {
+    if (this.pseudoFs) {
+      // the same buttons / keys that entered it exit it
+      this.setPseudoFs(false);
+      return;
+    }
     // Default: fullscreen the body (theater mode)
     let container = document.body as HTMLElement;
     if (bVideoOnly || isMobile()) {
@@ -4813,6 +4859,16 @@ export class App extends React.Component<AppProps, AppState> {
       // name we call (round 171: the guard tested the capital-S spelling)
       //@ts-expect-error
       container.webkitEnterFullscreen();
+      return;
+    }
+    if (
+      !container.requestFullscreen &&
+      //@ts-expect-error
+      !container.webkitEnterFullscreen
+    ) {
+      // e.g. iPhone with a YouTube iframe or a VBrowser: nothing can be
+      // fullscreened natively, so cover the viewport with #playerColumn (R32C)
+      this.setPseudoFs(true);
       return;
     }
     // The browser can refuse (document lost focus mid-click, Escape race);

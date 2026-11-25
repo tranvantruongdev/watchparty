@@ -566,24 +566,22 @@ export const Controls = (props: ControlsProps) => {
         </Menu>
       )}
       {/* iPhone has no element fullscreen and the YouTube iframe can't be
-          fullscreened from outside: both buttons were dead clicks there, the
-          player's own fullscreen button works (R16I) */}
-      {!(props.isYouTube && !document.fullscreenEnabled) && (
-        <>
-          <ActIcon
-            icon={IconTheater}
-            label="Theater Mode"
-            onClick={() => localFullScreen(false)}
-            className={` ${styles.action}`}
-          />
-          <ActIcon
-            icon={IconMaximize}
-            label="Fullscreen"
-            onClick={() => localFullScreen(true)}
-            className={` ${styles.action}`}
-          />
-        </>
-      )}
+          fullscreened from outside: App.localFullScreen covers the viewport
+          with the player column there instead (R32C, upstream #725; these
+          two buttons were dead clicks / hidden before) */}
+      <ActIcon
+        icon={IconTheater}
+        label="Theater Mode"
+        onClick={() => localFullScreen(false)}
+        className={` ${styles.action}`}
+      />
+      <ActIcon
+        icon={IconMaximize}
+        label="Fullscreen"
+        onClick={() => localFullScreen(true)}
+        className={` ${styles.action}`}
+      />
+
       {togglePictureInPicture && (
         <ActIcon
           icon={IconPictureInPicture}
