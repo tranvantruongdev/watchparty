@@ -334,9 +334,12 @@ interface AppState {
   convertEnabled: boolean;
   // Cinema look for the watch page (curtains, house lights)
   theaterMode: boolean;
-  // Audio tracks of the file being converted on this device, and which one is playing
+  // Audio tracks of the file being converted on this device (or of the HLS stream), and which one is playing
   audioTracks: AudioTrackInfo[] | undefined;
   audioTrackId: number | undefined;
+  // Video quality levels of the HLS stream on this device and the picked one (-1 = Auto)
+  hlsLevels: { id: number; label: string }[] | undefined;
+  hlsLevelId: number;
   floatReactions: FloatReaction[];
   // Fullscreen chat overlay (F4): whether the mini input is open and what's in it
   chatOverlayTyping: boolean;
@@ -501,6 +504,8 @@ export class App extends React.Component<AppProps, AppState> {
     theaterMode: window.localStorage.getItem("watchparty-theater") !== "0",
     audioTracks: undefined,
     audioTrackId: undefined,
+    hlsLevels: undefined,
+    hlsLevelId: -1,
   };
   socket: Socket = null!;
   mediasoupPubSocket: Socket | null = null;
@@ -1153,6 +1158,8 @@ export class App extends React.Component<AppProps, AppState> {
           vBrowserQuality: "1",
           controller: data.controller,
           isLiveStream: false,
+          hlsLevels: undefined,
+          hlsLevelId: -1,
         },
         async () => {
           const leftVideo = this.HTMLInterface.getVideoEl();
@@ -1315,6 +1322,49 @@ export class App extends React.Component<AppProps, AppState> {
                 const isLiveStream = data.details.live;
                 this.setState({ isLiveStream });
                 console.log("HLS level loaded: isLive %s", isLiveStream);
+              });
+              // Quality / audio language menus (local to this device). hls.js
+              // resets the manual level to Auto when a new source loads
+              const hls = window.watchparty.hls;
+              hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+                const levels = data.levels.map((level, id) => ({
+                  id,
+                  label: level.height
+                    ? `${level.height}p`
+                    : `${Math.round(level.bitrate / 1000)} kbps`,
+                }));
+                // Same height at several bitrates: tell them apart
+                const labels = levels.map((l) => l.label);
+                this.setState({
+                  hlsLevels: levels.map((l, i) =>
+                    labels.indexOf(l.label) !== labels.lastIndexOf(l.label)
+                      ? {
+                          id: l.id,
+                          label: `${l.label} ${Math.round(data.levels[i].bitrate / 1000)} kbps`,
+                        }
+                      : l,
+                  ),
+                  hlsLevelId: -1,
+                });
+              });
+              hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+                this.setState({
+                  audioTracks: data.audioTracks.map((track, id) => ({
+                    id,
+                    label:
+                      track.name && track.lang && track.name !== track.lang
+                        ? `${track.name} (${track.lang})`
+                        : track.name || track.lang || `Track ${id + 1}`,
+                    languageCode: track.lang ?? "und",
+                    name: track.name || null,
+                    codec: null,
+                    channels: 0,
+                  })),
+                  audioTrackId: hls.audioTrack,
+                });
+              });
+              hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+                this.setState({ audioTrackId: data.id });
               });
             }
             window.watchparty.hls.loadSource(src);
@@ -2113,12 +2163,25 @@ export class App extends React.Component<AppProps, AppState> {
   // for a shared file it changes what everyone hears since viewers receive the converted stream.
   localSetAudioTrack = async (id: number) => {
     try {
-      await this.transcoder?.selectAudioTrack(id);
+      if (this.transcoder) {
+        await this.transcoder.selectAudioTrack(id);
+      } else if (window.watchparty.hls) {
+        // HLS stream (audio renditions), local to this device
+        window.watchparty.hls.audioTrack = id;
+      }
     } catch (err) {
       console.error(err);
       this.showError(
         err instanceof Error ? err.message : "Unable to change audio track",
       );
+    }
+  };
+
+  // Picks the video quality of the HLS stream on this device only; -1 = Auto
+  localSetVideoLevel = (id: number) => {
+    if (window.watchparty.hls) {
+      window.watchparty.hls.currentLevel = id;
+      this.setState({ hlsLevelId: id });
     }
   };
 
@@ -5068,6 +5131,9 @@ export class App extends React.Component<AppProps, AppState> {
         audioTracks={this.state.audioTracks}
         audioTrackId={this.state.audioTrackId}
         localSetAudioTrack={this.localSetAudioTrack}
+        videoLevels={this.state.hlsLevels}
+        videoLevelId={this.state.hlsLevelId}
+        localSetVideoLevel={this.localSetVideoLevel}
         togglePictureInPicture={
           this.usingNative() &&
           !this.playingVBrowser() &&

@@ -12,6 +12,7 @@ import {
   IconRepeat,
   IconBadgeCc,
   IconHeadphones,
+  IconSettings,
   IconVolumeOff,
   IconVolume,
   IconTheater,
@@ -108,6 +109,11 @@ interface ControlsProps {
   audioTracks?: AudioTrackInfo[];
   audioTrackId?: number;
   localSetAudioTrack?: (id: number) => void;
+  /** Video quality levels of the HLS stream playing on this device (only set when there's a choice to make) */
+  videoLevels?: { id: number; label: string }[];
+  /** The picked level, -1 = Auto */
+  videoLevelId?: number;
+  localSetVideoLevel?: (id: number) => void;
 }
 
 export const Controls = (props: ControlsProps) => {
@@ -525,6 +531,35 @@ export const Controls = (props: ControlsProps) => {
                 }
               >
                 {track.label}
+              </Menu.Item>
+            ))}
+          </Menu.Dropdown>
+        </Menu>
+      )}
+      {props.videoLevels && props.videoLevels.length > 1 && (
+        // Local to this device like the audio track menu
+        <Menu>
+          <Menu.Target>
+            <button
+              type="button"
+              className={`${styles.actBtn} ${styles.action}`}
+              aria-label="Video quality"
+              style={{ color: softWhite }}
+            >
+              <IconSettings />
+            </button>
+          </Menu.Target>
+          <Menu.Dropdown>
+            <Menu.Label>Video quality</Menu.Label>
+            {[{ id: -1, label: "Auto" }, ...props.videoLevels].map((level) => (
+              <Menu.Item
+                key={level.id}
+                onClick={() => props.localSetVideoLevel?.(level.id)}
+                rightSection={
+                  (props.videoLevelId ?? -1) === level.id ? <IconCheck /> : null
+                }
+              >
+                {level.label}
               </Menu.Item>
             ))}
           </Menu.Dropdown>
