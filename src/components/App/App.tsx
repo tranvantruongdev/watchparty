@@ -5384,6 +5384,7 @@ export class App extends React.Component<AppProps, AppState> {
                                     onRemove={(index) => {
                                       this.roomPlaylistDelete(index);
                                     }}
+                                    onMove={this.roomPlaylistMove}
                                     disabled={!this.haveLock()}
                                   />
                                 </Menu.Item>

@@ -67,3 +67,15 @@
   display: flex;
   gap: 4px;
 }
+
+.Dragging {
+  opacity: 0.4;
+}
+
+.DropAbove {
+  box-shadow: 0 -3px 0 0 var(--mantine-color-violet-5);
+}
+
+.DropBelow {
+  box-shadow: 0 3px 0 0 var(--mantine-color-violet-5);
+}

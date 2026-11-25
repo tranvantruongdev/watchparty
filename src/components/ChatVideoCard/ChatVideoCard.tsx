@@ -13,6 +13,10 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 
+const DRAG_TYPE = "application/x-watchparty-playlist-index";
+// Index of the card being dragged (one drag at a time, cards share the module)
+let dragFrom = -1;
+
 const ChatVideoCard: React.FC<{
   video: PlaylistVideo;
   index: number;
@@ -22,6 +26,8 @@ const ChatVideoCard: React.FC<{
   onPlayNext?: (index: number) => void;
   onSetMedia?: (value: string) => void;
   onPlaylistAdd?: (value: string) => void;
+  // Drag-and-drop reorder: dropping item `from` on this card moves it to `index`
+  onMove?: (from: number, to: number) => void;
   disabled?: boolean;
 }> = (props) => {
   const {
@@ -34,7 +40,50 @@ const ChatVideoCard: React.FC<{
     onSetMedia,
     disabled,
     onPlaylistAdd,
+    onMove,
   } = props;
+
+  // dragging: this card is the one being dragged; dropAt: where the dragged
+  // item will land relative to this card (above when coming from below)
+  const [dragging, setDragging] = React.useState(false);
+  const [dropAt, setDropAt] = React.useState<"above" | "below" | null>(null);
+  const canDrag = Boolean(controls && onMove && !disabled);
+
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(DRAG_TYPE, String(index));
+    dragFrom = index;
+    setDragging(true);
+  };
+  const handleDragEnd = () => {
+    dragFrom = -1;
+    setDragging(false);
+    setDropAt(null);
+  };
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!canDrag || dragFrom < 0 || !e.dataTransfer.types.includes(DRAG_TYPE)) {
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    // The dragged item ends up at this card's index: the line shows on the
+    // side it comes from
+    setDropAt(dragFrom === index ? null : dragFrom > index ? "above" : "below");
+  };
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setDropAt(null);
+    }
+  };
+  const handleDrop = (e: React.DragEvent) => {
+    setDropAt(null);
+    const from = dragFrom;
+    if (!canDrag || !onMove || from < 0 || from === index) {
+      return;
+    }
+    e.preventDefault();
+    onMove(from, index);
+  };
 
   const handlePlayClick = React.useCallback(
     (e: any) => {
@@ -70,7 +119,22 @@ const ChatVideoCard: React.FC<{
   return (
     <div
       title={video.name}
-      className={classes.Card}
+      className={[
+        classes.Card,
+        dragging && classes.Dragging,
+        dropAt === "above" && classes.DropAbove,
+        dropAt === "below" && classes.DropBelow,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      draggable={canDrag}
+      // Mantine's Menu.Item preventDefaults mousedown, which cancels a drag
+      onMouseDown={canDrag ? (e) => e.stopPropagation() : undefined}
+      onDragStart={canDrag ? handleDragStart : undefined}
+      onDragEnd={canDrag ? handleDragEnd : undefined}
+      onDragOver={canDrag ? handleDragOver : undefined}
+      onDragLeave={canDrag ? handleDragLeave : undefined}
+      onDrop={canDrag ? handleDrop : undefined}
       onClick={
         onSetMedia
           ? (e) => {
