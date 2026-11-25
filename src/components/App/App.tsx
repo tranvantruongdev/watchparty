@@ -4241,7 +4241,11 @@ export class App extends React.Component<AppProps, AppState> {
   // browser dispatches the click, which then lands here and would pause what
   // the tap just started — the whole room in an unlocked room (R16P)
   videoClick = () => {
-    if (Date.now() - this.unlockedAt > 500) {
+    // Same for the tap that only woke the hidden fullscreen controls
+    if (
+      Date.now() - this.unlockedAt > 500 &&
+      Date.now() - this.fsIdleTouchWokeAt > 500
+    ) {
       this.roomTogglePlay();
     }
   };
@@ -4522,6 +4526,7 @@ export class App extends React.Component<AppProps, AppState> {
   fsIdleEl: HTMLElement | null = null;
   fsIdleTimer: number | undefined;
   fsIdlePos = "";
+  fsIdleTouchWokeAt = 0;
   fsIdleEvents = ["mousemove", "mousedown", "keydown", "touchstart", "wheel"];
 
   fsIdleWake = (e?: Event) => {
@@ -4539,13 +4544,20 @@ export class App extends React.Component<AppProps, AppState> {
       }
       this.fsIdlePos = pos;
     }
+    if (e?.type === "touchstart" && el.hasAttribute("data-idle")) {
+      // A tap on hidden controls only shows them (as on phones' players)
+      this.fsIdleTouchWokeAt = Date.now();
+    }
     el.removeAttribute("data-idle");
     window.clearTimeout(this.fsIdleTimer);
     this.fsIdleTimer = window.setTimeout(() => {
       if (
         this.state.chatOverlayTyping ||
         this.playingVBrowser() ||
-        el.querySelector('[class*="_controls_"]:hover') ||
+        // :hover sticks on the last tapped control on touch devices, so it
+        // only means "pointer resting there" for a mouse (R29B)
+        (!isTouchPrimary() &&
+          el.querySelector('[class*="_controls_"]:hover')) ||
         document.querySelector('[role="menu"]')
       ) {
         this.fsIdleWake();
@@ -4667,12 +4679,17 @@ export class App extends React.Component<AppProps, AppState> {
         // vbrowser needs to fullscreen the control wrapper div
         // Can't really control the VBrowser on mobile anyway, so just fullscreen the video
         container = document.getElementById("leftVideoParent") as HTMLElement;
-      } else if (isMobile()) {
+      } else if (
+        isMobile() &&
+        !document.getElementById("playerColumn")?.requestFullscreen
+      ) {
         // e.g. iPhone only allows webkitEnterFullscreen on the video itself
         container = this.Player().getVideoEl();
       } else {
         // Fullscreen the player column (video + controls + floating reactions +
-        // chat overlay): a bare fullscreened <video> can't have DOM drawn above it
+        // chat overlay): a bare fullscreened <video> can't have DOM drawn above it.
+        // Touch devices with element fullscreen (Android) take this path too,
+        // so the overlay's chat button can be tapped (R29B)
         container = document.getElementById("playerColumn") as HTMLElement;
       }
     }
@@ -6222,6 +6239,11 @@ export class App extends React.Component<AppProps, AppState> {
                           nameMap={this.state.nameMap}
                           typing={this.state.chatOverlayTyping}
                           overlayMsg={this.state.chatOverlayMsg}
+                          onOverlayOpen={
+                            this.state.isChatDisabled
+                              ? undefined
+                              : () => this.setState({ chatOverlayTyping: true })
+                          }
                           onOverlayMsg={(v) =>
                             this.setState({ chatOverlayMsg: v })
                           }

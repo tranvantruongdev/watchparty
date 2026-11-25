@@ -1,6 +1,7 @@
 import React, { useSyncExternalStore } from "react";
 import { chatStore } from "./chatStore";
 import styles from "./App.module.css";
+import { isTouchPrimary } from "../../utils/utils";
 
 // Fullscreen chat overlay: newest messages over the player, each fading out
 // ~8s after it arrived (CSS animation). Messages come from chatStore (round
@@ -9,6 +10,9 @@ export function ChatOverlay(props: {
   nameMap: StringDict;
   typing: boolean;
   overlayMsg: string;
+  // Opens the input without an Enter key (touch devices); undefined when the
+  // room has chat disabled
+  onOverlayOpen?: () => void;
   onOverlayMsg: (v: string) => void;
   onOverlayClose: () => void;
   onOverlayBlur: () => void;
@@ -31,6 +35,16 @@ export function ChatOverlay(props: {
             <span>{msg.msg}</span>
           </div>
         ))}
+      {!props.typing && props.onOverlayOpen && isTouchPrimary() && (
+        <button
+          type="button"
+          aria-label="Chat"
+          className={styles.chatOverlayOpen}
+          onClick={props.onOverlayOpen}
+        >
+          Chat
+        </button>
+      )}
       {props.typing && (
         <input
           autoFocus

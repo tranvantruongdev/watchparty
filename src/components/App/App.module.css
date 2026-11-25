@@ -516,6 +516,36 @@
   outline: none;
 }
 
+/* Tap target that opens the input on touch devices (no Enter key); fades with
+   the controls on fullscreen idle-hide, a tap wakes it first (App.tsx fsIdleWake) */
+.chatOverlayOpen {
+  pointer-events: auto;
+  min-height: 36px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(190, 150, 255, 0.25);
+  background: rgba(24, 14, 46, 0.6);
+  color: rgba(230, 220, 255, 0.95);
+  font-size: 13px;
+  transition: opacity 0.3s ease;
+}
+
+:global(#playerColumn[data-idle="true"]) .chatOverlayOpen {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Phones: the 40% caps leave a ~150px input */
+@media only screen and (max-width: 600px) {
+  .chatOverlay {
+    max-width: calc(100% - 24px);
+  }
+
+  .chatOverlayInput {
+    width: min(420px, calc(100vw - 48px));
+  }
+}
+
 @keyframes chatOverlayFade {
   0% {
     opacity: 0;
