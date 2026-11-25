@@ -629,8 +629,9 @@ export class App extends React.Component<AppProps, AppState> {
   // The autoplay-blocked unlock listens on document gestures once (see
   // AUDIO_UNLOCK_EVENTS); the flag keeps a re-arm from stacking listeners
   audioUnlockArmed = false;
-  // When a gesture last unlocked playback (see videoClick)
+  // When a gesture last unlocked playback (see videoClick, refreshControls)
   unlockedAt = 0;
+  controlsRefreshTimer = 0;
   // Per-second position reports, kept out of state: storing them in state
   // re-rendered the whole tree twice a second while a video plays. Sync logic
   // reads this field; state.tsMap is only refreshed for the ts badges while
@@ -736,6 +737,7 @@ export class App extends React.Component<AppProps, AppState> {
     window.clearInterval(this.shareStatsTimer);
     window.clearInterval(this.progressUpdater);
     window.clearTimeout(this.playbackCheckTimer);
+    window.clearTimeout(this.controlsRefreshTimer);
     window.clearTimeout(this.ytPostSeekTimer);
     if (this.localCopyObjectUrl) {
       URL.revokeObjectURL(this.localCopyObjectUrl);
@@ -5170,7 +5172,18 @@ export class App extends React.Component<AppProps, AppState> {
     }
   };
 
+  // Controls remounts through its `key`, which drops the click of a button
+  // that is being pressed. The tap that unlocks a blocked tab lands here
+  // (unlockPlayback -> localSetMute remounts at once), so a Play tapped first
+  // on a fresh tab sent nothing, and a Play + Pause 200 ms apart ended as one
+  // Play (R31E). Hold the remount until that tap's click has gone out
   refreshControls = () => {
+    const wait = this.unlockedAt + 500 - Date.now();
+    if (wait > 0) {
+      window.clearTimeout(this.controlsRefreshTimer);
+      this.controlsRefreshTimer = window.setTimeout(this.refreshControls, wait);
+      return;
+    }
     this.setState({ controlsTimestamp: Date.now() });
   };
 
