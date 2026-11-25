@@ -231,6 +231,37 @@
   );
 }
 
+/* A message that @mentions me */
+.mentionMessage {
+  background: radial-gradient(
+    at top right,
+    rgba(90, 170, 255, 0.28),
+    transparent 70%
+  );
+  box-shadow: inset 3px 0 0 rgb(90, 170, 255);
+}
+
+.mentionList {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid rgba(190, 150, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(20, 12, 40, 0.92);
+}
+
+.mentionItem {
+  padding: 6px 10px;
+  font-size: 14px;
+  color: gainsboro;
+  cursor: pointer;
+}
+
+.mentionItem:hover,
+.mentionActive {
+  background: rgba(190, 150, 255, 0.22);
+}
+
 .replyInfo {
   color: rgba(180, 200, 220, 0.95);
   font-size: 12px;

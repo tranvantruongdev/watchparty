@@ -33,8 +33,20 @@ import {
 } from "react-transition-group";
 import { MetadataContext } from "../../MetadataContext";
 import { chatStore } from "../App/chatStore";
+import { getCurrentSettings } from "../Settings/LocalSettings";
 
 const clientId = getOrCreateClientId();
+// @mentions are plain "@Name" text (no server support needed): the composer
+// completes member names, and a message that mentions me is highlighted
+const MENTION_SUGGESTIONS = 6;
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const mentionsName = (msg: string | undefined, name?: string) =>
+  Boolean(msg && name) &&
+  // No lookbehind: Safari before 16.4 throws on it when the RegExp is built
+  new RegExp(
+    `(?:^|[^\\p{L}\\p{N}_])@${escapeRegExp(name as string)}(?![\\p{L}\\p{N}_])`,
+    "iu",
+  ).test(msg as string);
 // The server silently drops anything longer (server/room.ts isValidChatMessage)
 const MAX_CHAT_LENGTH = 2000;
 const CHAT_LENGTH_COUNTER_WINDOW = 100;
@@ -123,6 +135,11 @@ export class Chat extends React.Component<ChatProps> {
     // whole backlog on load; flip to polite once the backlog has settled
     liveReady: false,
     isPickerOpen: false,
+    // The "@query" being typed at the caret (start = index of the "@"), and
+    // the highlighted suggestion; undefined when no mention is in progress
+    mention: undefined as
+      { start: number; end: number; query: string } | undefined,
+    mentionIndex: 0,
     // Typing indicator (r15d): peer id → expiry ms. Populated from REC:typing,
     // pruned by a 1s sweeper; expired entries stop showing on their own even
     // if the peer's "false" (or disconnect) never arrives.
@@ -215,9 +232,75 @@ export class Chat extends React.Component<ChatProps> {
       if (!this.state.isNearBottom) {
         this.setState({ unread: this.state.unread + 1 });
       }
+      const prevKey = this.lastChatKey;
       this.lastChatKey = lastKey;
+      this.notifyMention(messages, prevKey);
     }
   }
+
+  mentionAudio?: HTMLAudioElement;
+
+  // A live message that mentions me plays the chat sound unless sounds are
+  // off. App's REC:chat handler already plays it while the tab is hidden, so
+  // this covers the visible tab. `prevKey` tells one appended message from a
+  // history load (the second-to-last message is then not the old last one)
+  notifyMention = (messages: ChatMessage[], prevKey: string) => {
+    const last = messages[messages.length - 1];
+    if (!last || last.id === clientId || last.cmd || last.system) return;
+    const prev = messages[messages.length - 2];
+    const appended = prev ? prev.timestamp + prev.id === prevKey : !prevKey;
+    if (
+      !appended ||
+      !mentionsName(last.msg, this.props.nameMap[clientId]) ||
+      document.visibilityState !== "visible" ||
+      getCurrentSettings().disableChatSound
+    ) {
+      return;
+    }
+    this.mentionAudio = this.mentionAudio || new Audio("/clearly.mp3");
+    // Autoplay policy can reject before the first interaction
+    this.mentionAudio.play().catch(() => {});
+  };
+
+  // Suggestions for the "@query" at the caret: other members whose name starts
+  // with the query (then the ones that contain it), one entry per name
+  mentionCandidates = (): string[] => {
+    const { mention } = this.state;
+    if (!mention || this.props.isChatDisabled) return [];
+    const q = mention.query.toLowerCase();
+    const names = Array.from(
+      new Set(
+        Object.entries(this.props.nameMap)
+          .filter(([id, name]) => id !== clientId && name)
+          .map(([, name]) => name),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    const starts = names.filter((n) => n.toLowerCase().startsWith(q));
+    const contains = names.filter(
+      (n) => !n.toLowerCase().startsWith(q) && n.toLowerCase().includes(q),
+    );
+    return starts.concat(contains).slice(0, MENTION_SUGGESTIONS);
+  };
+
+  pickMention = (name: string) => {
+    const { mention } = this.state;
+    if (!mention) return;
+    const insert = `@${name} `;
+    const text =
+      this.state.chatMsg.slice(0, mention.start) +
+      insert +
+      this.state.chatMsg.slice(mention.end);
+    if (text.length > MAX_CHAT_LENGTH) return;
+    const caret = mention.start + insert.length;
+    this.setState(
+      { chatMsg: text, mention: undefined, mentionIndex: 0 },
+      () => {
+        const input = this.chatInputRef.current;
+        input?.focus();
+        input?.setSelectionRange(caret, caret);
+      },
+    );
+  };
 
   // timestamp+id of the last message seen by componentDidUpdate above
   lastChatKey = "";
@@ -265,9 +348,42 @@ export class Chat extends React.Component<ChatProps> {
   };
 
   updateChatMsg = (e: any) => {
-    // console.log(e.target.selectionStart);
-    this.setState({ chatMsg: e.target.value });
+    const value: string = e.target.value;
+    // "@" at the start or after whitespace, then the name prefix up to the caret
+    const caret: number = e.target.selectionStart ?? value.length;
+    const m = /(^|\s)@([^\s@]{0,32})$/.exec(value.slice(0, caret));
+    this.setState({
+      chatMsg: value,
+      mention: m
+        ? { start: caret - m[2].length - 1, end: caret, query: m[2] }
+        : undefined,
+      mentionIndex: 0,
+    });
     this.onTypingInput();
+  };
+
+  onChatKeyDown = (e: any) => {
+    if (e.nativeEvent.isComposing) return;
+    const candidates = this.mentionCandidates();
+    if (candidates.length) {
+      const n = candidates.length;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : n - 1;
+        this.setState({ mentionIndex: (this.state.mentionIndex + step) % n });
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        this.pickMention(candidates[Math.min(this.state.mentionIndex, n - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        this.setState({ mention: undefined });
+        return;
+      }
+    }
+    if (e.key === "Enter") this.sendChatMsg();
   };
 
   // Typing indicator (r15d), shared with the extension's contract:
@@ -333,6 +449,7 @@ export class Chat extends React.Component<ChatProps> {
     // A send ends typing (guard makes this a no-op when nothing was sent);
     // also correct for the /command paths that clear the input instead.
     this.stopTyping();
+    if (this.state.mention) this.setState({ mention: undefined });
     if (!this.state.chatMsg) {
       return;
     }
@@ -521,6 +638,11 @@ export class Chat extends React.Component<ChatProps> {
 
   render() {
     const messages = chatStore.getSnapshot().messages;
+    const mentionCandidates = this.mentionCandidates();
+    const mentionIndex = Math.min(
+      this.state.mentionIndex,
+      Math.max(mentionCandidates.length - 1, 0),
+    );
     // Two messages can share timestamp+id (same sender, same millisecond: the
     // server stamps the ISO time on receipt, so two CMD:chat processed in one
     // tick collide) and the old key timestamp+id then duplicates, which makes
@@ -736,6 +858,29 @@ export class Chat extends React.Component<ChatProps> {
               ))}
             </div>
           )}
+          {mentionCandidates.length > 0 && (
+            <div
+              className={styles.mentionList}
+              role="listbox"
+              aria-label="Mention suggestions"
+            >
+              {mentionCandidates.map((name, i) => (
+                <div
+                  key={name}
+                  role="option"
+                  aria-selected={i === mentionIndex}
+                  className={`${styles.mentionItem} ${
+                    i === mentionIndex ? styles.mentionActive : ""
+                  }`}
+                  // mousedown would blur the input before the click lands
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => this.pickMention(name)}
+                >
+                  @{name}
+                </div>
+              ))}
+            </div>
+          )}
           <TextInput
             ref={this.chatInputRef}
             style={{ marginTop: "10px" }}
@@ -743,13 +888,12 @@ export class Chat extends React.Component<ChatProps> {
             maxLength={MAX_CHAT_LENGTH}
             // isComposing: Enter that commits an IME composition (CJK input,
             // some Vietnamese keyboards) must not send the half-typed message
-            onKeyDown={(e: any) =>
-              e.key === "Enter" &&
-              !e.nativeEvent.isComposing &&
-              this.sendChatMsg()
-            }
+            onKeyDown={this.onChatKeyDown}
             onChange={this.updateChatMsg}
-            onBlur={this.stopTyping}
+            onBlur={() => {
+              this.stopTyping();
+              if (this.state.mention) this.setState({ mention: undefined });
+            }}
             value={this.state.chatMsg}
             error={this.chatTooLong()}
             disabled={this.props.isChatDisabled}
@@ -908,6 +1052,8 @@ const ChatMessage = React.memo(function ChatMessage({
   const imageMsg = renderImageString(msg);
   const sticker = stickerEmoji(msg);
   const canManage = Boolean(owner && owner === user?.uid);
+  const mentionsMe =
+    id !== clientId && !cmd && !system && mentionsName(msg, nameMap[clientId]);
   return (
     <div
       style={{
@@ -917,9 +1063,10 @@ const ChatMessage = React.memo(function ChatMessage({
         position: "relative",
         overflowWrap: "anywhere",
       }}
+      data-mention={mentionsMe ? "me" : undefined}
       className={`${styles.comment} ${isSelected ? styles.selected : ""} ${
         message.replyToUserId === clientId ? styles.replyMessage : ""
-      }`}
+      } ${mentionsMe ? styles.mentionMessage : ""}`}
     >
       {id ? (
         // The avatar cell stays in place on continuation lines (invisible) so
