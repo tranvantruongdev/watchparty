@@ -31,11 +31,16 @@ export const Create = () => {
         style={{ display: "none" }}
         ref={buttonEl}
         onClick={() => {
+          const params = new URLSearchParams(window.location.search);
+          const subtitles = params.get("subtitles") ?? undefined;
           createRoom(
             user,
             false,
-            new URLSearchParams(window.location.search).get("video") ??
-              undefined,
+            params.get("video") ?? undefined,
+            // a subtitle URL only: the same http(s) shape the room would load
+            subtitles && /^https?:\/\//i.test(subtitles)
+              ? subtitles
+              : undefined,
           );
         }}
       />

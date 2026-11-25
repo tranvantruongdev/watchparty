@@ -41,10 +41,14 @@ import {
 } from "@tabler/icons-react";
 import styles from "./TopBar.module.css";
 
+// sessionStorage key prefix (+ room name) for a /create?subtitles= URL waiting for the room page
+export const CREATE_SUBTITLE_KEY = "wpCreateSubtitle";
+
 export async function createRoom(
   user: firebase.User | undefined,
   openNewTab: boolean | undefined,
   video: string = "",
+  subtitles: string = "",
 ) {
   let response: Response;
   try {
@@ -74,6 +78,15 @@ export async function createRoom(
   }
   const data = await response.json();
   const { name } = data;
+  if (subtitles) {
+    // The server's /createRoom has no subtitle field: hand the URL to the room
+    // page (same tab, same origin), which sends CMD:subtitle once it connects
+    try {
+      sessionStorage.setItem(CREATE_SUBTITLE_KEY + name, subtitles);
+    } catch {
+      // storage blocked: the room is still created, just without subtitles
+    }
+  }
   if (openNewTab) {
     window.open("/watch" + name);
   } else {

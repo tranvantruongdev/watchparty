@@ -44,7 +44,7 @@ import { generateName } from "../../utils/generateName";
 import { Chat, type SeekCommand } from "../Chat/Chat";
 import { chatStore } from "./chatStore";
 import { ChatOverlay } from "./ChatOverlay";
-import { NewRoomButton, TopBar } from "../TopBar/TopBar";
+import { CREATE_SUBTITLE_KEY, NewRoomButton, TopBar } from "../TopBar/TopBar";
 import { VBrowser } from "../VBrowser/VBrowser";
 import { VideoChat } from "../VideoChat/VideoChat";
 import { getPushToTalk } from "../VideoChat/voicePrefs";
@@ -842,6 +842,18 @@ export class App extends React.Component<AppProps, AppState> {
       ) {
         this.resumeShareInFlight = true;
         socket.emit("CMD:resumeShare", { media: shareMedia });
+      }
+      // /create?subtitles=<url>: the creator's tab leaves the URL here (see
+      // createRoom); send it to the room once and drop it
+      try {
+        const key = CREATE_SUBTITLE_KEY + this.state.roomId;
+        const createSubtitle = sessionStorage.getItem(key);
+        if (createSubtitle) {
+          sessionStorage.removeItem(key);
+          socket.emit("CMD:subtitle", createSubtitle);
+        }
+      } catch {
+        // storage blocked: no subtitles from the create link
       }
       // Use the name in our state, generate one if empty
       this.updateName(this.state.myName || (await generateName()));
