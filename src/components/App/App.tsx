@@ -694,6 +694,7 @@ export class App extends React.Component<AppProps, AppState> {
     // Handlers installed via the on<event> properties must be removed the same
     // way; removeEventListener would not match them
     document.onfullscreenchange = null;
+    this.fsIdleStop();
     document.onkeydown = null;
     AUDIO_UNLOCK_EVENTS.forEach((type) =>
       document.removeEventListener(type, this.audioUnlock),
@@ -4238,6 +4239,82 @@ export class App extends React.Component<AppProps, AppState> {
   onFullScreenChange = () => {
     this.setState({ fullScreen: Boolean(document.fullscreenElement) });
     setTimeout(() => this.chatRef.current?.scrollToBottom(), 100);
+    this.fsIdleSync();
+  };
+
+  // Fullscreen idle-hide (R27E, upstream #850): while #playerColumn is the
+  // fullscreen element, 3 s without mouse/keyboard/touch activity sets
+  // data-idle on it (CSS fades the controls and hides the cursor); any
+  // activity clears it. Listeners are passive and never stop events, so
+  // nothing is swallowed. Stays visible while the chat overlay is typed in,
+  // a menu is open or the pointer rests over the controls. VBrowser
+  // fullscreens its own wrapper (not #playerColumn) and is skipped
+  fsIdleEl: HTMLElement | null = null;
+  fsIdleTimer: number | undefined;
+  fsIdlePos = "";
+  fsIdleEvents = ["mousemove", "mousedown", "keydown", "touchstart", "wheel"];
+
+  fsIdleWake = (e?: Event) => {
+    const el = this.fsIdleEl;
+    if (!el) {
+      return;
+    }
+    if (e && e.type === "mousemove") {
+      // Chrome re-fires mousemove at the same spot after a layout/cursor
+      // change; only real movement counts as activity
+      const m = e as MouseEvent;
+      const pos = m.screenX + "," + m.screenY;
+      if (pos === this.fsIdlePos) {
+        return;
+      }
+      this.fsIdlePos = pos;
+    }
+    el.removeAttribute("data-idle");
+    window.clearTimeout(this.fsIdleTimer);
+    this.fsIdleTimer = window.setTimeout(() => {
+      if (
+        this.state.chatOverlayTyping ||
+        this.playingVBrowser() ||
+        el.querySelector('[class*="_controls_"]:hover') ||
+        document.querySelector('[role="menu"]')
+      ) {
+        this.fsIdleWake();
+        return;
+      }
+      el.setAttribute("data-idle", "true");
+    }, 3000);
+  };
+
+  fsIdleSync = () => {
+    const fs = document.fullscreenElement;
+    const want =
+      fs instanceof HTMLElement &&
+      fs.id === "playerColumn" &&
+      !this.playingVBrowser();
+    if (want && !this.fsIdleEl) {
+      this.fsIdleEl = fs;
+      this.fsIdleEvents.forEach((type) =>
+        document.addEventListener(type, this.fsIdleWake, {
+          capture: true,
+          passive: true,
+        }),
+      );
+      this.fsIdleWake();
+    } else if (!want) {
+      this.fsIdleStop();
+    }
+  };
+
+  fsIdleStop = () => {
+    if (!this.fsIdleEl) {
+      return;
+    }
+    this.fsIdleEvents.forEach((type) =>
+      document.removeEventListener(type, this.fsIdleWake, true),
+    );
+    window.clearTimeout(this.fsIdleTimer);
+    this.fsIdleEl.removeAttribute("data-idle");
+    this.fsIdleEl = null;
   };
 
   // One immediate catch-up when the page becomes visible again after being

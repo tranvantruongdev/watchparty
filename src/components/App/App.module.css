@@ -129,6 +129,12 @@
   }
 }
 
+/* Fullscreen idle-hide (App.tsx fsIdleWake): cursor goes with the controls */
+:global(#playerColumn[data-idle="true"]),
+:global(#playerColumn[data-idle="true"]) * {
+  cursor: none !important;
+}
+
 .shareButton {
   min-width: 150px;
 }

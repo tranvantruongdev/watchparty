@@ -13,6 +13,15 @@
   padding-top: 4px;
   padding-bottom: 4px;
   gap: 8px;
+  transition: opacity 0.3s ease;
+}
+
+/* Fullscreen idle-hide: App.tsx sets data-idle on #playerColumn after 3 s
+   without activity. The row keeps its space (no layout jump) and ignores
+   the pointer while faded. */
+:global(#playerColumn[data-idle="true"]) .controls {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* 900 not 600: a landscape phone (~844px) kept the unwrapped rows and the
