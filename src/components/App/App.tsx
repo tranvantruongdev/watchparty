@@ -18,6 +18,7 @@ import {
   calculateMedian,
   getUserImage,
   isYouTube,
+  isVimeo,
   isMagnet,
   isHttp,
   isHls,
@@ -63,6 +64,7 @@ import {
 import type firebase from "firebase/compat/app";
 import { HTML } from "./HTML";
 import { YouTube } from "./YouTube";
+import { Vimeo } from "./Vimeo";
 import styles from "./App.module.css";
 import config from "../../config";
 import { getFirebase } from "../../firebaseLazy";
@@ -617,9 +619,19 @@ export class App extends React.Component<AppProps, AppState> {
   heartbeat: number | undefined = undefined;
   YouTubeInterface: YouTube = new YouTube(null);
   HTMLInterface: HTML = new HTML("leftVideo");
+  VimeoInterface: Vimeo = new Vimeo({
+    onLoaded: () => this.onVimeoLoaded(),
+    onEnded: () => this.onVideoEnded(this.state.roomMedia),
+    onUserPlay: () => this.onVimeoUserPlay(),
+    onUserPause: () => this.onVimeoUserPause(),
+    onUserSeek: (seconds) => this.onVimeoUserSeek(seconds),
+    onError: (message) => this.onVimeoError(message),
+  });
   Player = () => {
     if (this.usingYoutube()) {
       return this.YouTubeInterface;
+    } else if (this.usingVimeo()) {
+      return this.VimeoInterface;
     } else {
       return this.HTMLInterface;
     }
@@ -740,6 +752,7 @@ export class App extends React.Component<AppProps, AppState> {
     window.clearTimeout(this.playbackCheckTimer);
     window.clearTimeout(this.controlsRefreshTimer);
     window.clearTimeout(this.ytPostSeekTimer);
+    this.VimeoInterface.teardown();
     if (this.localCopyObjectUrl) {
       URL.revokeObjectURL(this.localCopyObjectUrl);
       this.localCopyObjectUrl = undefined;
@@ -1186,6 +1199,9 @@ export class App extends React.Component<AppProps, AppState> {
             this.HTMLInterface.pauseVideo();
           }
           this.YouTubeInterface.stopVideo();
+          // A Vimeo video of the old media goes with it (a new Vimeo video
+          // builds its iframe again in setSrcAndTime)
+          this.VimeoInterface.teardown();
 
           if (!this.isLocalStreamAFile) {
             this.Player().clearState();
@@ -1415,16 +1431,23 @@ export class App extends React.Component<AppProps, AppState> {
           } else {
             await this.Player().setSrcAndTime(src, time);
           }
+          if (isVimeo(currentMedia) && this.state.roomMedia !== currentMedia) {
+            // The Vimeo iframe took seconds to be ready and the room moved on
+            return;
+          }
           // Start this video
           // YouTube can't use the canplay resync below (the iframe never fires media
           // events), so resync to the room position one-shot on its first PLAYING
           this.ytNeedsFirstPlaySync = this.usingYoutube();
           this.ytUnplayable = false;
-          if (!data.paused) {
+          // A Vimeo load takes seconds: the room's play / pause since then is
+          // in state (REC:play / REC:pause keep it), not in this payload
+          if (!(isVimeo(currentMedia) ? this.state.roomPaused : data.paused)) {
             this.localPlay();
           }
-          // Do right before playing
-          leftVideo?.addEventListener(
+          // Do right before playing. Vimeo has no canplay: onVimeoLoaded
+          // already did the same once its iframe was ready
+          (this.usingVimeo() ? null : leftVideo)?.addEventListener(
             "canplay",
             () => {
               this.setLoadingFalse();
@@ -3819,9 +3842,74 @@ export class App extends React.Component<AppProps, AppState> {
     return isYouTube(this.state.roomMedia);
   };
 
+  usingVimeo = () => {
+    return isVimeo(this.state.roomMedia);
+  };
+
   usingNative = () => {
     // Anything that uses HTML Video (e.g. not YouTube, Vimeo, or other embedded JS player)
-    return !this.usingYoutube();
+    return !this.usingYoutube() && !this.usingVimeo();
+  };
+
+  // The Vimeo player's events (see Vimeo.ts), applied to the room like the
+  // <video> element's and the YouTube iframe's are
+  // Same as an HTML video's first canplay: catch up to the room, which moved
+  // on while the iframe loaded
+  onVimeoLoaded = () => {
+    this.setLoadingFalse();
+    // The leader's position, or the room's start position (Vimeo.setSrcAndTime
+    // kept it) while nobody has reported one yet: one seek either way
+    if (Number.isFinite(this.getLeaderTime())) {
+      this.localSeek();
+    } else if (this.VimeoInterface.startAt > 0) {
+      this.localSeek(this.VimeoInterface.startAt);
+    }
+    this.consumePendingResume();
+    this.applyStoredVolume();
+    if (this.state.roomPlaybackRate) {
+      this.Player().setPlaybackRate(this.state.roomPlaybackRate);
+    }
+  };
+
+  // A click in the iframe's own controls moves the room, as a click on the
+  // YouTube embed does (not while solo; an extension member driving keeps
+  // control: snap back to the room's state)
+  onVimeoUserPlay = () => {
+    if (!this.state.roomPaused || this.state.exploring) {
+      return;
+    }
+    if (this.otherControlsPlayback()) {
+      this.localPause();
+      return;
+    }
+    this.socket.emit("CMD:play");
+    this.localPlay();
+  };
+
+  onVimeoUserPause = () => {
+    if (this.state.roomPaused || this.state.exploring) {
+      return;
+    }
+    if (this.otherControlsPlayback()) {
+      this.localPlay();
+      return;
+    }
+    this.socket.emit("CMD:pause");
+    this.localPause();
+  };
+
+  onVimeoUserSeek = (seconds: number) => {
+    if (this.state.exploring || this.otherControlsPlayback()) {
+      return;
+    }
+    this.socket.emit("CMD:seek", this.getRoomTSToSet(seconds));
+  };
+
+  // The SDK did not load, or the video is private / removed / not embeddable
+  // (the iframe then shows Vimeo's own notice, so leave it up)
+  onVimeoError = (message: string) => {
+    this.setState({ loading: false, errorMessage: message });
+    window.setTimeout(() => this.setState({ errorMessage: "" }), 5000);
   };
 
   hasDuration = () => {
@@ -3987,6 +4075,22 @@ export class App extends React.Component<AppProps, AppState> {
       }
       if (Math.abs(delta) <= 1.5) {
         this.ytCatchUpArmed = false;
+        this.driftStreak = 0;
+        return;
+      }
+    } else if (this.usingVimeo()) {
+      // Position comes from a 4 Hz event stream (Vimeo.getCurrentTime): act
+      // only once the player plays and is > 1 s off
+      const vimeo = this.VimeoInterface;
+      if (
+        this.bufferingReported ||
+        !vimeo.ready ||
+        vimeo.paused ||
+        vimeo.buffering
+      ) {
+        return;
+      }
+      if (Math.abs(delta) <= 1) {
         this.driftStreak = 0;
         return;
       }
@@ -4251,6 +4355,7 @@ export class App extends React.Component<AppProps, AppState> {
     const volume = parseStoredVolume(localStorage.getItem(VOLUME_KEY));
     this.HTMLInterface.setVolume(volume);
     this.YouTubeInterface.setVolume(volume);
+    this.VimeoInterface.setVolume(volume);
     this.refreshControls();
   };
 
@@ -4288,6 +4393,11 @@ export class App extends React.Component<AppProps, AppState> {
       const state = this.YouTubeInterface.watchPartyYTPlayer?.getPlayerState();
       raw = buffering !== undefined && state === buffering;
       paused = state === 2;
+    } else if (this.usingVimeo()) {
+      // The SDK's bufferstart / bufferend (Vimeo.buffering)
+      const vimeo = this.VimeoInterface;
+      raw = vimeo.ready && !vimeo.paused && vimeo.buffering;
+      paused = vimeo.ready && vimeo.paused;
     } else {
       const el = this.Player().getVideoEl();
       raw = Boolean(el && !el.paused && el.readyState < 3);
@@ -5273,15 +5383,17 @@ export class App extends React.Component<AppProps, AppState> {
           ? "vbrowser"
           : isYouTube(media)
             ? "youtube"
-            : isHls(media)
-              ? "hls"
-              : isDash(media)
-                ? "dash"
-                : isLocalCopy(media)
-                  ? "localcopy"
-                  : isMagnet(media)
-                    ? "magnet"
-                    : "file";
+            : isVimeo(media)
+              ? "vimeo"
+              : isHls(media)
+                ? "hls"
+                : isDash(media)
+                  ? "dash"
+                  : isLocalCopy(media)
+                    ? "localcopy"
+                    : isMagnet(media)
+                      ? "magnet"
+                      : "file";
     const share = shareStatsStore.getSnapshot();
     return {
       build: { mode: import.meta.env.MODE },
@@ -6358,6 +6470,18 @@ export class App extends React.Component<AppProps, AppState> {
                       frameBorder="0"
                       allow="autoplay; encrypted-media"
                       src="https://www.youtube.com/embed/?enablejsapi=1&controls=0&rel=0"
+                    />
+                    {/* The Vimeo iframe is built into this div by Vimeo.ts; kept
+                        laid out (invisible) while it loads, it never fires
+                        ready in a display:none box */}
+                    <div
+                      id="leftVimeo"
+                      className={`${styles.videoContent} ${styles.vimeoBox}`}
+                      style={{
+                        display: this.usingVimeo() ? "block" : "none",
+                        opacity: this.state.loading ? 0 : 1,
+                        pointerEvents: this.state.loading ? "none" : "auto",
+                      }}
                     />
                     {this.playingVBrowser() &&
                     this.getVBrowserPass() &&

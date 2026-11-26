@@ -93,6 +93,53 @@ export const isYouTube = (input: string) => {
   );
 };
 
+// The video id (and the private-link hash of an unlisted video) of a Vimeo
+// link: vimeo.com/<id>[/<hash>], vimeo.com/channels/<c>/<id>,
+// vimeo.com/groups/<g>/videos/<id>, vimeo.com/album/<a>/video/<id>, or
+// player.vimeo.com/video/<id>[?h=<hash>]. Null for anything else (an album,
+// a user page), so those stay plain links
+export const parseVimeo = (
+  input: string,
+): { id: string; hash?: string } | null => {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split("/").filter(Boolean);
+  const numeric = (s?: string) => (s && /^\d+$/.test(s) ? s : undefined);
+  const hashOf = (s?: string) =>
+    s && /^[0-9a-f]{8,}$/i.test(s) ? s : undefined;
+  const queryHash = url.searchParams.get("h") || undefined;
+  if (host === "player.vimeo.com") {
+    const id = parts[0] === "video" ? numeric(parts[1]) : undefined;
+    return id ? { id, hash: queryHash } : null;
+  }
+  if (host !== "vimeo.com" && host !== "www.vimeo.com") {
+    return null;
+  }
+  if (numeric(parts[0])) {
+    return { id: parts[0], hash: hashOf(parts[1]) ?? queryHash };
+  }
+  const id =
+    parts[0] === "channels"
+      ? numeric(parts[2])
+      : (parts[0] === "groups" && parts[2] === "videos") ||
+          (parts[0] === "album" && parts[2] === "video")
+        ? numeric(parts[3])
+        : undefined;
+  return id ? { id, hash: queryHash } : null;
+};
+
+export const isVimeo = (input: string) => {
+  return parseVimeo(input) !== null;
+};
+
 export const isHttp = (input: string) => {
   return input.startsWith("http");
 };
@@ -108,6 +155,7 @@ export const isDirectVideoUrl = (input: string) => {
   return (
     isHttp(input) &&
     !isYouTube(input) &&
+    !isVimeo(input) &&
     !isHls(input) &&
     !isDash(input) &&
     !isMpegTs(input) &&

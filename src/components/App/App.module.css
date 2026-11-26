@@ -10,6 +10,11 @@
   height: 100%;
 }
 
+/* The Vimeo player iframe (built by Vimeo.ts) fills this box */
+.vimeoBox {
+  background: #000;
+}
+
 .playerContainer {
   height: 100%;
   position: relative;
@@ -780,7 +785,8 @@
        video it stands in for. (#loader stays absolute: the default-size
        #leftVideo is also an in-flow flex child in the empty state, and both
        in one row squashed the empty-room card.) */
-    .playerContainer > iframe.videoContent {
+    .playerContainer > iframe.videoContent,
+    .playerContainer > div.vimeoBox {
       position: static;
       width: 100%;
       height: auto;
