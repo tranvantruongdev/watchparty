@@ -493,7 +493,13 @@ export class ClientTranscoder {
           : { discard: true },
       showWarnings: false,
     });
-    if (!conversion.isValid) {
+    // A conversion whose main video track was dropped (e.g. HEVC this browser
+    // can't decode) is still "valid": it would play the sound only (R36A)
+    const videoDropped = conversion.discardedTracks.some(
+      ({ track, reason }) =>
+        track.id === this.primaryVideoTrackId && reason !== "discarded_by_user",
+    );
+    if (!conversion.isValid || videoDropped) {
       throw new Error(describeDiscardedTracks(conversion));
     }
     // A conversion without the selected audio track is still "valid" (it just has no sound)
