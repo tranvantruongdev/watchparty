@@ -2470,6 +2470,11 @@ export class App extends React.Component<AppProps, AppState> {
           this.showError(
             err instanceof Error ? err.message : "Unable to convert this file",
           );
+          this.restorePreShareVideo();
+          if (this.fileQueue.length) {
+            // Same as a file that can't play: skip it, try the next one
+            this.startNextQueuedFile(!queued);
+          }
         }
         return;
       }
