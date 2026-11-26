@@ -621,6 +621,9 @@ export class App extends React.Component<AppProps, AppState> {
   tsInterval?: number;
   heartbeat: number | undefined = undefined;
   YouTubeInterface: YouTube = new YouTube(null);
+  // loadYouTube ran: the YouTube embed (iframe + API scripts, ~1.4 MB) loads
+  // only once the room plays a YouTube video, not on every room page
+  ytLoadStarted = false;
   HTMLInterface: HTML = new HTML("leftVideo");
   VimeoInterface: Vimeo = new Vimeo({
     onLoaded: () => this.onVimeoLoaded(),
@@ -721,7 +724,6 @@ export class App extends React.Component<AppProps, AppState> {
     const canAutoplay = await testAutoplay();
     this.setState({ isAutoPlayable: canAutoplay });
     this.loadSettings();
-    this.loadYouTube();
     this.init();
     if (config.VITE_FIREBASE_CONFIG) {
       // The auth SDK loads lazily (firebaseLazy): a signed-out viewer,
@@ -1202,6 +1204,9 @@ export class App extends React.Component<AppProps, AppState> {
             this.HTMLInterface.pauseVideo();
           }
           this.YouTubeInterface.stopVideo();
+          if (this.usingYoutube()) {
+            this.loadYouTube();
+          }
           // A Vimeo video of the old media goes with it (a new Vimeo video
           // builds its iframe again in setSrcAndTime)
           this.VimeoInterface.teardown();
@@ -1931,6 +1936,16 @@ export class App extends React.Component<AppProps, AppState> {
   };
 
   loadYouTube = () => {
+    if (this.ytLoadStarted) {
+      return;
+    }
+    this.ytLoadStarted = true;
+    // The #leftYt iframe renders without a src: setting it starts the embed
+    const frame = document.getElementById("leftYt") as HTMLIFrameElement | null;
+    if (frame) {
+      frame.src =
+        "https://www.youtube.com/embed/?enablejsapi=1&controls=0&rel=0";
+    }
     // This code loads the IFrame Player API code asynchronously.
     const tag = document.createElement("script");
     tag.src = "https://www.youtube.com/iframe_api";
@@ -6489,7 +6504,6 @@ export class App extends React.Component<AppProps, AppState> {
                       allowFullScreen
                       frameBorder="0"
                       allow="autoplay; encrypted-media"
-                      src="https://www.youtube.com/embed/?enablejsapi=1&controls=0&rel=0"
                     />
                     {/* The Vimeo iframe is built into this div by Vimeo.ts; kept
                         laid out (invisible) while it loads, it never fires
