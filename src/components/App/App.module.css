@@ -15,6 +15,14 @@
   background: #000;
 }
 
+/* An inline iframe sits on the text baseline: in the in-flow portrait box
+   (height auto + aspect-ratio) the descender gap made the box ~7px taller
+   than the iframe (measured 212.7 vs 205.9 at 390 wide), a black strip under
+   the picture that the YouTube iframe (a direct display:block child) lacks. */
+.vimeoBox > iframe {
+  display: block;
+}
+
 .playerContainer {
   height: 100%;
   position: relative;
