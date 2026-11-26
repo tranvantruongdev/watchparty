@@ -17,6 +17,12 @@ import { openFileSelector, serverPath, getRoomKey } from "../../utils/utils";
 import config from "../../config";
 import { MetadataContext } from "../../MetadataContext";
 import {
+  MkvSubtitleTrack,
+  mkvTrackLabel,
+  mkvTrackToVtt,
+  readMkvSubtitlesOnce,
+} from "../../utils/mkvSubtitles";
+import {
   IconDownload,
   IconSearch,
   IconUpload,
@@ -33,6 +39,7 @@ export class SubtitleModal extends React.Component<{
   setSubtitleMode: (mode?: TextTrackMode) => void;
   getSubtitleMode: () => TextTrackMode;
   loadLocalSubtitle: (file: File) => Promise<void>;
+  getLocalMediaFile: () => File | undefined;
   applySubtitleStyle: () => void;
 }> {
   static contextType = MetadataContext;
@@ -46,13 +53,26 @@ export class SubtitleModal extends React.Component<{
     localUrlFailed: false,
     searchFailed: false,
     searchResults: [],
+    // Text subtitle tracks inside the local video file playing here (MKV)
+    embeddedTracks: [] as MkvSubtitleTrack[],
+    embeddedFailed: false,
     titleQuery: this.props
       .getMediaDisplayName(this.props.roomMedia)
       .split("/")
       .slice(-1)[0],
   };
 
+  // The file the embedded tracks were read from
+  scannedFile?: File;
+
   async componentDidMount() {
+    const localFile = this.props.getLocalMediaFile();
+    this.scannedFile = localFile;
+    if (localFile) {
+      readMkvSubtitlesOnce(localFile)
+        .then((embeddedTracks) => this.setState({ embeddedTracks }))
+        .catch(() => this.setState({ embeddedFailed: true }));
+    }
     if (this.props.roomMedia.includes("/stream?torrent=magnet")) {
       const re = /&fileIndex=(\d+)$/;
       const match = re.exec(this.props.roomMedia);
@@ -119,6 +139,23 @@ export class SubtitleModal extends React.Component<{
       this.setState({ localFailed: false });
     } catch {
       this.setState({ localFailed: true });
+    }
+  };
+  // A track inside the video file: turned into WebVTT here and handed to the
+  // same local loader as a device file
+  loadEmbedded = async (track: MkvSubtitleTrack) => {
+    // The media changed since the scan: these tracks belong to another file
+    if (this.props.getLocalMediaFile() !== this.scannedFile) {
+      return;
+    }
+    try {
+      const name = `Embedded: ${mkvTrackLabel(track)}.vtt`;
+      await this.props.loadLocalSubtitle(
+        new File([mkvTrackToVtt(track)], name, { type: "text/vtt" }),
+      );
+      this.setState({ embeddedFailed: false });
+    } catch {
+      this.setState({ embeddedFailed: true });
     }
   };
   // A subtitle URL just for me: fetched here and handed to the same local
@@ -236,6 +273,21 @@ export class SubtitleModal extends React.Component<{
             >
               Load subtitle file from this device
             </Button>
+            {this.state.embeddedTracks.map((track) => (
+              <Button
+                key={track.number}
+                variant="default"
+                onClick={() => this.loadEmbedded(track)}
+                leftSection={<IconUpload />}
+              >
+                Embedded: {mkvTrackLabel(track)}
+              </Button>
+            ))}
+            {this.state.embeddedFailed && (
+              <Text c="red" size="xs">
+                Could not read the subtitles inside this video file.
+              </Text>
+            )}
             <TextInput
               placeholder="Subtitle URL just for me (.vtt / .srt)"
               aria-label="Subtitle URL just for me"

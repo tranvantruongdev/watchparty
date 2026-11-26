@@ -562,6 +562,9 @@ export class App extends React.Component<AppProps, AppState> {
   // "Local copy" mode: the file this client plays from its own disk
   localCopyFile?: File;
   localCopyObjectUrl?: string;
+  // The file this client is sharing (set when the share starts), for the
+  // subtitle dialog's embedded tracks
+  fileShareFile?: File;
   // One chat-notification sound element, reused; a new Audio per message
   // (round 110) leaked an element for every chat line read while hidden
   chatAudio?: HTMLAudioElement;
@@ -2529,6 +2532,7 @@ export class App extends React.Component<AppProps, AppState> {
       return;
     }
     this.isLocalStreamAFile = true;
+    this.fileShareFile = file;
     // A share starting supersedes a stale "Share stopped" prompt from the
     // previous one (file A ended by itself, file B starts): an intentional
     // stop of B must not resurface A's prompt
@@ -2741,6 +2745,15 @@ export class App extends React.Component<AppProps, AppState> {
     this.roomSetMedia(
       `localcopy://${encodeURIComponent(file.name)}@${getOrCreateClientId()}?size=${file.size}`,
     );
+  };
+
+  // The device file playing in this browser right now (our own file share or
+  // our local copy), whose embedded subtitle tracks the dialog can offer
+  getLocalMediaFile = (): File | undefined => {
+    if (this.isLocalStreamAFile) {
+      return this.fileShareFile;
+    }
+    return isLocalCopy(this.state.roomMedia) ? this.localCopyFile : undefined;
   };
 
   // Stop playing our local copy and release it (the room moved to other media)
@@ -5557,6 +5570,7 @@ export class App extends React.Component<AppProps, AppState> {
               setSubtitleMode={this.Player().setSubtitleMode}
               getSubtitleMode={this.Player().getSubtitleMode}
               loadLocalSubtitle={this.HTMLInterface.loadLocalSubtitle}
+              getLocalMediaFile={this.getLocalMediaFile}
               applySubtitleStyle={this.HTMLInterface.applySubtitleStyle}
             />
           </React.Suspense>
