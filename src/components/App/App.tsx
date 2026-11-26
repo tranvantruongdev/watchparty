@@ -5471,6 +5471,7 @@ export class App extends React.Component<AppProps, AppState> {
         localSeek={this.localSeek}
         localSetSubtitleMode={this.Player().setSubtitleMode}
         ytCaptions={this.usingYoutube() ? this.YouTubeInterface : undefined}
+        isVimeo={this.usingVimeo()}
         roomPlaylistPlay={this.roomPlaylistPlay}
         playlist={this.state.playlist}
         audioTracks={this.state.audioTracks}

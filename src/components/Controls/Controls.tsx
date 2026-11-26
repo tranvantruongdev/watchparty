@@ -97,6 +97,8 @@ interface ControlsProps {
   localSetSubtitleMode: (mode: TextTrackMode, lang?: string) => void;
   /** The YouTube player of a YouTube room: the Captions menu lists the video's own caption tracks */
   ytCaptions?: YouTube;
+  /** A Vimeo room: the Vimeo player has no caption control we can drive, so the Captions button is hidden */
+  isVimeo?: boolean;
   roomPlaylistPlay: (index: number) => void;
   playlist: PlaylistVideo[];
   /** Live reads from the player. The parent no longer re-renders every second
@@ -511,7 +513,7 @@ export const Controls = (props: ControlsProps) => {
             )}
           </Menu.Dropdown>
         </Menu>
-      ) : (
+      ) : props.isVimeo ? null : (
         <ActIcon
           icon={IconBadgeCc}
           label="Captions"
