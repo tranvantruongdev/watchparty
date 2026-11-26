@@ -4,6 +4,7 @@ import { formatTimestamp, softWhite, volumeSettable } from "../../utils/utils";
 import styles from "./Controls.module.css";
 import { MetadataContext } from "../../MetadataContext";
 import type { AudioTrackInfo } from "../../utils/clientTranscode";
+import type { YouTube } from "../App/YouTube";
 import {
   IconPlayerPlayFilled,
   IconPlayerPauseFilled,
@@ -94,6 +95,8 @@ interface ControlsProps {
   localSeek: () => void;
   localSetVolume: (volume: number) => void;
   localSetSubtitleMode: (mode: TextTrackMode, lang?: string) => void;
+  /** The YouTube player of a YouTube room: the Captions menu lists the video's own caption tracks */
+  ytCaptions?: YouTube;
   roomPlaylistPlay: (index: number) => void;
   playlist: PlaylistVideo[];
   /** Live reads from the player. The parent no longer re-renders every second
@@ -134,6 +137,7 @@ export const Controls = (props: ControlsProps) => {
     return () => window.clearInterval(id);
   }, [props.video]);
   const live = props.pollLive?.();
+  const ytCaptionTracks = props.ytCaptions?.getCaptionTracks() ?? [];
   const getEnd = () => props.duration;
   const getStart = () => 0;
   const getLength = () => getEnd() - getStart();
@@ -479,23 +483,32 @@ export const Controls = (props: ControlsProps) => {
             </button>
           </Menu.Target>
           <Menu.Dropdown>
-            {[
-              { key: "hidden", text: "Off", value: "hidden" },
-              { key: "en", text: "English", value: "showing" },
-              { key: "es", text: "Spanish", value: "showing" },
-            ].map((item) => (
-              <Menu.Item
-                key={item.key}
-                onClick={() =>
-                  props.localSetSubtitleMode(
-                    item.value as TextTrackMode,
-                    item.key,
-                  )
-                }
-              >
-                {item.text}
-              </Menu.Item>
-            ))}
+            {/* Local to this device: the caption tracks are the video's own
+                (R34A); the pick is remembered by the YouTube player object,
+                no check mark until one is made (YouTube's own default) */}
+            <Menu.Label>Captions (only for me)</Menu.Label>
+            {[{ key: "", displayName: "Off" }, ...ytCaptionTracks].map(
+              (item) => (
+                <Menu.Item
+                  key={item.key || "off"}
+                  data-caption-key={item.key}
+                  onClick={() => {
+                    props.ytCaptions?.setCaptionTrack(item.key);
+                    setTick((t) => t + 1);
+                  }}
+                  rightSection={
+                    props.ytCaptions?.captionKey === item.key ? (
+                      <IconCheck />
+                    ) : null
+                  }
+                >
+                  {item.displayName}
+                </Menu.Item>
+              ),
+            )}
+            {ytCaptionTracks.length === 0 && (
+              <Menu.Label>No captions listed for this video</Menu.Label>
+            )}
           </Menu.Dropdown>
         </Menu>
       ) : (

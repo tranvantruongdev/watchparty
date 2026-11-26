@@ -5358,6 +5358,7 @@ export class App extends React.Component<AppProps, AppState> {
         localSetVolume={this.localSetVolume}
         localSeek={this.localSeek}
         localSetSubtitleMode={this.Player().setSubtitleMode}
+        ytCaptions={this.usingYoutube() ? this.YouTubeInterface : undefined}
         roomPlaylistPlay={this.roomPlaylistPlay}
         playlist={this.state.playlist}
         audioTracks={this.state.audioTracks}
